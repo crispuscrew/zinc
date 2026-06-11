@@ -1,0 +1,6 @@
+# Keep the build context (and thus the build) clean and reproducible.
+bin/
+*.test
+*.out
+coverage.*
+.git

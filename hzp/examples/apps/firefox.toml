@@ -1,0 +1,31 @@
+schema_version = 1
+
+[app]
+name        = "firefox"
+image       = "docker.io/library/firefox@sha256:abc123"  # digest-pinned (third-party), §5.5
+preset      = "strict"
+description = "Web browser"
+icon        = "firefox"
+background  = false
+autostart   = false
+autostart_workspace = 0
+
+[display]
+wayland = "security-context"
+gpu     = false
+
+[network]
+mode = "none"
+
+[audio]
+pipewire    = false
+legacy_alsa = false
+
+[theme]
+mode = "host"
+
+[capabilities]
+extra = []
+
+[depends_on]
+containers = []

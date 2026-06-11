@@ -1,0 +1,5 @@
+# Vendored Go dependencies are a full, intentional copy of upstream source — that
+# is what makes the container build hermetic (no network at compile time). Tell
+# GitHub Linguist they're vendored so they're excluded from the language stats and
+# collapsed in diffs, keeping pull requests readable.
+**/vendor/** linguist-vendored
