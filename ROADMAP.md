@@ -34,10 +34,11 @@ podman; digest-pin (third-party) vs local-tag (`trusted-*`) handling (§5.5).
 - **Exit:** define + launch firefox in a rootless container with strict defaults;
   stop / restart / logs work.
 
-## M2 — hzp TUI (Bubbletea) ⬜
+## M2 — hzp TUI (Bubbletea) ✅
 Keyboard-first create / edit / delete / launch / stop; preset picker that shows each
-field's **actual value**, not just the label (§4); logs view; "save current running
-state as profile."
+field's **actual value**, not just the label (§4); logs view. (List-valued fields —
+`[[mounts]]`, `[keys]`, the pasta allowlist — stay TOML-editable, shown read-only in
+the form. "Save running state as profile" moves to M10, which owns profiles.)
 - **Exit:** manage apps end-to-end without leaving the TUI or touching a mouse.
 
 ## M3 — Network egress enforcement ⬜

@@ -21,12 +21,12 @@ Each tool name is **h**ypr**z**inc + its domain:
 
 ## Status
 
-**M1 — hzp container lifecycle** (see the roadmap). Implemented: the app-config
-schema, pure validation (incl. the §5.5 image-trust rule), presets, the pure podman
-runspec builder, a config store under `~/.config/hyprzinc/apps`, and real container
-lifecycle (`run/stop/restart/inspect/logs`) — all behind the `hzp` CLI. `hzl` and
-`hzv` exist as buildable skeletons so all three tools share one module layout and
-build pipeline; their UIs land in M7 / M9.
+**M2 — hzp TUI** (see the roadmap). Implemented: the app-config schema, pure
+validation (incl. the §5.5 image-trust rule), presets, the pure podman runspec
+builder, a config store under `~/.config/hyprzinc/apps`, real container lifecycle,
+and a keyboard-first Bubbletea TUI for managing it all. Network egress enforcement
+is next (M3). `hzl` and `hzv` exist as buildable skeletons so all three tools share
+one module layout and build pipeline; their UIs land in M7 / M9.
 
 ## Develop
 
@@ -51,19 +51,22 @@ make help              # list every target
 ```sh
 cd hzp
 
-# define an app (saved to ~/.config/hyprzinc/apps), then inspect/launch it
+# keyboard-first manager: create / edit / run / stop / logs, no mouse
+go run . tui
+
+# …or the scriptable CLI (a bare name resolves against the store; a path is read directly):
 go run . new firefox --image docker.io/library/firefox@sha256:… --preset strict
 go run . list
-go run . validate firefox
-go run . run firefox          # prints the podman command (dry-run)
-go run . run firefox --exec   # actually launches it (rootless)
+go run . run firefox --exec   # launch rootless · run (no --exec) prints the podman command
 go run . logs firefox -f
 go run . restart firefox
 go run . stop firefox
-
-# a bare name resolves against the store; a path is read directly:
 go run . validate examples/apps/firefox.toml
 ```
+
+**In the TUI:** `n` new · `e` edit · `r` run · `s` stop · `l` logs · `d` delete ·
+`q` quit. In a form: `tab`/`↑↓` move, `←/→/space` change a value, `ctrl+s` save,
+`esc` cancel.
 
 Dependencies are vendored per module and the Go toolchain is pinned by digest, so
 `make container-build` is hermetic: same inputs → same bytes, on any machine, with

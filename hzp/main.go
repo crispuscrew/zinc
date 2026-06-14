@@ -22,13 +22,17 @@ import (
 	"os/exec"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/crispuscrew/hyprzinc/hzp/internal/config"
 	"github.com/crispuscrew/hyprzinc/hzp/internal/runspec"
 	"github.com/crispuscrew/hyprzinc/hzp/internal/store"
+	"github.com/crispuscrew/hyprzinc/hzp/internal/tui"
 )
 
 const usage = `usage: hzp <command> [args]
 
+  tui                               keyboard-first manager (create/edit/run/stop/logs)
   new <name> --image <img> [--preset strict|standard|networked] [--desc d] [--icon i]
   list
   validate <name|app.toml>
@@ -50,6 +54,8 @@ func run(argv []string) error {
 	}
 	cmd, rest := argv[0], argv[1:]
 	switch cmd {
+	case "tui":
+		return cmdTUI()
 	case "new":
 		return cmdNew(rest)
 	case "list":
@@ -67,6 +73,15 @@ func run(argv []string) error {
 	default:
 		return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 	}
+}
+
+func cmdTUI() error {
+	st, err := store.Default()
+	if err != nil {
+		return err
+	}
+	_, err = tea.NewProgram(tui.New(st, optionsFromEnv()), tea.WithAltScreen()).Run()
+	return err
 }
 
 func cmdNew(argv []string) error {
