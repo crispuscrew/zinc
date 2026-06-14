@@ -135,3 +135,19 @@ func BuildArgs(cfg config.AppConfig, opt Options) ([]string, error) {
 	args = append(args, cfg.App.Image)
 	return args, nil
 }
+
+// Lifecycle argv builders (§9.1). Each returns the arguments to pass to `podman`
+// for the container named after the app. Like BuildArgs they are pure functions,
+// so the imperative shell (hzp) only has to exec the result.
+func StopArgs(name string) []string    { return []string{"stop", name} }
+func RestartArgs(name string) []string { return []string{"restart", name} }
+func InspectArgs(name string) []string { return []string{"inspect", name} }
+
+// LogsArgs builds `podman logs [-f] <name>`.
+func LogsArgs(name string, follow bool) []string {
+	args := []string{"logs"}
+	if follow {
+		args = append(args, "-f")
+	}
+	return append(args, name)
+}

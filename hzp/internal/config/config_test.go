@@ -58,6 +58,36 @@ func TestValidate_Errors(t *testing.T) {
 	}
 }
 
+func TestValidate_ImagePolicy(t *testing.T) {
+	// Third-party images must be digest-pinned; trusted-* may use a local tag (§5.5).
+	cases := map[string]struct {
+		image string
+		valid bool
+	}{
+		"third-party digest":  {"docker.io/library/firefox@sha256:abc", true},
+		"third-party tag":     {"docker.io/library/firefox:latest", false},
+		"third-party bare":    {"alpine", false},
+		"trusted tag":         {"trusted-go-dev:latest", true},
+		"trusted bare":        {"trusted-base", true},
+		"trusted with host":   {"localhost/trusted-rust:latest", true},
+		"trusted with digest": {"trusted-go@sha256:abc", true},
+		"not-quite-trusted":   {"trustedish:latest", false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := validApp()
+			c.App.Image = tc.image
+			err := Validate(c)
+			if tc.valid && err != nil {
+				t.Fatalf("image %q should validate, got: %v", tc.image, err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatalf("image %q should be rejected, got nil", tc.image)
+			}
+		})
+	}
+}
+
 func TestValidate_ContainerMode_OK(t *testing.T) {
 	cfg := validApp()
 	cfg.Network = Network{Mode: NetworkContainer, Target: "vpn-container"}

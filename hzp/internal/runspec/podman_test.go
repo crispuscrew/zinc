@@ -116,6 +116,27 @@ func TestBuildArgs_NoRuntimeDirWithoutSockets(t *testing.T) {
 	assertContainsSeq(t, got, "--cap-drop", "all")
 }
 
+func TestLifecycleArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		{"stop", StopArgs("firefox"), []string{"stop", "firefox"}},
+		{"restart", RestartArgs("firefox"), []string{"restart", "firefox"}},
+		{"inspect", InspectArgs("firefox"), []string{"inspect", "firefox"}},
+		{"logs", LogsArgs("firefox", false), []string{"logs", "firefox"}},
+		{"logs follow", LogsArgs("firefox", true), []string{"logs", "-f", "firefox"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !slices.Equal(tc.got, tc.want) {
+				t.Fatalf("got %v, want %v", tc.got, tc.want)
+			}
+		})
+	}
+}
+
 func assertContains(t *testing.T, args []string, want string) {
 	t.Helper()
 	if !slices.Contains(args, want) {

@@ -29,6 +29,10 @@ func Validate(cfg AppConfig) error {
 	}
 	if strings.TrimSpace(cfg.App.Image) == "" {
 		add("app.image: must not be empty")
+	} else if !TrustedImage(cfg.App.Image) && !strings.Contains(cfg.App.Image, "@sha256:") {
+		// §5.5: third-party images are pinned by digest; only locally built
+		// trusted-* images may be referenced by a mutable local tag.
+		add("app.image %q: third-party images must be digest-pinned (…@sha256:…); only trusted-* images may use a local tag (§5.5)", cfg.App.Image)
 	}
 	if cfg.App.Preset != "" && !ValidPreset(cfg.App.Preset) {
 		add("app.preset %q: must be strict|standard|networked", cfg.App.Preset)
@@ -144,4 +148,22 @@ func validCIDR(cidr string, wantV6 bool) bool {
 		return false
 	}
 	return (addr.To4() == nil) == wantV6
+}
+
+// TrustedImage reports whether image refers to a locally built trusted-* image
+// (docs §5.5/§7), e.g. "trusted-go-dev", "trusted-go-dev:latest", or
+// "localhost/trusted-go-dev:latest". Trusted images may use a mutable local tag;
+// every other (third-party) image must be pinned by digest.
+func TrustedImage(image string) bool {
+	ref := image
+	if at := strings.IndexByte(ref, '@'); at >= 0 { // drop @sha256:… digest
+		ref = ref[:at]
+	}
+	if slash := strings.LastIndexByte(ref, '/'); slash >= 0 { // drop registry/namespace
+		ref = ref[slash+1:]
+	}
+	if colon := strings.IndexByte(ref, ':'); colon >= 0 { // drop :tag
+		ref = ref[:colon]
+	}
+	return strings.HasPrefix(ref, "trusted-")
 }

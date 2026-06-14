@@ -12,7 +12,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 ---
 
-## M0 — Foundation 🚧
+## M0 — Foundation ✅
 Repo skeleton (§13), the **app-config schema** + pure **validation**, and the pure
 **podman runspec builder** (`AppConfig → podman run` argv). Thin `hzp` CLI:
 `validate`, `run` (dry-run by default, `--exec` to launch).
@@ -27,7 +27,7 @@ plumbing yet.
 - **Exit:** `hzp validate examples/apps/firefox.toml` passes; `hzp run …` prints the
   correct `podman` command; `go test ./...` green.
 
-## M1 — hzp container lifecycle ⬜
+## M1 — hzp container lifecycle ✅
 Config store CRUD under `~/.config/hyprzinc/apps/`; presets as templates (§4);
 save- **and** launch-time validation; real `run/stop/restart/inspect/logs` via
 podman; digest-pin (third-party) vs local-tag (`trusted-*`) handling (§5.5).

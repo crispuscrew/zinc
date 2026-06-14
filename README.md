@@ -21,10 +21,12 @@ Each tool name is **h**ypr**z**inc + its domain:
 
 ## Status
 
-Early foundation — **M0** (see the roadmap). Implemented so far: the app-config
-schema, pure validation, and the pure podman runspec builder, behind a thin `hzp`
-CLI. `hzl` and `hzv` exist as buildable skeletons so all three tools share one
-module layout and build pipeline; their UIs land in M7 / M9.
+**M1 — hzp container lifecycle** (see the roadmap). Implemented: the app-config
+schema, pure validation (incl. the §5.5 image-trust rule), presets, the pure podman
+runspec builder, a config store under `~/.config/hyprzinc/apps`, and real container
+lifecycle (`run/stop/restart/inspect/logs`) — all behind the `hzp` CLI. `hzl` and
+`hzv` exist as buildable skeletons so all three tools share one module layout and
+build pipeline; their UIs land in M7 / M9.
 
 ## Develop
 
@@ -48,9 +50,19 @@ make help              # list every target
 
 ```sh
 cd hzp
-make run                                          # print the podman command for the sample app
+
+# define an app (saved to ~/.config/hyprzinc/apps), then inspect/launch it
+go run . new firefox --image docker.io/library/firefox@sha256:… --preset strict
+go run . list
+go run . validate firefox
+go run . run firefox          # prints the podman command (dry-run)
+go run . run firefox --exec   # actually launches it (rootless)
+go run . logs firefox -f
+go run . restart firefox
+go run . stop firefox
+
+# a bare name resolves against the store; a path is read directly:
 go run . validate examples/apps/firefox.toml
-go run . run examples/apps/firefox.toml --exec    # actually launches it
 ```
 
 Dependencies are vendored per module and the Go toolchain is pinned by digest, so
