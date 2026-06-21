@@ -1,0 +1,26 @@
+# HyprZinc
+
+> Keyboard-first, security-focused Hyprland desktop. Every user-facing app runs in a
+> rootless Podman container (primary) or a libvirt/qemu VM, wired by a Nix
+> home-manager flake. Priority order: Stable → Secure → Beautiful.
+
+Three Go tools share one hexagonal `core` module: `hzc` (container-definition TUI/CLI,
+shipping), `hzl` (launcher, skeleton), `hzv` (VM manager, skeleton). Egress is
+enforced per-app by nftables locked into a pasta pod's netns *before* the app starts.
+Build is podman-only: all Go runs in a digest-pinned container via `make`.
+
+## Docs
+
+- [Architecture (single source of truth)](docs/architecture.md): full design — schema (§3), presets (§4), security & image trust (§5), egress (§5.3), repo layout (§13).
+- [README](README.md): overview, components, and the podman-only build/run quickstart.
+- [Roadmap](ROADMAP.md): milestones; currently M3 (network egress enforcement).
+
+## Reference
+
+- [hzc(1)](man/hzc.1): the `hzc` command — tui, new, list, validate, run, build, image, keys, term, lifecycle, logs.
+- [hyprzinc-app(5)](man/hyprzinc-app.5): the app-definition TOML format — every section, field, valid values, and validation rules.
+
+## Agent guidance
+
+- [AGENTS.md](AGENTS.md): how to work in this repo — golden rules, build/test gate, the core hexagon, and the security model.
+- [secops-reviewer agent](.claude/agents/secops-reviewer.md): project-local security reviewer with the HyprZinc threat model baked in.

@@ -21,13 +21,14 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Nix home-manager (single flake)                        │
-│  outputs: packages.hzp + packages.hzl + packages.hzv    │
+│  outputs: packages.hzc + packages.hzl + packages.hzv    │
 │           + homeManagerModules.hyprzinc                 │
 ├─────────────────────────────────────────────────────────┤
 │  Hyprland (Wayland compositor)                          │
-│  + wayland-security-context (default, partial enforce)  │
+│  + wayland-security-context (default; label-only today, │
+│    no runtime enforce — see §5.2)                       │
 ├──────────────┬────────────────┬─────────────────────────┤
-│ hzp (TUI)    │ hzl (GUI)      │ hzv (TUI, future)       │
+│ hzc (TUI)    │ hzl (GUI)      │ hzv (TUI, future)       │
 │ Bubbletea/Go │ gioui/Go       │ Bubbletea/Go            │
 │ containers   │ launcher +     │ VMs (libvirt+qemu)      │
 │              │ smart executor │                         │
@@ -37,6 +38,7 @@
 │  ~/.config/hyprzinc/profiles/<name>.toml                │
 │  ~/.config/hyprzinc/commands/<name>.toml                │
 │  ~/.config/hyprzinc/vms/<name>.toml                     │
+│  ~/.config/hyprzinc/hzc/keys.toml   (hzc TUI keybinds)  │
 ├─────────────────────────────────────────────────────────┤
 │  vpn-container (owns its own sing-box config)           │
 │  ├── sing-box (tun, DNS, CIDR routing, outbounds)       │
@@ -55,7 +57,7 @@
 
 ## 3. App Config (TOML)
 
-One TOML file per app: `~/.config/hyprzinc/apps/<name>.toml`. Only `hzp` creates or modifies these. Validated at save **and** at launch (launch-time check catches manual edits or drift).
+One TOML file per app: `~/.config/hyprzinc/apps/<name>.toml`. Only `hzc` creates or modifies these. Validated at save **and** at launch (launch-time check catches manual edits or drift).
 
 ```toml
 schema_version = 1
@@ -63,11 +65,27 @@ schema_version = 1
 [app]
 name        = "firefox"
 image       = "docker.io/library/firefox@sha256:abc123..."  # pinned by digest
+command     = []                 # argv appended after the image; overrides the image's
+                                 # default command (CMD). [] = image default. e.g. ["htop"]
+install     = ""                 # quick-setup: build-time setup run as a RUN layer atop
+                                 # image to make a DERIVED image (FROM image + RUN install).
+                                 # "" = run image directly. e.g. "apt-get update &&
+                                 # apt-get install -y hollywood". Built on demand at run
+                                 # (rebuilt when this or image changes) and via `hzc build`
+                                 # (§5.5, §9.1). The FROM base inherits image's digest pin.
 preset      = "strict"           # starting template, every field below can override
 description = "Web browser"
 icon        = "firefox"          # freedesktop name, OR a path (~ expanded). On set,
-                                 # hzp copies the asset into HyprZinc's managed icon
+                                 # hzc copies the asset into HyprZinc's managed icon
                                  # store and caches a normalized thumbnail (see §9.2).
+terminal    = false              # CLI/TUI app: launch in a terminal emulator window
+                                 # with an interactive TTY (§9.1, §11). Exclusive with
+                                 # background unless multiterminal is also set.
+multiterminal = false            # terminal app only: run a shared keep-alive container
+                                 # that many terminals attach to (each runs `command`,
+                                 # or a shell). Lives until the LAST terminal closes,
+                                 # unless background (then it stays). Needs an explicit
+                                 # command. (§9.1)
 background  = false              # run detached in background
 autostart   = false              # start at session login
 autostart_workspace = 0          # 0 = no preference; N = place on workspace N at login
@@ -124,7 +142,7 @@ extra       = []                 # podman --cap-add entries
 containers  = []                 # ["vpn-container"] — auto-started by hzl
 ```
 
-**hzp UI-only (not in TOML):** delete preset.
+**hzc UI-only (not in TOML):** delete preset.
 
 ---
 
@@ -140,7 +158,7 @@ Templates only — not enforced modes. Every field is independently overridable.
 | `audio.pipewire` | `false` | `false` | `false` |
 | `theme.mode` | `host` | `host` | `host` |
 
-hzp shows the preset + each field's actual value, so user sees the truth, not just the label.
+hzc shows the preset + each field's actual value, so user sees the truth, not just the label.
 
 ---
 
@@ -171,6 +189,8 @@ An app that doesn't implement the protocol silently runs with full Wayland acces
 
 pasta provides the userspace connectivity (no host root, no *host* nftables). The per-app **egress CIDR + port allowlist is enforced by nftables running *inside the container's own network namespace*** — this is rootless-safe because `CAP_NET_ADMIN` is namespaced to that userns and grants nothing on the host. Division of labour: pasta carries packets to/from the host; the in-netns nftables ruleset decides which destinations/ports are permitted. (`network.mode = "none"` gets no namespace connectivity at all; `network.mode = "container"` instead inherits vpn-container's netns, where sing-box's route rules — §6.3 — do the filtering.)
 
+Enforcement is a **port** in the core hexagon (`NetEnforcer`, §13): each mode is an adapter that says how the app attaches to the network, what must run to lock the netns down before the app starts, and how to tear it down. pasta+nft is the adapter today; swapping the traffic-control mechanism (a different firewall, an eBPF egress filter, an external controller) is a new adapter, with the launch path and the rest of the system unchanged.
+
 DNS leakage mitigation:
 1. App container's `/etc/resolv.conf` points **only** at sing-box's internal resolver (an address inside vpn-container's namespace)
 2. Pasta blocks outbound 53/853 **to the outside world** — but allows 53 to sing-box's internal resolver. The block stops apps from reaching `8.8.8.8:53` directly; it does not break legitimate resolution through sing-box
@@ -184,15 +204,17 @@ DNS leakage mitigation:
 
 `/dev/dri` access exposes GPU rendering state more broadly than process boundaries suggest. Linux GPU sandboxing is immature.
 
-**Rule:** never enable GPU on untrusted code. hzp warns when `gpu = true` is set.
+**Rule:** never enable GPU on untrusted code. hzc warns when `gpu = true` is set.
 
 ### 5.5 Image trust
 
 **Pin by digest, not tag — for pulled (third-party) images.**
 
-For images pulled from a registry, the app TOML stores `image@sha256:...`. Tags shown in hzp UI for readability, but pulls use digest. Updates require explicit user action ("update image") — no silent upgrade.
+For images pulled from a registry, the app TOML stores `image@sha256:...`. Tags shown in hzc UI for readability, but pulls use digest. Updates require explicit user action ("update image") — no silent upgrade.
 
 **Locally-built `trusted-*` images are referenced by local tag** (e.g. `hyprzinc/trusted-go-dev:latest`). They are built on the machine from the Nix-shipped Containerfiles (§7), so their digest isn't known until after the build and differs per machine. Trust for these comes from the vetted, version-pinned Containerfile rather than a global digest — and their own `FROM` base is still pinned by digest.
+
+**Derived images (`app.install`) are local, built from a pinned base.** When an app sets `install`, hzc builds a small derived image — `FROM <app.image>` plus one `RUN <install>` layer — tagged locally (`hyprzinc/app-<name>:local`) and run instead of the bare base. This is the quick-setup path: take a stock distro image and `apt`/`apk`/`dnf` the program you want, without authoring a Containerfile. The `FROM` base is `app.image`, which this section already forces to be digest-pinned (or a `trusted-*` local tag), so the build starts from a known base. The derived image itself carries only a local tag and is never pushed; like `trusted-*`, its trust comes from the inputs (the pinned base + the user's own install line), not a global digest. It is rebuilt automatically when `install` or `image` changes — tracked by a fingerprint label, so an unchanged app reuses its image — and on demand with `hzc build <name>` (or the TUI build action). **Tradeoff:** because a registry-style digest is meaningless for a per-machine local build, the derived image is not itself digest-pinned; the guarantee it inherits is that of its pinned base plus the visible install line.
 
 Custom registries and Docker Hub supported with one-time warning per registry domain.
 
@@ -214,7 +236,7 @@ Single `vpn-container`, multiple backends running simultaneously, destination-ba
 
 ### 6.1 sing-box ownership
 
-**sing-box config is vpn-container's own responsibility.** home-manager declares backend definitions and routing intent (passed in as a mount or env vars). vpn-container's entrypoint generates `config.json` on startup from that input. hzp does not write sing-box config directly.
+**sing-box config is vpn-container's own responsibility.** home-manager declares backend definitions and routing intent (passed in as a mount or env vars). vpn-container's entrypoint generates `config.json` on startup from that input. hzc does not write sing-box config directly.
 
 ### 6.2 Components inside vpn-container
 
@@ -264,7 +286,7 @@ sing-box runs its own internal resolver. App containers' `/etc/resolv.conf` poin
 
 ### 6.6 Container startup ordering
 
-App containers list dependencies in `depends_on.containers`. hzl/hzp checks state before launch — auto-starts dependencies first.
+App containers list dependencies in `depends_on.containers`. hzl/hzc checks state before launch — auto-starts dependencies first.
 
 ### 6.7 CRIU limitations
 
@@ -314,7 +336,7 @@ Supported with restrictions. Inner Podman inherits outer container's network nam
 
 ## 8. Profiles
 
-Curated sets of apps + workspace placement. Declarative, hand-editable or generated from current state via hzp ("save current as profile X").
+Curated sets of apps + workspace placement. Declarative, hand-editable or generated from current state via hzc ("save current as profile X").
 
 `~/.config/hyprzinc/profiles/<name>.toml`:
 
@@ -356,17 +378,92 @@ Switching profiles is `Super+P` → hzl shows profile list.
 
 ## 9. Components
 
-### 9.1 hzp — Container Definition TUI
+### 9.1 hzc — Container Definition TUI
 
 **Stack:** Go + Bubbletea
 
 **Responsibilities:**
 - Create / edit / delete app definitions
 - Validate TOML at save and at launch
+- Find images and **pin them by digest** without a browser — `hzc image search`
+  / `image resolve` (podman-only); the TUI image field resolves in place. Makes
+  the §5.5 digest rule painless.
 - Launch / stop / restart containers
+- Build a **derived image** for an app with `app.install` (quick setup: pinned base
+  + one install layer) — `hzc build`, the TUI build action, or auto on run (§5.5)
 - Inspect logs
 - Save current running state as a profile
 - Edit running app config → "apply on next launch" by default
+- Choose / customise the **TUI keybind scheme** — `hzc keys`, or the in-TUI
+  picker (see "Keybind schemes" below)
+
+**Launch behavior.** A GUI app renders through the passed-in Wayland socket (§5.2).
+A CLI/TUI app sets `app.terminal = true`: hzc launches it inside the host's terminal
+emulator (§11, configured via `$HYPRZINC_TERMINAL`, else `$TERMINAL`) with an
+interactive TTY (`-it`) — a container otherwise has no terminal to attach to, so it
+would run invisibly. The plan→exec **launch logic is shared, not hzc-specific**: hzl
+auto-starts apps from the launcher (`depends_on`, §6.6) and reuses the same path, so
+it lives in the shared functional core (§13), not welded into either UI.
+
+**Quick setup (install + entrypoint).** Instead of authoring a Containerfile, an
+app can set `app.install` to a one-line build-time setup command and `app.command`
+to the entrypoint. hzc then builds a **derived image** — `FROM <app.image>` plus a
+single `RUN <install>` layer, tagged `hyprzinc/app-<name>:local` — and runs that
+instead of the bare base (§5.5). Example: base `debian@sha256:…`, install `apt-get
+update && apt-get install -y hollywood`, command `["hollywood"]`. The form shows a
+per-distro hint for the install line (apt for debian/ubuntu, apk for alpine, dnf for
+fedora/rhel, pacman for arch, zypper for openSUSE), derived live from the base image
+name. The image builds **automatically on run** when it's missing or its inputs
+(`install` / `image`) changed — detected by a fingerprint label, so an unchanged app
+reuses it — and can be (re)built explicitly with `hzc build <name>` or the TUI
+**build** action (`b`). The `RUN` line uses the image's own `/bin/sh`, so a distro
+package-manager invocation works exactly as typed; a `command` needing quoted,
+multi-word argv stays editable as full argv via the advanced TOML row. *Honesty:* the
+derived image is local and per-machine, so it isn't itself digest-pinned — its
+guarantee is the pinned `FROM` base plus the visible install line (§5.5).
+
+**Keyboard hints stay honest.** Footers show only the gestures that actually apply,
+drawn from the active scheme — never a fixed "porridge" of every key. The form footer
+shows just the focused field's gestures (an enum row advertises *change*, a bool row
+*toggle*, a text row *clear*/*resolve*) plus save/cancel; the list footer shows only
+state-applicable actions (run when stopped or for a multiterminal app, stop/logs when
+running, shell when multiterminal, build when `install` is set); and each gesture
+shows its primary key only, so a vim user sees `j`/`k` where a default user sees the
+arrows. The logs and scheme-picker footers read the same scheme (only the viewport's
+own scroll keys and the picker's intrinsic apply/edit/back stay literal).
+
+**Multiterminal.** A terminal app may also set `app.multiterminal = true` to attach
+many terminals to *one* instance. The container then runs a detached **holder** —
+`sleep infinity` under `--init` (so `podman stop` is prompt: a process with no
+SIGTERM handler running as PID 1 is exempt from default signal actions, so the
+injected init owns PID 1 instead) — and every terminal is a `podman exec -it` into
+it, running the app's own `command` (or a shell). The app lives **until the last
+terminal closes**; `background = true` keeps the holder running after that. Each
+terminal is its own detached waiter process; coordination is by filesystem flock
+under `$XDG_RUNTIME_DIR/hyprzinc/run/<app>/` (no daemon, no socket): a per-app lock
+serializes holder start-up, each waiter flock-holds a liveness marker for its life
+(auto-released on death, so a killed terminal can't wedge the count), and the last
+waiter out — finding no other marker still held — stops the container. Open more
+with `hzc term <name>` (`--shell` for a shell) or, in the TUI, the **run** action
+(again for another) and **shell**. *Honesty:* the holder needs `sleep` in the image,
+and a shell terminal needs `/bin/sh`; all `trusted-*` images and any real terminal
+app image have both. `multiterminal` requires an explicit `command` — a holder owns
+PID 1, so the image's ENTRYPOINT/CMD never runs and `exec` cannot replay it.
+
+**Keybind schemes.** hzc's *own* TUI keys (move the list, edit a field, scroll
+logs) are not hardcoded: they resolve through a selectable **scheme**. Two are
+built in — `default` (the historical bindings — an install with no config behaves
+exactly as before) and `vim` — and users can define their own as
+`~/.config/hyprzinc/hzc/schemes/<name>.toml` (a `base` to inherit from plus a
+partial `[bindings.<screen>]` override table). The active scheme lives in
+`~/.config/hyprzinc/hzc/keys.toml` (`scheme = "<name>"`); `hzc keys
+list|show|set|edit|validate|path` and an in-TUI picker (open with `?`) choose,
+author, and apply one — switching live. Bindings are scoped per screen (list /
+form / logs / confirm) because the same key means different things in each.
+These are hzc's interface keys only, **distinct from the Hyprland desktop hotkeys
+in §12**, which are a host-level concern owned by the Nix module (M8/M10). hzc's
+defaults are already keyboard/vim-friendly, so the two built-ins differ only
+modestly; the point is the user-defined schemes.
 
 ### 9.2 hzl — GUI Launcher + Smart Executor
 
@@ -446,7 +543,7 @@ hzl detects directories under those paths (with a `.git`, `Cargo.toml`, `go.mod`
 
 The `icon` field resolves in order: (1) if it's a path that exists → use that file; (2) else treat as a freedesktop icon name → look up in the active icon theme; (3) else → generic fallback icon by source type.
 
-When a user sets a custom icon (path), hzp **copies the asset into a managed store** rather than referencing a random filesystem location:
+When a user sets a custom icon (path), hzc **copies the asset into a managed store** rather than referencing a random filesystem location:
 
 ```
 ~/.local/share/hyprzinc/icons/<app-name>.<ext>     # original, copied in
@@ -463,7 +560,7 @@ Single Nix flake outputs:
 
 ```
 outputs = {
-  packages.x86_64-linux.hzp = ...;
+  packages.x86_64-linux.hzc = ...;
   packages.x86_64-linux.hzl = ...;
   packages.x86_64-linux.hzv = ...;
   homeManagerModules.hyprzinc = ./nix/module.nix;
@@ -472,14 +569,14 @@ outputs = {
 
 Module generates (host-level, static):
 - Hyprland config
-- hzp/hzl/hzv binaries on PATH
+- hzc/hzl/hzv binaries on PATH
 - Terminal emulator config (terminal runs on host)
 - Shell, fonts
 - The curated theme bundle (see §5.6) — RO-mounted into themed containers
 - **Optional first-run seed** for `~/.config/hyprzinc/` TOMLs: the `apps`/`profiles`
-  attrs below are copied in on *initial activation only*. After that, **hzp owns those
+  attrs below are copied in on *initial activation only*. After that, **hzc owns those
   files** (§3) — Nix does not regenerate or overwrite them on subsequent
-  `home-manager switch`. The config store is hzp's mutable runtime state, not a
+  `home-manager switch`. The config store is hzc's mutable runtime state, not a
   Nix-managed read-only symlink tree.
 
 ```nix
@@ -509,7 +606,7 @@ hyprzinc = {
   };
 
   # apps/profiles below are FIRST-RUN SEED ONLY (see "Optional first-run seed" above).
-  # hzp owns the live TOMLs after initial activation; edits made in hzp are not
+  # hzc owns the live TOMLs after initial activation; edits made in hzc are not
   # clobbered by later `home-manager switch`.
   apps = {
     firefox = {
@@ -561,7 +658,7 @@ A nested compositor like cage covers a narrow slice of apps and breaks on real-w
 
 ### 10.2 Stack
 
-`libvirt` + `qemu` underneath. `hzv` is a Bubbletea TUI on top — same patterns as `hzp`, separate config tree, separate runtime.
+`libvirt` + `qemu` underneath. `hzv` is a Bubbletea TUI on top — same patterns as `hzc`, separate config tree, separate runtime.
 
 ### 10.3 VM Config (TOML)
 
@@ -653,7 +750,7 @@ VMs appear in `hzl` alongside apps, with a VM icon. Selecting one launches via `
 |---|---|
 | Hyprland | Compositor owns the display |
 | Terminal emulator | Drops into containers on explicit launch |
-| hzp / hzl / hzv | Container and VM management |
+| hzc / hzl / hzv | Container and VM management |
 | Pipewire | Audio server; sockets passed in on explicit grant |
 | Podman (rootless) | Container runtime |
 | libvirt user session + qemu | VM runtime (rootless) |
@@ -666,12 +763,16 @@ Everything else runs in containers or VMs.
 
 ## 12. Hotkeys (Secondary — see issue #5 for baseline)
 
+> These are **Hyprland desktop** hotkeys (host-level, Nix-generated; M8/M10) — not
+> the same thing as hzc's in-TUI keybind schemes, which are configured per-user
+> under `~/.config/hyprzinc/hzc/` and described in §9.1 ("Keybind schemes").
+
 HyprZinc-specific additions:
 
 | Hotkey | Action |
 |---|---|
 | `Super+G` | Open hzl (launcher + smart executor) |
-| `Super+Shift+G` | Open hzp (app manager TUI) |
+| `Super+Shift+G` | Open hzc (app manager TUI) |
 | `Super+Ctrl+G` | Open hzv (VM manager TUI) |
 | `Super+P` | Open hzl with profile filter active |
 
@@ -679,44 +780,76 @@ HyprZinc-specific additions:
 
 ## 13. Repo Layout
 
-Each tool is its own Go module — independent `go.mod` and vendored deps — but all
-three share **one** build pipeline: a repo-root generic `Containerfile` (digest-
-pinned Go toolchain; it builds whichever module is the build context) and a repo-
-root `tool.mk` that every tool's three-line `Makefile` includes. "The same logic,
-only different paths." The pure functional core (schema, validation, runspec)
-lives in `hzp/internal/` today; when a second tool needs it, it graduates to a
-shared module `…/hyprzinc/core` consumed by all three, with a repo-root `go.work`
-tying the modules together for local development.
+Each tool is its own Go module — independent `go.mod` and vendored deps — sharing
+**one** build pipeline: a repo-root generic `Containerfile` (digest-pinned Go
+toolchain; it builds whichever module is the build context), a `check.mk` of
+containerized checks every module includes, and a `tool.mk` (binary targets) that
+each tool's three-line `Makefile` includes. "The same logic, only different paths."
 
-Implemented today: `hzp/` in full, plus `hzl/` and `hzv/` as buildable skeletons
-(so the shared pipeline is exercised by all three). `core/` and `go.work` are the
-target shape.
+The `core` module (`…/hyprzinc/core`) is structured as a **hexagon** (ports &
+adapters), so a mechanism can be swapped by writing a new adapter rather than
+editing call sites — the motivating case being egress enforcement, where "not
+pasta" later is one more adapter (§5.3). The layers:
+
+- **`domain/`** — pure model + rules: the app-config schema, validation, presets,
+  and the derived-image policy. No I/O, no podman/nft/fs/env. The hexagon's center.
+- **`ports/`** — the interfaces the application depends on: `Store`, `Runtime`,
+  `ImageBuilder`, `ImageResolver`, and **`NetEnforcer`** (the egress swap point).
+- **`app/`** — the application service that orchestrates a launch through the ports
+  (validate → build derived image → run the egress lock-down via `NetEnforcer` →
+  start the app). The single launch path reused by `hzc` and `hzl` (§9.1).
+- **`adapters/`** — the concrete edges: `podman` (Runtime/ImageBuilder/Resolver),
+  `netenforce` (the `none`/`pasta`/`container` enforcers — nft+pod lives here),
+  `fs` (TOML store + codec), `host` (env → options).
+- **`wire/`** — the composition root: the one place that imports every adapter and
+  assembles them into an `app.Service`. Front-ends call it; nothing else names a
+  concrete adapter.
+
+Each consumer pulls core via a local `replace => ../core` and **vendors its
+source**, so the per-module container build stays hermetic (no network, no sibling
+checkout at build time). A repo-root `go.work` ties the modules together for local
+editing; the build never depends on it (`make vendor` runs with `GOWORK=off`).
+
+Implemented today: `core/` + `hzc/` in full; `hzl/` reuses `core/app` via `core/wire`
+(CLI now, gioui UI in M7); `hzv/` is a buildable skeleton (imports no core).
 
 ```
 hyprzinc/
-├── Containerfile              ← generic reproducible build (any tool; digest-pinned Go)
-├── tool.mk                    ← shared make logic; each tool's Makefile includes it
+├── Containerfile              ← generic reproducible build (any module; digest-pinned Go)
+├── check.mk                   ← containerized checks (test/vet/fmt/vendor); every module includes it
+├── tool.mk                    ← binary targets (build/run/repro); each tool's Makefile includes it
+├── go.work                    ← ties the modules together for local dev (build never uses it)
 ├── .gitattributes             ← marks vendor/ as linguist-vendored (clean diffs/stats)
-├── hzp/                       ← HyprZinc Podman — app manager (CLI now, TUI in M2)
-│   ├── go.mod · go.sum        ← module github.com/crispuscrew/hyprzinc/hzp
-│   ├── main.go                ← imperative shell (CLI/TUI)
-│   ├── internal/
-│   │   ├── config/            ← app-config schema + pure validation
-│   │   └── runspec/           ← pure AppConfig → podman argv builder
+├── core/                      ← shared hexagon (domain/ports/adapters) — module …/hyprzinc/core
+│   ├── go.mod · go.sum
+│   ├── domain/                ← pure: schema, validation, presets, derived-image policy
+│   ├── ports/                 ← interfaces: Store, Runtime, ImageBuilder, ImageResolver, NetEnforcer
+│   ├── app/                   ← application service: launch/stop/build orchestration (reused by hzc + hzl)
+│   ├── adapters/
+│   │   ├── podman/            ← Runtime + ImageBuilder + ImageResolver (podman argv + exec)
+│   │   ├── netenforce/        ← NetEnforcer adapters: none · pasta (pod + nft) · container  ← swap point
+│   │   ├── fs/                ← app-definition store + TOML codec (~/.config/hyprzinc/apps)
+│   │   └── host/              ← environment → host launch options
+│   ├── wire/                  ← composition root (assembles adapters → app.Service)
+│   ├── vendor/
+│   └── Makefile               ← include ../check.mk (library: no binary)
+├── hzc/                       ← HyprZinc Container — app manager (CLI + Bubbletea TUI)
+│   ├── go.mod · go.sum        ← module …/hyprzinc/hzc; replace core => ../core
+│   ├── main.go                ← imperative shell (CLI)
+│   ├── examples_test.go       ← validates the shipped example apps
+│   ├── internal/tui/          ← Bubbletea TUI (hzc-specific)
 │   ├── examples/apps/         ← sample app TOMLs
-│   ├── vendor/                ← vendored deps → hermetic builds
-│   ├── Makefile               ← TOOL := hzp + include ../tool.mk (+ validate)
+│   ├── vendor/                ← vendored deps incl. core source → hermetic builds
+│   ├── Makefile               ← TOOL := hzc + include ../tool.mk (+ validate, netfilter-image)
 │   └── .containerignore
-├── hzl/                       ← HyprZinc Launcher (Go, gioui) — skeleton; UI in M7
-│   ├── go.mod · main.go
+├── hzl/                       ← HyprZinc Launcher (Go) — reuses core/launch; gioui UI in M7
+│   ├── go.mod · main.go · vendor/
 │   ├── Makefile               ← TOOL := hzl + include ../tool.mk
 │   └── .containerignore
 ├── hzv/                       ← HyprZinc Virtualization (Go, Bubbletea) — skeleton; UI in M9
 │   ├── go.mod · main.go
 │   ├── Makefile               ← TOOL := hzv + include ../tool.mk
 │   └── .containerignore
-├── core/                      ← shared functional core, once extracted     [future]
-├── go.work                    ← ties the per-tool modules together (local) [future]
 ├── nix/
 │   ├── flake.nix
 │   ├── module.nix             ← homeManagerModules.hyprzinc
@@ -745,7 +878,7 @@ a **tool binary** (pinned Go toolchain + that module's vendored deps, if any);
 |---|---|---|
 | 1 | wsc enforcement is partial — most apps ignore the protocol | Container isolation is the real boundary; use a VM (§10) for genuinely untrusted apps |
 | 2 | DNS leakage potential | sing-box DNS + pasta blocks 53/853/DoH |
-| 3 | GPU passthrough weakens isolation | Warn in hzp; never enable for untrusted images |
+| 3 | GPU passthrough weakens isolation | Warn in hzc; never enable for untrusted images |
 | 4 | sing-box backend changes need restart | Backends semi-static; routing rules live-reload |
 | 5 | CRIU does not work for vpn-container | Brief network blip on vpn-container restart |
 | 6 | Podman-in-Podman can read outer mounts | CI container mounts minimum; no keys |
@@ -772,14 +905,14 @@ a **tool binary** (pinned Go toolchain + that module's vendored deps, if any);
 
 Clarifications (resolved 2026-05-30):
 
-- [x] Config store ownership — **hzp owns the live TOMLs**; Nix `apps`/`profiles` attrs are first-run seed only (§3, §9.3)
+- [x] Config store ownership — **hzc owns the live TOMLs**; Nix `apps`/`profiles` attrs are first-run seed only (§3, §9.3)
 - [x] Image acquisition & reproducibility — Nix ships Containerfiles; images built/pulled locally; third-party pinned by digest, `trusted-*` by local tag over a digest-pinned base (§5.5, §7)
 - [x] Egress filtering mechanism — **nftables inside the container netns** enforces the CIDR/port allowlist; pasta only provides connectivity (§5.3)
 - [x] Theme passthrough shape — **one curated, generated theme bundle**, RO-mounted; never the host's real config dirs (§3, §5.6)
 
 Clarifications (resolved 2026-06-09):
 
-- [x] Module structure — **one self-contained Go module per tool** (`…/hzp`, `…/hzl`, `…/hzv`): own `go.mod`, vendored deps, reproducible digest-pinned container build. The pure core (config + runspec) stays in `hzp/internal/` and **graduates to a shared `…/hyprzinc/core` module when `hzl`/`hzv` need it** — no multi-module plumbing before a second consumer exists (§13).
+- [x] Module structure — **one self-contained Go module per tool** (`…/hzc`, `…/hzl`, `…/hzv`): own `go.mod`, vendored deps, reproducible digest-pinned container build. The pure core (config + runspec) stays in `hzc/internal/` and **graduates to a shared `…/hyprzinc/core` module when `hzl`/`hzv` need it** — no multi-module plumbing before a second consumer exists (§13).
 - [x] Build pipeline & dependency hosting — **monorepo with per-tool modules**; the build logic is shared, not copied: a repo-root `tool.mk` (each tool's `Makefile` is `TOOL := …` + `include ../tool.mk`) and one generic repo-root `Containerfile` ("same logic, only different paths"). Deps are **vendored** (a full copy in-tree) per module and marked `linguist-vendored`, **not git submodules** — submodules don't integrate with `go.sum` / `-mod=vendor` and add real UX cost, while GitHub already treats `vendor/` as vendored. If deps ever overlap heavily across tools, the Go-native dedupe is a workspace `go work vendor`, not a submodule (§13).
 
 All open decisions resolved. Ready for implementation.
