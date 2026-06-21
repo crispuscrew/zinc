@@ -14,36 +14,52 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 ## M0 — Foundation ✅
 Repo skeleton (§13), the **app-config schema** + pure **validation**, and the pure
-**podman runspec builder** (`AppConfig → podman run` argv). Thin `hzp` CLI:
+**podman runspec builder** (`AppConfig → podman run` argv). Thin `hzc` CLI:
 `validate`, `run` (dry-run by default, `--exec` to launch).
 
-Each tool is its own Go module (`…/hyprzinc/{hzp,hzl,hzv}`) with vendored deps;
+Each tool is its own Go module (`…/hyprzinc/{hzc,hzl,hzv}`) with vendored deps;
 all three share one build pipeline — a repo-root `tool.mk` + a generic, digest-
-pinned `Containerfile` (`make container-build`). `hzp` is implemented; `hzl`/`hzv`
-are buildable skeletons. The pure packages live in `hzp/internal/{config,runspec}`
+pinned `Containerfile` (`make container-build`). `hzc` is implemented; `hzl`/`hzv`
+are buildable skeletons. The pure packages live in `hzc/internal/{config,runspec}`
 — they are the functional core and **graduate to a standalone `…/hyprzinc/core`
 module when `hzl`/`hzv` need them** (§13). No second consumer yet ⇒ no multi-module
 plumbing yet.
-- **Exit:** `hzp validate examples/apps/firefox.toml` passes; `hzp run …` prints the
+- **Exit:** `hzc validate examples/apps/firefox.toml` passes; `hzc run …` prints the
   correct `podman` command; `go test ./...` green.
 
-## M1 — hzp container lifecycle ✅
+## M1 — hzc container lifecycle ✅
 Config store CRUD under `~/.config/hyprzinc/apps/`; presets as templates (§4);
 save- **and** launch-time validation; real `run/stop/restart/inspect/logs` via
 podman; digest-pin (third-party) vs local-tag (`trusted-*`) handling (§5.5).
 - **Exit:** define + launch firefox in a rootless container with strict defaults;
   stop / restart / logs work.
 
-## M2 — hzp TUI (Bubbletea) ✅
+## M2 — hzc TUI (Bubbletea) ✅
 Keyboard-first create / edit / delete / launch / stop; preset picker that shows each
 field's **actual value**, not just the label (§4); logs view. (List-valued fields —
 `[[mounts]]`, `[keys]`, the pasta allowlist — stay TOML-editable, shown read-only in
 the form. "Save running state as profile" moves to M10, which owns profiles.)
 - **Exit:** manage apps end-to-end without leaving the TUI or touching a mouse.
+- *Added later:* the TUI's own keybindings are remappable via selectable schemes
+  (`default`/`vim`/custom under `~/.config/hyprzinc/hzc/`, `hzc keys` + `?` picker).
+  This is hzc UI polish — separate from the Hyprland desktop hotkeys (§12), which
+  remain M10 and depend on the Nix module (M8).
+- *Added later:* `multiterminal` apps — a terminal app can run a shared keep-alive
+  holder that many terminals attach to (`hzc term`, or the TUI run/shell actions),
+  living until the last terminal closes unless `background` (§9.1).
+- *Added later:* quick setup via `app.install` + `app.command` — a derived image
+  (`FROM image` + one `RUN install` layer) so a stock distro image can `apt`/`apk`/
+  `dnf` what it needs without a Containerfile; built on demand at run or with `hzc
+  build`/the TUI build action (§5.5, §9.1). Keyboard hints also trimmed to the
+  gestures that actually apply (no per-screen "porridge" of every key).
 
-## M3 — Network egress enforcement ⬜
+## M3 — Network egress enforcement ✅
 pasta wiring; **nftables-in-netns** CIDR + port allowlist (§5.3); `block_dns`;
-modes `none` / `pasta`.
+modes `none` / `pasta`. Enforced with **no unfiltered-egress window**: a pasta app
+runs in a podman *pod* whose netns an nft init step locks down — the locally built
+`trusted-netfilter` helper, run with `--pull=never` and only a namespaced
+`NET_ADMIN` — *before* the app container starts; `hzc stop` tears the pod (and its
+filtered netns) down. Container-mode DNS through the in-tunnel resolver is M4.
 - **Exit:** a `pasta` app reaches only allowlisted CIDRs/ports; 53/853 blocked except
   the designated resolver.
 
@@ -74,9 +90,9 @@ commands; custom-command TOML; project scan paths; `depends_on` auto-start.
 - **Exit:** launch any source by keyboard from one search line.
 
 ## M8 — Nix home-manager module + flake ⬜
-Flake outputs `hzp/hzl/hzv` + `homeManagerModules.hyprzinc` (§9.3); module generates
+Flake outputs `hzc/hzl/hzv` + `homeManagerModules.hyprzinc` (§9.3); module generates
 Hyprland config, binaries on PATH, terminal/shell/fonts, the **theme bundle**, and a
-**first-run seed** of TOMLs (hzp owns them thereafter); vpn backends/routes;
+**first-run seed** of TOMLs (hzc owns them thereafter); vpn backends/routes;
 `projectPaths`.
 - **Exit:** `home-manager switch` brings a fresh workstation to full state.
   *(Blocked on this box — Nix not installed.)*

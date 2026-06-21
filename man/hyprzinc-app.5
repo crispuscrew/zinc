@@ -1,0 +1,270 @@
+.\" Manpage for the HyprZinc app-definition TOML format.
+.\" View without installing:  man -l man/hyprzinc-app.5
+.TH HYPRZINC-APP 5 "June 2026" "HyprZinc" "HyprZinc Manual"
+.SH NAME
+hyprzinc-app \- HyprZinc app-definition file format
+.SH SYNOPSIS
+.I ~/.config/hyprzinc/apps/<name>.toml
+.SH DESCRIPTION
+A HyprZinc app definition is a single
+.BR TOML (5)
+file describing one rootless-container application:
+.RB its " image, the Wayland and audio access it gets, its network egress policy,"
+its mounts and keys, and any extra capabilities. The same rules are checked when the
+file is saved and when the app is launched, so a stored app and a launched app can
+never disagree.
+.PP
+Edit definitions with
+.B hzc tui
+(the form covers common fields; the "advanced" row opens the raw TOML in
+.BR $EDITOR ),
+or by hand. Validate with
+.BR "hzc validate " \fIname\fR | \fIapp.toml\fR.
+All problems are reported together, not just the first.
+.PP
+Field references below cite sections of
+.I docs/architecture.md
+.RB (e.g. " §5.5" ).
+.SH TOP LEVEL
+.TP
+.B schema_version
+Integer. Must be
+.BR 1 .
+.SH "[app]"
+.TP
+.B name
+String, required. Lowercase
+.RB [ a\-z0\-9._\- ],
+must start alphanumeric. Becomes the container name.
+.TP
+.B image
+String, required. The container image. A third-party image
+.I must
+be pinned by a canonical digest \(em
+.RB \(lq @sha256: \(rq
+plus exactly 64 lowercase hex characters; only locally built
+.IR trusted-* " images may use a mutable local tag (§5.5)."
+Must be a single-line reference (no whitespace or control characters). Use
+.B hzc image resolve
+to obtain the pinned form.
+.TP
+.B command
+Array of strings. Argv appended after the image, overriding the image's default
+command
+.RB ( CMD ).
+Empty uses the image default. Required when
+.B multiterminal
+is set (the default command cannot be replayed into each terminal).
+.TP
+.B install
+String. Build-time setup run as a
+.B RUN
+layer atop
+.B image
+to produce a
+.I derived
+image
+.RB ( "FROM image + RUN install" );
+empty runs the image directly (§5.5).
+.TP
+.B preset
+String. One of
+.IR strict ", " standard ", " networked .
+A starting
+.I template
+only \(em every field stays independently overridable. See
+.BR PRESETS .
+.TP
+.B description ", " icon
+Strings. Human-readable label and icon name.
+.TP
+.B terminal
+Boolean. CLI/TUI app: launch inside a terminal-emulator window.
+.TP
+.B multiterminal
+Boolean. Terminal app with a long-lived holder so many terminals can attach to one
+instance; the container lives until the last terminal closes. Requires
+.B terminal
+and an explicit
+.BR command .
+.TP
+.B background
+Boolean. Keep running detached. A plain
+.B terminal
+app cannot also be background; with
+.B multiterminal
+it means "keep the shared container alive after the last terminal closes".
+.TP
+.B autostart
+Boolean. Start the app automatically.
+.TP
+.B autostart_workspace
+Integer, must be
+.BR ">= 0" " (" 0 " = no preference)."
+.SH "[display]"
+.TP
+.B wayland
+String, required.
+.I security-context
+(default; tag the app's Wayland connection \(em label-only today, no runtime enforce,
+see §5.2) or
+.IR passthrough .
+.TP
+.B gpu
+Boolean. Expose the host GPU
+.RI ( /dev/dri ).
+A dry-run warns when set.
+.SH "[network]"
+.TP
+.B mode
+String, required.
+.IR none ", " pasta ", or " container .
+Fields belonging to one mode are rejected under the others, so a stale allowlist
+left after a mode switch cannot silently read as "applied".
+.PP
+.RB "When " "mode = pasta" " \(em egress allowlist, enforced by"
+.BR nftables (8)
+in the netns before the app starts (§5.3):
+.TP
+.B ipv4_cidr ", " ipv6_cidr
+Arrays of CIDR strings; each must be a valid CIDR in its family. An all-egress entry
+.RB ( 0.0.0.0/0 ", " ::/0 )
+is allowed but warned about (the allowlist is then effectively open).
+.TP
+.B ports
+Array of integers, each
+.BR 1\-65535 .
+.TP
+.B interface
+String. Host interface for egress. Charset
+.RB [ A\-Za\-z0\-9._\- ]
+only (no commas or spaces \(em they would splice extra options into the pasta
+invocation).
+.TP
+.B block_dns
+Boolean. Block DNS egress (a leak guard meaningful only with an egress allowlist).
+.PP
+.RB "When " "mode = container" :
+.TP
+.B target
+String, required in this mode. Name of the container whose network namespace to
+join; charset
+.RB [ a\-z0\-9._\- ],
+must start alphanumeric. Existence is verified at launch.
+.SH "[[mounts]]"
+An array of tables, each a bind mount.
+.TP
+.B host ", " container
+Strings, required. Host path and in-container path. Neither may contain
+.RB \(lq : \(rq,
+.RB \(lq , \(rq,
+or whitespace/control characters \(em those would shift Podman's
+.B \-v
+field layout (e.g. claim
+.I ro
+but actually mount
+.IR rw ).
+.TP
+.B mode
+String, required.
+.IR ro " or " rw .
+.SH "[keys]"
+A convenience layer for SSH/GPG keys: unlike
+.BR [[mounts]] ,
+it also wires the agent socket and enforces
+.B 0600
+inside the container.
+.TP
+.B ssh ", " gpg
+Arrays of host key paths. Each is subject to the same metacharacter rejection as
+mount paths
+.RB ( "no " : ", " , ", or whitespace)."
+.SH "[audio]"
+.TP
+.B pipewire
+Boolean. Grant PipeWire access.
+.TP
+.B legacy_alsa
+Boolean. Expose the host sound device
+.RI ( /dev/snd ).
+A dry-run warns when set.
+.SH "[theme]"
+.TP
+.B mode
+String, required.
+.IR host " (inherit the host theme) or " none .
+.SH "[capabilities]"
+.TP
+.B extra
+Array of strings. Linux capabilities re-added past the
+.B cap-drop all
+baseline, passed to
+.BR "podman --cap-add" .
+Each entry must match
+.RB \(lq (CAP_)?[A\-Z_]+ \(rq
+.RB "(e.g. " NET_ADMIN " or " CAP_NET_ADMIN );
+granting
+.B ALL
+is forbidden. A dry-run warns whenever any are set.
+.SH "[depends_on]"
+.TP
+.B containers
+Array of strings. Other apps/containers to start first.
+.SH PRESETS
+Presets seed these starting values; every field stays overridable afterwards (§4):
+.PP
+.RS
+.nf
+field             strict             standard      networked
+\-\-\-\-\-             \-\-\-\-\-\-             \-\-\-\-\-\-\-\-      \-\-\-\-\-\-\-\-\-
+network.mode      none               none          pasta
+network.block_dns \-                  \-             true
+display.wayland   security-context   passthrough   passthrough
+display.gpu       false              false         false
+audio.pipewire    false              false         false
+theme.mode        host               host          host
+.fi
+.RE
+.PP
+.B strict
+is the default for a newly created app.
+.SH EXAMPLE
+.RS
+.nf
+schema_version = 1
+
+[app]
+name        = "firefox"
+image       = "docker.io/library/firefox@sha256:0000\&...\&0000"  # 64 hex, §5.5
+preset      = "strict"
+description = "Web browser"
+icon        = "firefox"
+
+[display]
+wayland = "security-context"
+gpu     = false
+
+[network]
+mode = "none"
+
+[audio]
+pipewire    = false
+legacy_alsa = false
+
+[theme]
+mode = "host"
+
+[capabilities]
+extra = []
+
+[depends_on]
+containers = []
+.fi
+.RE
+.SH SEE ALSO
+.BR hzc (1),
+.BR podman (1),
+.BR nftables (8)
+.PP
+HyprZinc architecture (single source of truth):
+.I docs/architecture.md

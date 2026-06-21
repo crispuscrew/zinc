@@ -1,4 +1,4 @@
-# Generic reproducible, hermetic build for any HyprZinc tool (hzp / hzl / hzv).
+# Generic reproducible, hermetic build for any HyprZinc tool (hzc / hzl / hzv).
 #
 # Goal: the produced binary must not depend on the host's Go version or
 # environment — same inputs → same bytes, on any machine (the "Stable" promise,
@@ -8,7 +8,7 @@
 #
 # The build context is a tool's module dir; the shared Makefile invokes this as
 #   podman build -f ../Containerfile .
-# so `make container-build` / `make repro` work identically in hzp/, hzl/, hzv/.
+# so `make container-build` / `make repro` work identically in hzc/, hzl/, hzv/.
 #
 # Refresh the toolchain pin when you choose to upgrade:
 #   podman pull docker.io/library/golang:1.24-alpine
