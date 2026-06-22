@@ -62,13 +62,28 @@ func (svc Service) Plan(cfg domain.AppConfig, opt domain.HostOptions) ([]ports.C
 	return append(enf.Prepare(cfg, opt), ports.Command{Args: appArgs, Desc: desc}), nil
 }
 
-// Launch validates cfg, ensures its derived image (if app.install is set), runs the
-// egress lock-down through the NetEnforcer (fail-closed: a half-built netns is torn
-// down on any error), then starts the app container detached. A multiterminal app
-// launches by opening its first terminal instead (the holder + a `podman exec`).
+// Launch validates cfg, auto-starts its depends_on containers (§6.6), verifies a
+// container-mode network target is present (§6.4), ensures its derived image (if
+// app.install is set), runs the egress lock-down through the NetEnforcer
+// (fail-closed: a half-built netns is torn down on any error), then starts the app
+// container detached. A multiterminal app launches by opening its first terminal
+// instead (the holder + a `podman exec`).
 func (svc Service) Launch(cfg domain.AppConfig, opt domain.HostOptions) error {
+	return svc.launch(cfg, opt, nil)
+}
+
+// launch is Launch's recursive core. chain is the stack of apps already mid-launch
+// (root → cfg's parent); it lets depends_on auto-start detect cycles. The public
+// Launch starts the recursion with a nil chain.
+func (svc Service) launch(cfg domain.AppConfig, opt domain.HostOptions, chain []string) error {
 	if err := domain.Validate(cfg); err != nil { // launch-time check catches drift (§3)
 		return fmt.Errorf("%s: %w", cfg.App.Name, err)
+	}
+	if err := svc.startDependencies(cfg, opt, chain); err != nil { // §6.6: dependencies first
+		return err
+	}
+	if err := svc.verifyNetTarget(cfg); err != nil { // §6.4: never attach to a missing netns
+		return err
 	}
 	if cfg.App.Multiterminal {
 		return svc.OpenTerminal(cfg, opt, false) // ensures the image itself

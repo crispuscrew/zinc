@@ -63,10 +63,18 @@ filtered netns) down. Container-mode DNS through the in-tunnel resolver is M4.
 - **Exit:** a `pasta` app reaches only allowlisted CIDRs/ports; 53/853 blocked except
   the designated resolver.
 
-## M4 — vpn-container ⬜
+## M4 — vpn-container 🚧
 Image: sing-box + amnezia-wg + xray + entrypoint that renders `config.json` from
 home-manager input (§6.1); socks5 backends; destination-CIDR routing; **fail-closed
 DNS** (§6.5); `network.mode = "container"` attach; `depends_on` ordering (§6.6).
+- *Done:* `network.mode = "container"` attach (the `NetEnforcer` `container` adapter)
+  and `depends_on` ordering — a launch auto-starts dependencies depth-first
+  (cycle-detected), and a container-mode app fails closed if its `network.target`
+  is neither already running nor a declared dependency (never attach to a missing
+  netns). Lives in `core/app/depends.go`, the launch-time check `domain.Validate`
+  defers to it (§6.6).
+- *Next:* the `trusted-vpn` image (entrypoint + sing-box/amnezia-wg/xray, socks5
+  backends, destination-CIDR routing) and fail-closed DNS.
 - **Exit:** app routed through vpn-container with per-destination backend selection;
   VPN down ⇒ no resolution, no leak.
 
