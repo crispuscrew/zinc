@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -25,11 +26,12 @@ const (
 type fieldKind int
 
 const (
-	kindText   fieldKind = iota // free text via a textinput
-	kindEnum                    // cycle through a fixed option set
-	kindBool                    // toggle
-	kindInfo                    // read-only (shown, not navigable)
-	kindAction                  // navigable; enter triggers an action (e.g. edit TOML)
+	kindText      fieldKind = iota // free text via a textinput
+	kindMultiline                  // multi-line free text via a textarea (app.install)
+	kindEnum                       // cycle through a fixed option set
+	kindBool                       // toggle
+	kindInfo                       // read-only (shown, not navigable)
+	kindAction                     // navigable; enter triggers an action (e.g. edit TOML)
 )
 
 // formField is one editable (or informational) row. Closures read/write the form's
@@ -38,6 +40,7 @@ type formField struct {
 	label   string
 	kind    fieldKind
 	input   *textinput.Model
+	area    *textarea.Model
 	options []string
 	get     func() string
 	set     func(string)
@@ -56,7 +59,7 @@ type formModel struct {
 	name    textinput.Model
 	image   textinput.Model
 	command textinput.Model // entrypoint argv, space-separated (folded into App.Command)
-	install textinput.Model // build-time setup line (App.Install) → derived image
+	install textarea.Model  // build-time setup, possibly multi-line (App.Install) → derived image
 	desc    textinput.Model
 	icon    textinput.Model
 	target  textinput.Model
@@ -81,7 +84,7 @@ func newForm(base domain.AppConfig, creating bool) *formModel {
 	frm.name = newInput(frm.draft.App.Name, "firefox")
 	frm.image = newInput(frm.draft.App.Image, "docker.io/…@sha256:… (trusted-* may use a tag)")
 	frm.command = newInput(strings.Join(frm.draft.App.Command, " "), "entrypoint, e.g. hollywood (blank = image default)")
-	frm.install = newInput(frm.draft.App.Install, "build setup, e.g. apt-get install -y hollywood (blank = none)")
+	frm.install = newArea(frm.draft.App.Install, "build setup, e.g. apt-get install -y hollywood (blank = none)")
 	frm.desc = newInput(frm.draft.App.Description, "")
 	frm.icon = newInput(frm.draft.App.Icon, "freedesktop name (e.g. firefox) or /path/to/icon.png")
 	frm.target = newInput(frm.draft.Network.Target, "vpn-container")
@@ -99,6 +102,22 @@ func newInput(value, placeholder string) textinput.Model {
 	inp.CharLimit = 256
 	inp.SetValue(value)
 	return inp
+}
+
+// newArea builds the multi-line install editor. Install lines are joined into one
+// RUN at build time (domain.installScript), so the user can lay a multi-step setup
+// out across lines and still get a single derived layer.
+func newArea(value, placeholder string) textarea.Model {
+	area := textarea.New()
+	area.Prompt = ""
+	area.Placeholder = placeholder
+	area.ShowLineNumbers = false
+	area.CharLimit = 1024
+	area.SetWidth(64)
+	area.SetHeight(3)
+	area.SetValue(value)
+	area.Blur()
+	return area
 }
 
 func (frm *formModel) buildFields() {
@@ -122,9 +141,16 @@ func (frm *formModel) buildFields() {
 		// entrypoint to run, and a build-time install line that produces a derived
 		// image (FROM image + RUN install). The hint reads the current image live.
 		formField{label: "command", kind: kindText, input: &frm.command},
-		formField{label: "install", kind: kindText, input: &frm.install},
+		formField{label: "install", kind: kindMultiline, area: &frm.install},
 		formField{label: "", kind: kindInfo, info: func() string {
-			return "↳ " + domain.InstallHint(strings.TrimSpace(frm.image.Value())) + "  (derived image; b rebuilds)"
+			// "b rebuilds" is a LIST action — in a text field b just types a "b" — so the
+			// form hint only describes what install does, plus the apply gesture (enter)
+			// while the field is still empty.
+			note := "builds a derived image"
+			if strings.TrimSpace(frm.install.Value()) == "" {
+				note = "enter applies · " + note
+			}
+			return "↳ " + domain.InstallHint(strings.TrimSpace(frm.image.Value())) + "  (" + note + ")"
 		}},
 		enum("preset", []string{domain.PresetStrict, domain.PresetStandard, domain.PresetNetworked},
 			func() string { return frm.draft.App.Preset },
@@ -238,6 +264,16 @@ func (frm *formModel) update(msg tea.Msg) (tea.Cmd, formResult) {
 	keyStr := keyMsg.String()
 	scheme := frm.scheme
 
+	// In the multi-line install field the arrow keys move the cursor within the
+	// textarea (intrinsic, like the logs viewport's scrolling); tab / shift+tab still
+	// move between fields. Without this, up/down would leave the field — they are the
+	// NextField/PrevField bindings.
+	if frm.fields[frm.idx].kind == kindMultiline && (keyStr == "up" || keyStr == "down") {
+		var cmd tea.Cmd
+		frm.install, cmd = frm.install.Update(msg)
+		return cmd, formStay
+	}
+
 	// Field-kind-independent commands first. These are control keys (esc, ctrl+*,
 	// tab), so they never collide with typing into a focused text field.
 	switch {
@@ -252,8 +288,11 @@ func (frm *formModel) update(msg tea.Msg) (tea.Cmd, formResult) {
 		frm.focusPrev()
 		return nil, formStay
 	case scheme.Is(keys.CtxForm, keys.ClearField, keyStr):
-		if cur := frm.fields[frm.idx]; cur.kind == kindText && cur.input != nil {
+		switch cur := frm.fields[frm.idx]; {
+		case cur.kind == kindText && cur.input != nil:
 			cur.input.SetValue("")
+		case cur.kind == kindMultiline && cur.area != nil:
+			cur.area.SetValue("")
 		}
 		return nil, formStay
 	case scheme.Is(keys.CtxForm, keys.ResolveImage, keyStr):
@@ -270,6 +309,18 @@ func (frm *formModel) update(msg tea.Msg) (tea.Cmd, formResult) {
 	case kindText:
 		var cmd tea.Cmd
 		*fld.input, cmd = fld.input.Update(msg)
+		return cmd, formStay
+	case kindMultiline:
+		// Enter on an EMPTY field applies the suggested install prefix (InstallHint
+		// without its <pkg> placeholder), so the user types only the package; once the
+		// field has content, enter inserts a newline for a multi-step script (the lines
+		// are joined into one RUN at build — domain.installScript, §9.1).
+		if scheme.Is(keys.CtxForm, keys.Activate, keyStr) && strings.TrimSpace(fld.area.Value()) == "" {
+			fld.area.SetValue(installTemplate(frm.image.Value()))
+			return nil, formStay
+		}
+		var cmd tea.Cmd
+		*fld.area, cmd = fld.area.Update(msg)
 		return cmd, formStay
 	case kindAction:
 		if scheme.Is(keys.CtxForm, keys.Activate, keyStr) {
@@ -292,11 +343,15 @@ func (frm *formModel) update(msg tea.Msg) (tea.Cmd, formResult) {
 
 func (frm *formModel) focus(idx int) {
 	frm.idx = idx
-	for _, input := range []*textinput.Model{&frm.name, &frm.image, &frm.command, &frm.install, &frm.desc, &frm.icon, &frm.target} {
+	for _, input := range []*textinput.Model{&frm.name, &frm.image, &frm.command, &frm.desc, &frm.icon, &frm.target} {
 		input.Blur()
 	}
-	if fld := frm.fields[idx]; fld.kind == kindText && fld.input != nil {
+	frm.install.Blur()
+	switch fld := frm.fields[idx]; {
+	case fld.kind == kindText && fld.input != nil:
 		fld.input.Focus()
+	case fld.kind == kindMultiline:
+		frm.install.Focus()
 	}
 }
 
@@ -357,6 +412,14 @@ func splitCommand(text string) []string {
 		return nil
 	}
 	return fields
+}
+
+// installTemplate is InstallHint(image) with its trailing <pkg> placeholder removed
+// and a single trailing space — the prefix the install field's apply gesture (enter
+// on an empty field) inserts, so the user lands ready to type a package name.
+func installTemplate(image string) string {
+	hint := domain.InstallHint(strings.TrimSpace(image))
+	return strings.TrimRight(strings.TrimSuffix(hint, "<pkg>"), " ") + " "
 }
 
 func cycle(opts []string, cur string, dir int) string {

@@ -41,6 +41,14 @@ func TestDerivedContainerfile(t *testing.T) {
 	}
 }
 
+func TestDerivedContainerfileCollapsesMultilineInstall(t *testing.T) {
+	got := DerivedContainerfile(installCfg("apt-get update\n\n  apt-get install -y foo  \n"))
+	want := "FROM docker.io/library/debian@sha256:abc\nRUN apt-get update && apt-get install -y foo\n"
+	if got != want {
+		t.Fatalf("multi-line install should collapse to one && RUN:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestBuildFingerprintChangesWithInputs(t *testing.T) {
 	base := BuildFingerprint(installCfg("apt-get install -y hollywood"))
 	if base == "" {
