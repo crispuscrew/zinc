@@ -55,7 +55,7 @@ func DerivedImageRef(name string) string {
 // (e.g. "apt-get update && apt-get install -y hollywood"). It is fed to `podman
 // build` on stdin, so no temp file and no host build context are needed.
 func DerivedContainerfile(cfg AppConfig) string {
-	return "FROM " + cfg.App.Image + "\nRUN " + strings.TrimSpace(cfg.App.Install) + "\n"
+	return "FROM " + cfg.App.Image + "\nRUN " + installScript(cfg.App.Install) + "\n"
 }
 
 // BuildFingerprint identifies a derived image's inputs — the base image and the
@@ -64,8 +64,24 @@ func DerivedContainerfile(cfg AppConfig) string {
 // an unchanged app reuses its image and a re-pinned base or edited install line
 // takes effect on the next run automatically.
 func BuildFingerprint(cfg AppConfig) string {
-	sum := sha256.Sum256([]byte(cfg.App.Image + "\n" + strings.TrimSpace(cfg.App.Install)))
+	sum := sha256.Sum256([]byte(cfg.App.Image + "\n" + installScript(cfg.App.Install)))
 	return hex.EncodeToString(sum[:])
+}
+
+// installScript collapses a possibly multi-line install line into the single shell
+// command the derived image's one RUN layer carries: non-empty lines are trimmed and
+// joined with " && " so a multi-step setup fails fast, exactly as the same steps on
+// one line would. A single-line install is returned unchanged. Collapsing also keeps
+// a stray newline (e.g. in a hand-authored TOML) from injecting a second
+// Containerfile directive past the RUN line (§5.5).
+func installScript(install string) string {
+	var steps []string
+	for _, line := range strings.Split(install, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			steps = append(steps, trimmed)
+		}
+	}
+	return strings.Join(steps, " && ")
 }
 
 // InstallHint suggests the package-manager invocation for an app's base image,
