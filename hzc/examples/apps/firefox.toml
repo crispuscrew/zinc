@@ -2,7 +2,9 @@ schema_version = 1
 
 [app]
 name        = "firefox"
-image       = "docker.io/library/firefox@sha256:0000000000000000000000000000000000000000000000000000000000000000"  # digest-pinned (third-party), §5.5
+image       = "docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"  # base pinned by digest (third-party), §5.5
+install     = "apk add --no-cache firefox font-dejavu"  # derived image: FROM image + this RUN layer (§5.5, §9.1)
+command     = ["firefox"]
 preset      = "strict"
 description = "Web browser"
 icon        = "firefox"

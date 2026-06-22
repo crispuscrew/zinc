@@ -237,6 +237,25 @@ func TestFormClearField(t *testing.T) {
 	}
 }
 
+func TestFormInstallApplyHintThenNewline(t *testing.T) {
+	frm := newForm(domain.AppConfig{}, true)
+	frm.image.SetValue("docker.io/library/alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	frm.focus(fieldIdx(frm, "install"))
+	// enter on the empty multi-line install field applies the image's suggested prefix.
+	if _, res := frm.update(key("enter")); res != formStay {
+		t.Fatalf("enter on install should stay in the form, got %v", res)
+	}
+	if got := frm.install.Value(); got != "apk add --no-cache " {
+		t.Fatalf("enter should apply the alpine install template, got %q", got)
+	}
+	// With content, enter now inserts a newline rather than re-applying or clobbering.
+	frm.install.SetValue("apk add --no-cache firefox")
+	frm.update(key("enter"))
+	if got := frm.install.Value(); !strings.Contains(got, "apk add --no-cache firefox") || !strings.Contains(got, "\n") {
+		t.Fatalf("enter on a non-empty install field should add a line, keeping the text, got %q", got)
+	}
+}
+
 func TestFormAdvancedTriggersEdit(t *testing.T) {
 	frm := newForm(domain.AppConfig{}, true)
 	frm.focus(fieldIdx(frm, "advanced"))

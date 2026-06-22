@@ -135,6 +135,16 @@ func (frm *formModel) view() string {
 			label = selected.Render(label)
 		}
 
+		// A multi-line field renders its label on the cursor line, then the textarea
+		// block beneath it (indented), since its View spans several lines.
+		if fld.kind == kindMultiline {
+			bld.WriteString(cursor + label + "\n")
+			for _, line := range strings.Split(fld.area.View(), "\n") {
+				bld.WriteString("    " + line + "\n")
+			}
+			continue
+		}
+
 		var val string
 		switch fld.kind {
 		case kindText:
@@ -178,6 +188,13 @@ func (frm *formModel) footer() string {
 			add(scheme.HintPrimary(keys.CtxForm, keys.ClearField), "clear")
 			if fld.label == "image" {
 				add(scheme.HintPrimary(keys.CtxForm, keys.ResolveImage), "resolve")
+			}
+		case kindMultiline:
+			add(scheme.HintPrimary(keys.CtxForm, keys.ClearField), "clear")
+			if fld.area != nil && strings.TrimSpace(fld.area.Value()) == "" {
+				add(scheme.HintPrimary(keys.CtxForm, keys.Activate), "apply hint")
+			} else {
+				add(scheme.HintPrimary(keys.CtxForm, keys.Activate), "newline")
 			}
 		case kindEnum:
 			change := strings.Trim(scheme.HintPrimary(keys.CtxForm, keys.EnumPrev)+"/"+scheme.HintPrimary(keys.CtxForm, keys.EnumNext), "/")
