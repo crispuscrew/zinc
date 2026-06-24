@@ -12,6 +12,9 @@
 package tui
 
 import (
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -27,7 +30,8 @@ const (
 	modeForm
 	modeLogs
 	modeConfirmDelete
-	modeKeys // keybind-scheme picker
+	modeRename // prompt for a new name (delete + recreate)
+	modeKeys   // keybind-scheme picker
 )
 
 type appRow struct {
@@ -53,6 +57,9 @@ type Model struct {
 	logsReady bool
 
 	confirmName string
+
+	rename     textinput.Model // new-name editor (modeRename)
+	renameFrom string          // app being renamed
 
 	keysList   []string // scheme names shown in the picker (modeKeys)
 	keysCursor int
@@ -209,6 +216,9 @@ func (mdl Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return mdl, nil
 
+	case modeRename:
+		return mdl.handleRenameKey(msg)
+
 	case modeKeys:
 		return mdl.handleKeysKey(msg)
 
@@ -277,6 +287,14 @@ func (mdl Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if row, ok := mdl.selected(); ok {
 			return mdl, fetchLogs(mdl.svc, row.cfg.App.Name)
 		}
+	case keys.Rename:
+		if row, ok := mdl.selected(); ok && row.loadErr == nil {
+			inp := newInput(row.cfg.App.Name, "")
+			cmd := inp.Focus()
+			mdl.rename, mdl.renameFrom = inp, row.cfg.App.Name
+			mdl.mode, mdl.status = modeRename, ""
+			return mdl, cmd
+		}
 	case keys.Delete:
 		if row, ok := mdl.selected(); ok {
 			mdl.confirmName = row.cfg.App.Name
@@ -322,6 +340,30 @@ func (mdl Model) handleKeysKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return mdl, nil
+}
+
+// handleRenameKey drives the rename prompt (modeRename): a text input prefilled with
+// the current name. Enter commits the rename through the service (which loads the old
+// definition, rewrites app.name, saves it, and deletes the old — the "delete +
+// recreate"); esc cancels; every other key edits the field. A blank or unchanged name
+// is treated as a cancel so Enter is never a destructive no-op.
+func (mdl Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		mdl.mode = modeList
+		return mdl, nil
+	case "enter":
+		from, to := mdl.renameFrom, strings.TrimSpace(mdl.rename.Value())
+		mdl.mode = modeList
+		if to == "" || to == from {
+			return mdl, nil
+		}
+		mdl.status = "renaming " + from + " → " + to + "…"
+		return mdl, renameApp(mdl.svc, from, to)
+	}
+	var cmd tea.Cmd
+	mdl.rename, cmd = mdl.rename.Update(msg)
+	return mdl, cmd
 }
 
 func (mdl Model) selected() (appRow, bool) {

@@ -243,6 +243,18 @@ func stop(svc app.Service, cfg domain.AppConfig) tea.Cmd {
 	}
 }
 
+// renameApp renames an app through the service: load the old definition, rewrite
+// app.name, save it under the new name (validated), and delete the old one. The store
+// is the single source of truth, so this is the built-in "delete + recreate" (§9.1).
+func renameApp(svc app.Service, from, to string) tea.Cmd {
+	return func() tea.Msg {
+		if err := svc.Rename(from, to); err != nil {
+			return errMsg{err}
+		}
+		return statusMsg{"renamed " + from + " → " + to}
+	}
+}
+
 func remove(svc app.Service, name string) tea.Cmd {
 	return func() tea.Msg {
 		if err := svc.Delete(name); err != nil {

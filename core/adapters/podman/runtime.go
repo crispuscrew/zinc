@@ -42,10 +42,39 @@ var (
 // CLI/TUI app (app.terminal) appears in its own window. term is the emulator argv
 // (e.g. ["foot"] or ["xterm","-e"]); it is run as `term… podman <runArgs…>`. It
 // wraps a `run` argv (single-terminal apps) or an `exec` argv (multiterminal) alike.
-func TerminalLaunch(term, runArgs []string) []string {
+//
+// When hold is set (app.keep_open), the podman invocation is wrapped in the host
+// shell so the window pauses after it exits — the user can read final output/errors
+// before the window closes. This is emulator-agnostic on purpose: the emulator is
+// user-configured (§9.1), so we don't rely on an emulator-specific --hold flag.
+func TerminalLaunch(term, runArgs []string, hold bool) []string {
 	out := append([]string{}, term...)
-	out = append(out, "podman")
-	return append(out, runArgs...)
+	if !hold {
+		out = append(out, "podman")
+		return append(out, runArgs...)
+	}
+	// Each arg is single-quoted so a command argv can never break out of the script
+	// (the install/validate layers already reject the worst metacharacters, but the
+	// shell wrapper must be safe on its own). printf's \n are interpreted by printf.
+	script := "podman " + shellJoin(runArgs) +
+		`; status=$?; printf '\n[hyprzinc] exited (status %s) — press Enter to close\n' "$status"; read _`
+	return append(out, "sh", "-c", script)
+}
+
+// shellQuote wraps str in single quotes for safe interpolation into an `sh -c`
+// script, escaping any embedded single quote as the standard '\” sequence. Used
+// only by TerminalLaunch's keep_open wrapper.
+func shellQuote(str string) string {
+	return "'" + strings.ReplaceAll(str, "'", `'\''`) + "'"
+}
+
+// shellJoin single-quotes every arg and joins them with spaces.
+func shellJoin(args []string) string {
+	quoted := make([]string, len(args))
+	for idx, arg := range args {
+		quoted[idx] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // HolderCmd is the main process of a multiterminal app's shared container: a no-op
@@ -261,7 +290,7 @@ func appCmd(cfg domain.AppConfig, opt domain.HostOptions, runArgs []string) (*ex
 		if len(opt.Terminal) == 0 {
 			return nil, fmt.Errorf("%s: terminal app but no terminal emulator configured (set HYPRZINC_TERMINAL)", cfg.App.Name)
 		}
-		wrap := TerminalLaunch(opt.Terminal, runArgs)
+		wrap := TerminalLaunch(opt.Terminal, runArgs, cfg.App.KeepOpen)
 		proc = exec.Command(wrap[0], wrap[1:]...)
 	} else {
 		proc = exec.Command("podman", runArgs...) // stdio nil → /dev/null; GUI renders via Wayland
@@ -273,8 +302,8 @@ func appCmd(cfg domain.AppConfig, opt domain.HostOptions, runArgs []string) (*ex
 // OpenSession opens one terminal of a multiterminal app: the configured emulator
 // wrapping a `podman exec -it` into the holder, running cmd. It blocks until the
 // terminal window closes.
-func (Runtime) OpenSession(app string, cmd []string, opt domain.HostOptions) error {
-	argv := TerminalLaunch(opt.Terminal, ExecArgs(app, cmd))
+func (Runtime) OpenSession(app string, cmd []string, opt domain.HostOptions, hold bool) error {
+	argv := TerminalLaunch(opt.Terminal, ExecArgs(app, cmd), hold)
 	return exec.Command(argv[0], argv[1:]...).Run()
 }
 

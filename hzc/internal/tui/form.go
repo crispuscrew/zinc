@@ -133,7 +133,7 @@ func (frm *formModel) buildFields() {
 		fields = append(fields, formField{label: "name", kind: kindText, input: &frm.name})
 	} else {
 		fields = append(fields, formField{label: "name", kind: kindInfo,
-			info: func() string { return frm.draft.App.Name + "   (rename = delete + recreate)" }})
+			info: func() string { return frm.draft.App.Name + "   (rename with R in the list)" }})
 	}
 	fields = append(fields,
 		formField{label: "image", kind: kindText, input: &frm.image},
@@ -185,6 +185,9 @@ func (frm *formModel) buildFields() {
 		boolean("multiterminal",
 			func() bool { return frm.draft.App.Multiterminal },
 			func(val bool) { frm.draft.App.Multiterminal = val }),
+		boolean("keep_open",
+			func() bool { return frm.draft.App.KeepOpen },
+			func(val bool) { frm.draft.App.KeepOpen = val }),
 		boolean("background",
 			func() bool { return frm.draft.App.Background },
 			func(val bool) { frm.draft.App.Background = val }),

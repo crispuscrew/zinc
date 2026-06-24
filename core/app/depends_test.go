@@ -36,11 +36,11 @@ func (engine *fakeRuntime) StartApp(cfg domain.AppConfig, opt domain.HostOptions
 	engine.running[cfg.App.Name] = true
 	return nil
 }
-func (engine *fakeRuntime) OpenSession(string, []string, domain.HostOptions) error { return nil }
-func (engine *fakeRuntime) Exists(name string) bool                                { return engine.running[name] }
-func (engine *fakeRuntime) Do([]string) error                                      { return nil }
-func (engine *fakeRuntime) Running() (map[string]bool, error)                      { return engine.running, nil }
-func (engine *fakeRuntime) Logs(string, int) (string, error)                       { return "", nil }
+func (engine *fakeRuntime) OpenSession(string, []string, domain.HostOptions, bool) error { return nil }
+func (engine *fakeRuntime) Exists(name string) bool                                      { return engine.running[name] }
+func (engine *fakeRuntime) Do([]string) error                                            { return nil }
+func (engine *fakeRuntime) Running() (map[string]bool, error)                            { return engine.running, nil }
+func (engine *fakeRuntime) Logs(string, int) (string, error)                             { return "", nil }
 
 // fakeStore serves app definitions from an in-memory map.
 type fakeStore struct{ apps map[string]domain.AppConfig }
