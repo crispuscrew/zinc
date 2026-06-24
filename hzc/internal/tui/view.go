@@ -31,6 +31,8 @@ func (mdl Model) View() string {
 		return mdl.logsView()
 	case modeConfirmDelete:
 		return mdl.confirmView()
+	case modeRename:
+		return mdl.renameView()
 	case modeKeys:
 		return mdl.keysView()
 	default:
@@ -95,6 +97,7 @@ func (mdl Model) listFooter() string {
 	if row, ok := mdl.selected(); ok {
 		if row.loadErr == nil {
 			add(keys.Edit, "edit")
+			add(keys.Rename, "rename")
 			if !row.running || row.cfg.App.Multiterminal {
 				add(keys.Run, "run")
 			}
@@ -223,6 +226,15 @@ func (mdl Model) confirmView() string {
 	return "\n  " + titleStyle.Render("Delete "+mdl.confirmName+"?") +
 		"\n\n  " + help.Render(fmt.Sprintf("%s confirm · %s cancel",
 		scheme.HintPrimary(keys.CtxConfirm, keys.Yes), scheme.HintPrimary(keys.CtxConfirm, keys.No))) + "\n"
+}
+
+// renameView is the rename prompt (modeRename): a single text input prefilled with
+// the current name. enter/esc are intrinsic prompt keys, so they stay literal.
+func (mdl Model) renameView() string {
+	return "\n  " + titleStyle.Render("Rename "+mdl.renameFrom) +
+		"\n\n  " + mdl.rename.View() +
+		"\n\n  " + help.Render("enter rename · esc cancel") +
+		"\n  " + dim.Render("renames by recreating under the new name; the app must be stopped") + "\n"
 }
 
 // keysView is the keybind-scheme picker (modeKeys): every selectable scheme, the

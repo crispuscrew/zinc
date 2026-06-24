@@ -51,6 +51,7 @@ type App struct {
 	Icon               string   `toml:"icon"`
 	Terminal           bool     `toml:"terminal"`      // CLI/TUI app: launch inside a terminal emulator window (§9.1, §11)
 	Multiterminal      bool     `toml:"multiterminal"` // terminal app: a long-lived holder so many terminals can attach to one instance; container lives until the last closes (§9.1)
+	KeepOpen           bool     `toml:"keep_open"`     // terminal app: keep the terminal window open after the app exits, so final output/errors stay readable (§9.1)
 	Background         bool     `toml:"background"`
 	Autostart          bool     `toml:"autostart"`
 	AutostartWorkspace int      `toml:"autostart_workspace"`

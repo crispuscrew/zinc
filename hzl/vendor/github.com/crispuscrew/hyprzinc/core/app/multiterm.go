@@ -134,7 +134,7 @@ func (svc Service) runTerminalSession(cfg domain.AppConfig, opt domain.HostOptio
 	if shell {
 		cmd = []string{defaultShell}
 	}
-	return svc.runtime.OpenSession(cfg.App.Name, cmd, opt)
+	return svc.runtime.OpenSession(cfg.App.Name, cmd, opt, cfg.App.KeepOpen)
 }
 
 // waiter owns one terminal's lifecycle. Its three actions are injected so the

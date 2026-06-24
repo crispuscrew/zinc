@@ -85,6 +85,12 @@ func Validate(cfg AppConfig) error {
 		// background means "keep the shared container alive after the last terminal".
 		add("app.terminal: a terminal app runs in a foreground terminal window; it cannot also be background (set multiterminal to keep the shared container alive after the last terminal closes)")
 	}
+	if cfg.App.KeepOpen && !cfg.App.Terminal {
+		// keep_open holds the terminal window open after the app exits; a non-terminal
+		// (GUI/background) app has no window to hold, so the flag would silently do
+		// nothing — reject it rather than let it read as applied.
+		add("app.keep_open: requires app.terminal (it keeps the terminal window open after the app exits)")
+	}
 	if cfg.App.Multiterminal && len(cfg.App.Command) == 0 {
 		// Each terminal re-runs the app via `podman exec`, which needs an explicit
 		// argv — a holder occupies PID 1, so the image's ENTRYPOINT/CMD never runs

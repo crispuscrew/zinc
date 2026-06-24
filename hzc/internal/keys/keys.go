@@ -43,6 +43,7 @@ const (
 	Build   Action = "build" // rebuild the selected app's derived image (app.install)
 	Stop    Action = "stop"
 	Logs    Action = "logs"
+	Rename  Action = "rename" // rename the selected app (delete old + recreate under a new name)
 	Delete  Action = "delete"
 	Keys    Action = "keys" // open the keybind-scheme picker
 	Quit    Action = "quit"
@@ -83,7 +84,7 @@ var ContextName = map[Context]string{
 // the source of truth for validation (unknown action names) and for iterating
 // bindings in `hzc keys show`.
 var ActionsByContext = map[Context][]Action{
-	CtxList:    {Up, Down, Refresh, New, Edit, Run, Shell, Build, Stop, Logs, Delete, Keys, Quit},
+	CtxList:    {Up, Down, Refresh, New, Edit, Run, Shell, Build, Stop, Logs, Rename, Delete, Keys, Quit},
 	CtxForm:    {NextField, PrevField, EnumPrev, EnumNext, Toggle, Activate, ClearField, ResolveImage, Save, Cancel},
 	CtxLogs:    {Back},
 	CtxConfirm: {Yes, No},

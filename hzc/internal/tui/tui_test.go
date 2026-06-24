@@ -148,6 +148,48 @@ func TestDeleteFlow(t *testing.T) {
 	}
 }
 
+func TestRenameFlow(t *testing.T) {
+	mdl, sto := newLoaded(t, "alpha", "beta") // cursor starts on alpha
+	mdl = send(mdl, key("R"))                 // open the rename prompt for alpha
+	if mdl.mode != modeRename || mdl.renameFrom != "alpha" {
+		t.Fatalf("R should open the rename prompt for alpha, got mode=%v from=%q", mdl.mode, mdl.renameFrom)
+	}
+	mdl.rename.SetValue("delta")
+	updated, cmd := mdl.Update(key("enter"))
+	mdl = updated.(Model)
+	if mdl.mode != modeList {
+		t.Fatal("after confirm, mode should return to the list")
+	}
+	if cmd == nil {
+		t.Fatal("confirming a rename should return a command")
+	}
+	cmd() // perform the rename
+	if sto.Exists("alpha") {
+		t.Fatal("the old name should be gone after rename")
+	}
+	if !sto.Exists("delta") {
+		t.Fatal("the new name should exist after rename")
+	}
+	if !sto.Exists("beta") {
+		t.Fatal("an unrelated app must be untouched")
+	}
+}
+
+// Pressing enter without changing the name is a harmless no-op, not a destructive
+// delete-and-recreate.
+func TestRenameUnchangedIsNoOp(t *testing.T) {
+	mdl, sto := newLoaded(t, "alpha")
+	mdl = send(mdl, key("R"))
+	updated, cmd := mdl.Update(key("enter")) // value still "alpha"
+	mdl = updated.(Model)
+	if mdl.mode != modeList || cmd != nil {
+		t.Fatal("an unchanged rename should just return to the list with no command")
+	}
+	if !sto.Exists("alpha") {
+		t.Fatal("alpha must still exist")
+	}
+}
+
 func TestSaveInvalidStaysInForm(t *testing.T) {
 	sto := &fs.Store{Root: t.TempDir()}
 	mdl := New(wire.Service(sto), domain.HostOptions{}, keys.Active{})
