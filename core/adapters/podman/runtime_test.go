@@ -2,6 +2,7 @@ package podman
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crispuscrew/hyprzinc/core/domain"
@@ -227,10 +228,35 @@ func TestExecArgs(t *testing.T) {
 }
 
 func TestTerminalLaunch(t *testing.T) {
-	got := TerminalLaunch([]string{"xterm", "-e"}, []string{"run", "--rm", "-it", "alpine"})
+	got := TerminalLaunch([]string{"xterm", "-e"}, []string{"run", "--rm", "-it", "alpine"}, false)
 	want := []string{"xterm", "-e", "podman", "run", "--rm", "-it", "alpine"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("terminal wrap mismatch:\n got %v\nwant %v", got, want)
+	}
+}
+
+// With keep_open the podman argv is wrapped in `sh -c` so the window pauses after
+// the command exits; the argv must be single-quoted (no break-out) and the script
+// must block on input at the end.
+func TestTerminalLaunchHold(t *testing.T) {
+	got := TerminalLaunch([]string{"foot"}, []string{"run", "--rm", "-it", "alpine"}, true)
+	if len(got) != 4 || got[0] != "foot" || got[1] != "sh" || got[2] != "-c" {
+		t.Fatalf("hold wrap should be `foot sh -c <script>`, got %v", got)
+	}
+	script := got[3]
+	if !strings.Contains(script, "podman 'run' '--rm' '-it' 'alpine'") {
+		t.Fatalf("script missing single-quoted podman argv: %q", script)
+	}
+	if !strings.Contains(script, "read _") {
+		t.Fatalf("script should pause on exit: %q", script)
+	}
+}
+
+// shellQuote must neutralise an embedded single quote so a crafted command argv
+// cannot escape the keep_open wrapper.
+func TestShellQuoteEscapesSingleQuote(t *testing.T) {
+	if got, want := shellQuote(`a'b`), `'a'\''b'`; got != want {
+		t.Fatalf("shellQuote(%q) = %q, want %q", `a'b`, got, want)
 	}
 }
 

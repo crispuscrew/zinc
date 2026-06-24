@@ -68,6 +68,9 @@ func TestValidate_Errors(t *testing.T) {
 			cfg.App.Terminal = true
 			cfg.App.Multiterminal = true
 		},
+		// keep_open holds a terminal window open after exit; it is meaningless without
+		// a terminal, so it must be rejected rather than silently ignored.
+		"keep_open no terminal": func(cfg *AppConfig) { cfg.App.KeepOpen = true },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -92,6 +95,15 @@ func TestValidate_Multiterminal_OK(t *testing.T) {
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("multiterminal (background=%v) should validate, got: %v", bg, err)
 		}
+	}
+}
+
+func TestValidate_KeepOpen_OK(t *testing.T) {
+	cfg := validApp()
+	cfg.App.Terminal = true
+	cfg.App.KeepOpen = true
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("keep_open on a terminal app should validate, got: %v", err)
 	}
 }
 

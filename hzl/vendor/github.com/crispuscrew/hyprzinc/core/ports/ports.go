@@ -51,11 +51,11 @@ type Runtime interface {
 	// succeeds; onFail is invoked from the reaping goroutine if the app exits with an
 	// error, so a post-fork failure can tear down the prepared (still-filtered) netns.
 	StartApp(cfg domain.AppConfig, opt domain.HostOptions, runArgs []string, onFail func()) error
-	OpenSession(app string, cmd []string, opt domain.HostOptions) error // blocking `exec -it` into a holder, in a terminal window (multiterminal)
-	Exists(name string) bool                                            // does a container with this name exist (running or not)?
-	Do(args []string) error                                             // user-facing passthrough (stop/restart/inspect/logs) with host stdio
-	Running() (map[string]bool, error)                                  // names the runtime reports as running (list view)
-	Logs(name string, tail int) (string, error)                         // last N log lines (logs view)
+	OpenSession(app string, cmd []string, opt domain.HostOptions, hold bool) error // blocking `exec -it` into a holder, in a terminal window (multiterminal); hold keeps the window open after cmd exits
+	Exists(name string) bool                                                       // does a container with this name exist (running or not)?
+	Do(args []string) error                                                        // user-facing passthrough (stop/restart/inspect/logs) with host stdio
+	Running() (map[string]bool, error)                                             // names the runtime reports as running (list view)
+	Logs(name string, tail int) (string, error)                                    // last N log lines (logs view)
 }
 
 // ImageBuilder builds an app's derived image (FROM app.image + the install layer).

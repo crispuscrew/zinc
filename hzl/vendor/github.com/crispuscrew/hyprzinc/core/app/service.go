@@ -12,6 +12,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crispuscrew/hyprzinc/core/domain"
 	"github.com/crispuscrew/hyprzinc/core/ports"
@@ -138,6 +139,42 @@ func (svc Service) teardown(cfg domain.AppConfig, hadSteps bool) error {
 		return err
 	}
 	return svc.runtime.Exec(ports.Command{Args: enf.Teardown(cfg), Desc: "teardown " + cfg.App.Name})
+}
+
+// Rename changes an app's identity from oldName to newName. There is no atomic file
+// rename, because the name lives in two places — the filename and app.name inside the
+// TOML — so this loads the definition, rewrites app.name, saves it under the new name
+// (which re-validates the name), and removes the old definition. That is the built-in
+// "delete + recreate", so the user need not hand-edit the file and move it (§9.1).
+//
+// It refuses to overwrite an existing app, and to rename a running one — its
+// container is named after the old name and would be orphaned (the renamed
+// definition could no longer stop it); stop it first.
+func (svc Service) Rename(oldName, newName string) error {
+	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
+	switch {
+	case newName == "":
+		return fmt.Errorf("rename %s: new name must not be empty", oldName)
+	case newName == oldName:
+		return fmt.Errorf("rename %s: new name is unchanged", oldName)
+	case svc.store.Exists(newName):
+		return fmt.Errorf("rename %s: %q already exists", oldName, newName)
+	}
+	if running, err := svc.runtime.Running(); err == nil && running[oldName] {
+		return fmt.Errorf("rename %s: app is running — stop it first (its container is named %q)", oldName, oldName)
+	}
+	cfg, err := svc.store.Load(oldName)
+	if err != nil {
+		return fmt.Errorf("rename %s: %w", oldName, err)
+	}
+	cfg.App.Name = newName
+	if err := svc.store.Save(cfg); err != nil { // validates the new name before anything is removed
+		return fmt.Errorf("rename %s -> %s: %w", oldName, newName, err)
+	}
+	if err := svc.store.Delete(oldName); err != nil {
+		return fmt.Errorf("rename %s -> %s: saved new definition but could not remove the old one: %w", oldName, newName, err)
+	}
+	return nil
 }
 
 // Build force-rebuilds an app's derived image (the explicit-rebuild path).
