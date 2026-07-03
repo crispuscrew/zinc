@@ -16,9 +16,9 @@ import (
 // (AppRunArgs builds argv without I/O), so these tests run with no podman present.
 func planSvc() Service {
 	return New(nil, podman.Runtime{}, nil, nil, map[string]ports.NetEnforcer{
-		domain.NetworkNone:      netenforce.None{},
-		domain.NetworkPasta:     netenforce.Pasta{},
-		domain.NetworkContainer: netenforce.Container{},
+		domain.NetworkNone		: netenforce.None{},
+		domain.NetworkHost		: netenforce.Host{},
+		domain.NetworkContainer	: netenforce.Container{},
 	})
 }
 
@@ -36,7 +36,7 @@ func pastaApp() domain.AppConfig {
 		App:           domain.App{Name: "browser", Image: "docker.io/library/firefox" + digestPin},
 		Display:       domain.Display{Wayland: domain.WaylandPassthrough},
 		Network: domain.Network{
-			Mode:     domain.NetworkPasta,
+			Mode:     domain.NetworkHost,
 			IPv4CIDR: []string{"1.1.1.1/32", "9.9.9.9/32"},
 			Ports:    []int{443, 80},
 			BlockDNS: true,

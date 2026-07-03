@@ -33,15 +33,15 @@ func TestValidate_Errors(t *testing.T) {
 		"bad netmode":      func(cfg *AppConfig) { cfg.Network.Mode = "bridge" },
 		"container no tgt": func(cfg *AppConfig) { cfg.Network.Mode = NetworkContainer; cfg.Network.Target = "" },
 		"bad target name":  func(cfg *AppConfig) { cfg.Network.Mode = NetworkContainer; cfg.Network.Target = "Bad Name" },
-		"bad cidr":         func(cfg *AppConfig) { cfg.Network.Mode = NetworkPasta; cfg.Network.IPv4CIDR = []string{"oops"} },
+		"bad cidr":         func(cfg *AppConfig) { cfg.Network.Mode = NetworkHost; cfg.Network.IPv4CIDR = []string{"oops"} },
 		"cidr wrong family": func(cfg *AppConfig) {
-			cfg.Network.Mode = NetworkPasta
+			cfg.Network.Mode = NetworkHost
 			cfg.Network.IPv4CIDR = []string{"2001:db8::/32"}
 		},
-		"bad port":            func(cfg *AppConfig) { cfg.Network.Mode = NetworkPasta; cfg.Network.Ports = []int{70000} },
+		"bad port":            func(cfg *AppConfig) { cfg.Network.Mode = NetworkHost; cfg.Network.Ports = []int{70000} },
 		"irrelevant cidr":     func(cfg *AppConfig) { cfg.Network.IPv4CIDR = []string{"1.1.1.1/32"} },
 		"irrelevant blockdns": func(cfg *AppConfig) { cfg.Network.BlockDNS = true },
-		"irrelevant target":   func(cfg *AppConfig) { cfg.Network.Mode = NetworkPasta; cfg.Network.Target = "vpn-container" },
+		"irrelevant target":   func(cfg *AppConfig) { cfg.Network.Mode = NetworkHost; cfg.Network.Target = "vpn-container" },
 		"bad mount mode":      func(cfg *AppConfig) { cfg.Mounts = []Mount{{Host: "/a", Container: "/b", Mode: "x"}} },
 		"mount no host":       func(cfg *AppConfig) { cfg.Mounts = []Mount{{Container: "/b", Mode: MountRO}} },
 		"bad theme":           func(cfg *AppConfig) { cfg.Theme.Mode = "dark" },
@@ -52,7 +52,7 @@ func TestValidate_Errors(t *testing.T) {
 		"gpg key colon":         func(cfg *AppConfig) { cfg.Keys.GPG = []string{"/k/key:bad"} },
 		// pasta interface option-smuggling via a comma.
 		"iface comma": func(cfg *AppConfig) {
-			cfg.Network.Mode = NetworkPasta
+			cfg.Network.Mode = NetworkHost
 			cfg.Network.Interface = "eth0,--map-gw"
 		},
 		// capabilities.extra: the ALL grant and option-smuggling are forbidden.
@@ -150,7 +150,7 @@ func TestValidate_ContainerMode_OK(t *testing.T) {
 func TestValidate_PastaAllowlist_OK(t *testing.T) {
 	cfg := validApp()
 	cfg.Network = Network{
-		Mode:     NetworkPasta,
+		Mode:     NetworkHost,
 		IPv4CIDR: []string{"1.1.1.1/32"},
 		IPv6CIDR: []string{"2001:db8::/32"},
 		Ports:    []int{443, 80},
@@ -165,7 +165,7 @@ func TestValidate_NewRules_OK(t *testing.T) {
 	// Each new rule's benign form must still validate: a plain interface name, a
 	// specific capability (bare and CAP_-prefixed), and metacharacter-free paths.
 	pasta := validApp()
-	pasta.Network = Network{Mode: NetworkPasta, Interface: "eth0"}
+	pasta.Network = Network{Mode: NetworkHost, Interface: "eth0"}
 	if err := Validate(pasta); err != nil {
 		t.Fatalf("pasta interface eth0 should validate, got: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestDefaultsFor(t *testing.T) {
 		t.Fatalf("strict defaults wrong: %+v", strict)
 	}
 	networked, _ := DefaultsFor(PresetNetworked)
-	if networked.Network.Mode != NetworkPasta || networked.Display.Wayland != WaylandPassthrough {
+	if networked.Network.Mode != NetworkHost || networked.Display.Wayland != WaylandPassthrough {
 		t.Fatalf("networked defaults wrong: %+v", networked)
 	}
 	if _, valid := DefaultsFor("nope"); valid {

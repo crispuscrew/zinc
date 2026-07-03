@@ -36,7 +36,7 @@ func DefaultsFor(preset string) (AppConfig, bool) {
 		base.Display.Wayland = WaylandPassthrough
 	case PresetNetworked:
 		base.Display.Wayland = WaylandPassthrough
-		base.Network.Mode = NetworkPasta
+		base.Network.Mode = NetworkHost
 		base.Network.BlockDNS = true // DNS-leak guard is meaningful only with egress (§5.3)
 	default:
 		return AppConfig{}, false

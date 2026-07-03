@@ -233,7 +233,7 @@ func TestFormPresetReseed(t *testing.T) {
 		t.Fatalf("create form should start from strict defaults: %+v", frm.draft)
 	}
 	frm.applyPreset(domain.PresetNetworked)
-	if frm.draft.Network.Mode != domain.NetworkPasta || frm.draft.Display.Wayland != domain.WaylandPassthrough {
+	if frm.draft.Network.Mode != domain.NetworkHost || frm.draft.Display.Wayland != domain.WaylandPassthrough {
 		t.Fatalf("networked preset should reseed mode/wayland: %+v", frm.draft)
 	}
 	if frm.draft.App.Preset != domain.PresetNetworked {
@@ -310,7 +310,7 @@ func TestFormReloadKeepsCreating(t *testing.T) {
 	frm := newForm(domain.AppConfig{}, true) // creating
 	edited := sample("edited")
 	edited.App.Image = "docker.io/edited@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	edited.Network.Mode = domain.NetworkPasta
+	edited.Network.Mode = domain.NetworkHost
 
 	frm.reload(edited)
 	if !frm.creating {
@@ -319,7 +319,7 @@ func TestFormReloadKeepsCreating(t *testing.T) {
 	if frm.image.Value() != edited.App.Image {
 		t.Fatalf("reload should re-seed the image input, got %q", frm.image.Value())
 	}
-	if frm.draft.Network.Mode != domain.NetworkPasta {
+	if frm.draft.Network.Mode != domain.NetworkHost {
 		t.Fatalf("reload should swap in the edited draft, got mode %q", frm.draft.Network.Mode)
 	}
 }
@@ -561,8 +561,8 @@ func TestFormCommandPreservesComplexArgv(t *testing.T) {
 }
 
 func TestCycle(t *testing.T) {
-	opts := []string{domain.NetworkNone, domain.NetworkPasta, domain.NetworkContainer}
-	if got := cycle(opts, domain.NetworkNone, +1); got != domain.NetworkPasta {
+	opts := []string{domain.NetworkNone, domain.NetworkHost, domain.NetworkContainer}
+	if got := cycle(opts, domain.NetworkNone, +1); got != domain.NetworkHost {
 		t.Fatalf("cycle +1 = %q, want pasta", got)
 	}
 	if got := cycle(opts, domain.NetworkNone, -1); got != domain.NetworkContainer {

@@ -14,7 +14,7 @@ func pastaApp() domain.AppConfig {
 		App:           domain.App{Name: "browser", Image: "docker.io/library/firefox@sha256:abc"},
 		Display:       domain.Display{Wayland: domain.WaylandPassthrough},
 		Network: domain.Network{
-			Mode:     domain.NetworkPasta,
+			Mode:     domain.NetworkHost,
 			IPv4CIDR: []string{"1.1.1.1/32", "9.9.9.9/32"},
 			Ports:    []int{443, 80},
 			BlockDNS: true,

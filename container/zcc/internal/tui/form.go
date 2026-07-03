@@ -161,7 +161,7 @@ func (frm *formModel) buildFields() {
 		boolean("display.gpu",
 			func() bool { return frm.draft.Display.GPU },
 			func(val bool) { frm.draft.Display.GPU = val }),
-		enum("network.mode", []string{domain.NetworkNone, domain.NetworkPasta, domain.NetworkContainer},
+		enum("network.mode", []string{domain.NetworkNone, domain.NetworkHost, domain.NetworkContainer},
 			func() string { return frm.draft.Network.Mode },
 			func(val string) { frm.draft.Network.Mode = val; frm.rebuildFields() }),
 	)

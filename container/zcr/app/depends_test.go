@@ -82,9 +82,9 @@ func containerApp(name, target string, deps ...string) domain.AppConfig {
 
 func depSvc(store ports.Store, engine ports.Runtime) Service {
 	return New(store, engine, nil, nil, map[string]ports.NetEnforcer{
-		domain.NetworkNone:      netenforce.None{},
-		domain.NetworkPasta:     netenforce.Pasta{},
-		domain.NetworkContainer: netenforce.Container{},
+		domain.NetworkNone:      	netenforce.None{},
+		domain.NetworkHost:     	netenforce.Host{},
+		domain.NetworkContainer: 	netenforce.Container{},
 	})
 }
 

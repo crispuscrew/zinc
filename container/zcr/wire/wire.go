@@ -23,9 +23,9 @@ import (
 // a new NetEnforcer adapter added here (or replacing pasta), and nothing else moves.
 func Enforcers() map[string]ports.NetEnforcer {
 	return map[string]ports.NetEnforcer{
-		domain.NetworkNone:      netenforce.None{},
-		domain.NetworkPasta:     netenforce.Pasta{},
-		domain.NetworkContainer: netenforce.Container{},
+		domain.NetworkNone		: netenforce.None{},
+		domain.NetworkHost		: netenforce.Pasta{},
+		domain.NetworkContainer	: netenforce.Container{},
 	}
 }
 
