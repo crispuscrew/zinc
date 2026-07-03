@@ -1,4 +1,4 @@
-package domain
+package derived
 
 // Derived images (docs §5.5, §9.1). When an app sets app.install, HyprZinc builds a
 // small derived image — `FROM <app.image>` plus one `RUN <install>` layer — and

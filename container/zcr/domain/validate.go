@@ -111,19 +111,19 @@ func Validate(cfg AppConfig) error {
 	denyPastaFields := func() {
 		mode := cfg.Network.Mode
 		if len(cfg.Network.IPv4CIDR) > 0 {
-			add("network.ipv4_cidr: only valid when network.mode = %q (mode is %q)", NetworkPasta, mode)
+			add("network.ipv4_cidr: only valid when network.mode = %q (mode is %q)", NetworkHost, mode)
 		}
 		if len(cfg.Network.IPv6CIDR) > 0 {
-			add("network.ipv6_cidr: only valid when network.mode = %q (mode is %q)", NetworkPasta, mode)
+			add("network.ipv6_cidr: only valid when network.mode = %q (mode is %q)", NetworkHost, mode)
 		}
 		if len(cfg.Network.Ports) > 0 {
-			add("network.ports: only valid when network.mode = %q (mode is %q)", NetworkPasta, mode)
+			add("network.ports: only valid when network.mode = %q (mode is %q)", NetworkHost, mode)
 		}
 		if strings.TrimSpace(cfg.Network.Interface) != "" {
-			add("network.interface: only valid when network.mode = %q (mode is %q)", NetworkPasta, mode)
+			add("network.interface: only valid when network.mode = %q (mode is %q)", NetworkHost, mode)
 		}
 		if cfg.Network.BlockDNS {
-			add("network.block_dns: only valid when network.mode = %q (mode is %q)", NetworkPasta, mode)
+			add("network.block_dns: only valid when network.mode = %q (mode is %q)", NetworkHost, mode)
 		}
 	}
 	denyTarget := func() {
@@ -136,7 +136,7 @@ func Validate(cfg AppConfig) error {
 	case NetworkNone:
 		denyPastaFields()
 		denyTarget()
-	case NetworkPasta:
+	case NetworkHost:
 		for _, cidr := range cfg.Network.IPv4CIDR {
 			if !validCIDR(cidr, false) {
 				add("network.ipv4_cidr %q: not a valid IPv4 CIDR", cidr)
