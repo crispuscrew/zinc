@@ -10,9 +10,10 @@ const (
 )
 
 // AppConfig is one app definition: ~/.config/hyprzinc/apps/<name>.yaml 
+// Most parameters can be overridden at app start
 type AppConfig struct {
 	SchemaVersion 		int					`yaml:"SchemaVersion"`
-	Type				Type				`yaml:"Type"`	// VM vs Container, "" interplates as error
+	Type				Type				`yaml:"Type"`	// VM vs Container, "" interpreted as error
 
 	AppNameID			string				`yaml:"AppNameID"`		// Also using as container/vm name
 	Icon				string				`yaml:"Icon"`
@@ -28,7 +29,8 @@ type AppConfig struct {
 	NetworkMeta			NetworkMeta			`yaml:"NetworkMeta"`
 	NotificationMeta	NotificationMeta	`yaml:"NotificationMeta"`
 
-	Volumes				[]Volume			`yaml:"Volumes"`
+	Configs				[]Volume			`yaml:"Configs"`	// Use host local path from app_name/configs/ folder
+	Volumes				[]Volume			`yaml:"Volumes"`	// Also can be added temporary at runtime
 	Keys				[]Key				`yaml:"Keys"`
 	HostTheme			bool				`yaml:"HostTheme"`
 	AudioMeta			AudioMeta			`yaml:"AudioMeta"`
@@ -106,9 +108,13 @@ type NotificationMeta struct {
 // Readable drop, because u cannot mount something u cannot read
 type Volume struct {
 	InnerMount		string	`yaml:"InnerMount"`
+
+	SizeLimited		bool	`yaml:"SizeLimited"`
 	SizeLimitMiB	int64	`yaml:"SizeLimitMiB"`	// Size limit, if possible
+
 	HostMounted		bool	`yaml:"HostMounted"`
 	HostMount		string	`yaml:"HostMount"`
+
 	Writable		bool	`yaml:"Writable"`
 	Executable		bool	`yaml:"Executable"`
 }
