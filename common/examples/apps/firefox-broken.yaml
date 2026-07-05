@@ -1,0 +1,31 @@
+# INTENTIONALLY INVALID — exists so `validate` has something real to reject. Do NOT
+# copy it; copy firefox.yaml. Each "BUG:" is a problem Validate should report, and it
+# reports them all in one pass (§3) rather than stopping at the first.
+#
+# NOTE: the v2 validator is not ported yet — these violations track the v2 schema
+# (schema.go); exact error strings land when Validate is rewritten for v2.
+SchemaVersion: 1               # BUG: this build only understands schema 2
+Type: yolo                     # BUG: must be ZincContainer (VM: ZincVirtualization)
+
+AppNameID: Firefox             # BUG: uppercase; names are [a-z0-9._-], start alphanumeric
+Description: Web browser
+
+ImageMeta:
+  Image: docker.io/library/firefox@sha256:abc123   # BUG: not a full 64-hex digest (§5.5)
+
+StartConditions:
+  Entrypoint: firefox
+
+ResourcesMeta:
+  MaxCPUCores: -1              # BUG: must be >= 0 (0 = unlimited)
+  MaxRamMiB: -256             # BUG: must be >= 0
+
+Volumes:
+  - InnerMount: /etc/hosts
+    HostMounted: true
+    HostMount: ""             # BUG: HostMounted set but HostMount path is empty
+    Writable: false
+
+Keys:
+  - Type: PGP                 # BUG: KeyType must be SSH or GPG
+    Path: ~/.gnupg
