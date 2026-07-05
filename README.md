@@ -1,8 +1,13 @@
-# HyprZinc
+# Zinc
 
-Keyboard-first, security-focused Hyprland desktop. Everything user-facing runs in
-rootless Podman containers (primary runtime) or libvirt/qemu VMs (heavy isolation),
-wired together by a Nix home-manager flake.
+**Zinc** is a keyboard-first, security-focused **sandboxing core**. It runs
+user-facing apps in rootless Podman containers (primary runtime) or libvirt/qemu VMs
+(heavy isolation), each walled off from the rest of the desktop through the Wayland
+security-context protocol. Zinc is compositor-agnostic and installs cleanly on any
+existing system.
+
+**ZincOS** is the full environment built on Zinc, shipped in two variants — on
+**Niri** or on **Hyprland** — wired together by a Nix home-manager flake.
 
 **Priority order: Stable → Secure → Beautiful.**
 
@@ -15,13 +20,26 @@ wired together by a Nix home-manager flake.
 
 ## Components
 
-Each tool name is **h**ypr**z**inc + its domain:
+Every tool is `zinc-<kind>-<role>` — `<kind>` is `container` or `virtualization`,
+`<role>` is `creator` or `runner` — plus the `zinc-launcher-<ui>` picker. The short
+code is the initials.
 
-| Tool  | Expands to              | Role                            | Stack         |
-|-------|-------------------------|---------------------------------|---------------|
-| `hzc` | Container      | container-definition TUI        | Go, Bubbletea |
-| `hzl` | Launcher       | launcher + smart executor (GUI) | Go, gioui     |
-| `hzv` | Virtualization | VM manager TUI                  | Go, Bubbletea |
+| Short | Tool                          | Role                                  |
+|-------|-------------------------------|---------------------------------------|
+| `zcc` | `zinc-container-creator`      | define container apps (write configs) |
+| `zcr` | `zinc-container-runner`       | launch + supervise a container app    |
+| `zvc` | `zinc-virtualization-creator` | define VM apps                        |
+| `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app           |
+| `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)               |
+| `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)               |
+
+A **creator** defines an app and writes its config; a **runner** is what actually
+starts that app and owns its lifecycle; **launchers** are quick pickers over the
+defined apps. They all share one library — [`common/`](common), the app schema +
+domain logic — so container and VM apps use the same config format.
+
+Layout: `common/`, `container/{creator,runner}`, `virtualization/{creator,runner}`,
+`launcher/`.
 
 ## Status
 
