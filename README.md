@@ -6,8 +6,9 @@ user-facing apps in rootless Podman containers (primary runtime) or libvirt/qemu
 security-context protocol. Zinc is compositor-agnostic and installs cleanly on any
 existing system.
 
-**ZincOS** is the full environment built on Zinc, shipped in two variants — on
-**Niri** or on **Hyprland** — wired together by a Nix home-manager flake.
+**ZDE** (Zinc Desktop Environment, `zde`) is the full environment built on Zinc,
+shipped in two variants — `zde-niri` and `zde-hypr` — wired together by a Nix
+home-manager flake.
 
 **Priority order: Stable → Secure → Beautiful.**
 
