@@ -77,12 +77,13 @@ type DisplayMeta struct {
 }
 
 type NetworkMeta struct {
+	// The first enrty is priority
 	NetworkLists	[]NetworkList	`yaml:"NetworkLists"`
 }
 
 type NetworkList struct {
 	Host			bool		`yaml:"Host"`	// it list for host or container?
-	ContainerName	string		`yaml:"ContainerName"`	// if host == false, which container do we use::
+	AppName			string		`yaml:"AppName"`	// if host == false, which app net do we use, "" == this app
 	Interface		string		`yaml:"Interface"`
 	BlockDNS		bool		`yaml:"BlockDNS"`
 	
@@ -91,6 +92,9 @@ type NetworkList struct {
 	IPv4CIDR		[]string	`yaml:"IPv4CIDR"`
 	IPv6CIDR		[]string	`yaml:"IPv6CIDR"`
 	Ports			[]int		`yaml:"Ports"`
+
+	GatewayV4 		string		`yaml:"GatewayV4"`	// if "" use default
+	GatewayV6		string		`yaml:"GatewayV6"`
 }
 
 type NotificationMeta struct {
