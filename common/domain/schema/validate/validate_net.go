@@ -2,14 +2,17 @@ package validate
 
 import (
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-// checkNetworkList validates one entry (list order = priority, first wins): CIDR
-// family, ports, interface charset. Scope: Host=true = host netns; Host=false + empty
-// AppName = this app (self, the common case); Host=false + AppName = a sibling.
+// checkNetworkList validates one entry (list order = priority, first wins). A list is
+// directional: Ingress=false (default) is an egress rule (Ports = destination ports the
+// app may reach); Ingress=true publishes the app's own listening Ports inbound. Scope:
+// Host=true = host netns (egress) or a host-interface bind (ingress LAN); Host=false +
+// empty AppName = this app (self); Host=false + AppName = a sibling.
 func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 	for _, cidr := range netList.IPv4CIDR {
 		if !validCIDR(cidr, false) {
@@ -28,6 +31,16 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 	}
 	if iface := netList.Interface; iface != "" && !ifaceRE.MatchString(iface) {
 		add("NetworkLists[%d].Interface %q: only [A-Za-z0-9._-] allowed (no commas or spaces)", index, iface)
+	}
+
+	// Egress: a port carve-out attaches to a destination CIDR (nft `daddr … dport …`);
+	// ports with no CIDR emit nothing and silently revert to the chain's default policy —
+	// so a blacklist [53,853] with no CIDR silently keeps DNS open. Reject it: name the
+	// destinations (0.0.0.0/0 and/or ::/0 for "everywhere"), or drop the ports. An ingress
+	// list needs no CIDR — its CIDRs are a source allowlist and empty means "any source".
+	if !netList.Ingress && len(netList.Ports) > 0 &&
+		len(netList.IPv4CIDR) == 0 && len(netList.IPv6CIDR) == 0 {
+		add("NetworkLists[%d].Ports %s: set without any IPv4CIDR/IPv6CIDR; an egress port rule needs destination CIDRs (use 0.0.0.0/0 and/or ::/0 for all destinations)", index, joinPorts(netList.Ports))
 	}
 
 	self := !netList.Host && strings.TrimSpace(netList.AppName) == ""
@@ -69,4 +82,13 @@ func checkGateway(index int, netList schema.NetworkList, self bool, add addFunc)
 	// Multi-homing (extra interface + ip-rule/ip-route policy routing) isn't
 	// implemented yet; the fields are schema-legal but a config using them is rejected.
 	add("NetworkLists[%d]: routing through a gateway (multi-homing) is not supported in this build yet", index)
+}
+
+// joinPorts formats a port list for a message, e.g. []int{53, 853} -> "53, 853".
+func joinPorts(ports []int) string {
+	parts := make([]string, len(ports))
+	for idx, port := range ports {
+		parts[idx] = strconv.Itoa(port)
+	}
+	return strings.Join(parts, ", ")
 }
