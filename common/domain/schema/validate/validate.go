@@ -104,16 +104,48 @@ func checkResources(res schema.ResourcesMeta, add addFunc) {
 }
 
 // Warnings returns non-fatal create-time advisories (zcc); nothing here blocks save or
-// launch — it flags valid-but-probably-unintended configs.
+// launch — it flags valid-but-risky or probably-unintended configs. Exposing inbound
+// (an Ingress list) is always surfaced, loudest when it reaches the LAN.
 func Warnings(cfg schema.AppConfig) []string {
 	var warns []string
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
-		// Empty blacklist blocks nothing (allow-all) — worth surfacing on a security tool.
+		if netList.Ingress {
+			warns = append(warns, ingressWarnings(index, netList)...)
+			continue
+		}
+		// Egress: an empty blacklist blocks nothing (allow-all) — worth surfacing on a
+		// security tool.
 		if netList.Blacklist &&
 			len(netList.IPv4CIDR) == 0 && len(netList.IPv6CIDR) == 0 && len(netList.Ports) == 0 {
 			warns = append(warns, fmt.Sprintf(
-				"NetworkLists[%d]: blacklist with no CIDRs/ports blocks nothing (allow-all)", index))
+				"NetworkLists[%d]: egress blacklist with no CIDRs/ports blocks nothing (allow-all)", index))
 		}
 	}
 	return warns
+}
+
+// ingressWarnings surfaces one published-port (Ingress) list: inbound exposure always
+// gets a notice, and the loud form when it reaches the LAN (Host) or opens every port
+// (an ingress blacklist = default-accept inbound). A ports-less ingress list exposes
+// nothing and most likely means the author forgot Ports.
+func ingressWarnings(index int, netList schema.NetworkList) []string {
+	scope := "apps that join this app's network"
+	if netList.Host {
+		iface := strings.TrimSpace(netList.Interface)
+		if iface == "" {
+			iface = "all host interfaces"
+		}
+		scope = fmt.Sprintf("the LAN via %s", iface)
+	}
+	switch {
+	case netList.Blacklist:
+		return []string{fmt.Sprintf(
+			"NetworkLists[%d]: ingress blacklist exposes ALL inbound ports (default-accept) to %s", index, scope)}
+	case len(netList.Ports) > 0:
+		return []string{fmt.Sprintf(
+			"NetworkLists[%d]: ingress exposes port(s) %s to %s", index, joinPorts(netList.Ports), scope)}
+	default:
+		return []string{fmt.Sprintf(
+			"NetworkLists[%d]: ingress list exposes no ports (Ports is empty) — did you forget Ports? (%s)", index, scope)}
+	}
 }

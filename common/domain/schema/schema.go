@@ -77,17 +77,18 @@ type DisplayMeta struct {
 }
 
 type NetworkMeta struct {
-	// The first enrty is priority
+	// The first entry is priority
 	NetworkLists	[]NetworkList	`yaml:"NetworkLists"`
 }
 
 type NetworkList struct {
 	Host			bool		`yaml:"Host"`	// it list for host or container?
 	AppName			string		`yaml:"AppName"`	// if host == false, which app net do we use, "" == this app
-	Interface		string		`yaml:"Interface"`
-	BlockDNS		bool		`yaml:"BlockDNS"`
+	Interface		string		`yaml:"Interface"`	// if u want to reach concrete interface of app/host
 	
 	Blacklist		bool		`yaml:"Blacklist"`	// or whitelist
+
+	Ingress			bool		`yaml:"Ingress"`	// false = egress rule (default); true = Ports are this app's own listeners, exposed to the scope
 
 	IPv4CIDR		[]string	`yaml:"IPv4CIDR"`
 	IPv6CIDR		[]string	`yaml:"IPv6CIDR"`
