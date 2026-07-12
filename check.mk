@@ -5,7 +5,13 @@
 
 CONTAINER_TOOL ?= podman
 
-# Pinned Go toolchain image — KEEP IN SYNC with ../Containerfile's GO_IMAGE.
+# Path from the including module's dir to the repo root — i.e. the directory holding
+# this check.mk. Derived from check.mk's own include path, so it is correct at any
+# nesting depth: a module at container/<m> reaches the root via ../.., one at <m> via
+# ".." — no module needs to hardcode how deep it sits.
+REPO_REL := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+
+# Pinned Go toolchain image — KEEP IN SYNC with the repo-root Containerfile's GO_IMAGE.
 GO_IMAGE       ?= docker.io/library/golang:1.24-alpine@sha256:757779acac4af1b349a20f357c7296097b4a0b89da4ad0e370b339060077282a
 
 # Containerized go for checks/tests against THIS module: mount the module dir and
@@ -13,12 +19,14 @@ GO_IMAGE       ?= docker.io/library/golang:1.24-alpine@sha256:757779acac4af1b349
 GO_RUN          = $(CONTAINER_TOOL) run --rm --security-opt label=disable \
                     -v "$$PWD":/src -w /src -e GOTOOLCHAIN=local $(GO_IMAGE)
 
-# Vendoring is different: a local `replace => ../core` means tidy/vendor need the
-# repo root in scope, and must ignore any go.work (GOWORK=off) so the module's own
-# go.mod/replace drive the result. Mount the parent (repo root); work in the module
-# subdir. This is the only step that needs network.
-GO_VENDOR       = $(CONTAINER_TOOL) run --rm --security-opt label=disable \
-                    -v "$$PWD/..":/repo -w "/repo/$(notdir $(CURDIR))" \
+# Vendoring is different: a local `replace => ../../common` means tidy/vendor need the
+# whole repo in scope, and must ignore any go.work (GOWORK=off) so the module's own
+# go.mod/replace drive the result. Mount the REPO ROOT (not just the module's parent,
+# which is too shallow for a nested module's replace) and work in the module's subdir
+# under it. This is the only step that needs network.
+GO_VENDOR       = ROOT="$$(cd "$(REPO_REL)" && pwd)"; \
+                  $(CONTAINER_TOOL) run --rm --security-opt label=disable \
+                    -v "$$ROOT":/repo -w "/repo/$${PWD\#$$ROOT/}" \
                     -e GOTOOLCHAIN=local -e GOWORK=off $(GO_IMAGE)
 
 # gofmt recurses into directory args, so feed it the .go FILES with vendor/ pruned —
