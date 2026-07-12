@@ -5,23 +5,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crispuscrew/hyprzinc/core/domain"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/container/runner/domain/derived"
+	"github.com/crispuscrew/zinc/container/runner/domain/options"
 )
 
-func baseOpts() domain.HostOptions {
-	return domain.HostOptions{
+func baseOpts() options.HostOptions {
+	return options.HostOptions{
 		RuntimeDir:     "/run/user/1000",
 		WaylandDisplay: "wayland-1",
-		ThemeBundleDir: "/home/user/.local/share/hyprzinc/theme-bundle",
+		ThemeBundleDir: "/home/user/.local/share/zinc/theme-bundle",
 		HomeDir:        "/root",
 	}
 }
 
-// netNone is the network attachment a None enforcer hands AppRunArgs; the podman
+// netNone is the network attachment an unfiltered app hands AppRunArgs; the podman
 // adapter only splices it in (it no longer decides the network itself).
 func netNone() []string { return []string{"--network", "none"} }
 
-func appArgs(t *testing.T, cfg domain.AppConfig, opt domain.HostOptions, netFlags []string) []string {
+func appArgs(t *testing.T, cfg schema.AppConfig, opt options.HostOptions, netFlags []string) []string {
 	t.Helper()
 	got, err := Runtime{}.AppRunArgs(cfg, opt, netFlags)
 	if err != nil {
@@ -30,24 +32,25 @@ func appArgs(t *testing.T, cfg domain.AppConfig, opt domain.HostOptions, netFlag
 	return got
 }
 
+// A strict, no-network app: exact argv, so the least-privilege baseline, hermetic
+// --pull never, security-context label, and the Wayland/theme wiring are all pinned.
 func TestAppRunArgs_StrictNone(t *testing.T) {
-	cfg := domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App:           domain.App{Name: "firefox", Image: "docker.io/library/firefox@sha256:abc"},
-		Display:       domain.Display{Wayland: domain.WaylandSecurityContext},
-		Network:       domain.Network{Mode: domain.NetworkNone},
-		Theme:         domain.Theme{Mode: domain.ThemeHost},
+	cfg := schema.AppConfig{
+		AppNameID:   "firefox",
+		ImageMeta:   schema.ImageMeta{Image: "docker.io/library/firefox@sha256:abc"},
+		DisplayMeta: schema.DisplayMeta{DisableGpuAccess: true}, // security-context on, no GPU
+		HostTheme:   true,
 	}
 	got := appArgs(t, cfg, baseOpts(), netNone())
 	want := []string{
-		"run", "--rm", "--name", "firefox",
+		"run", "--rm", "--pull", "never", "--name", "firefox",
 		"--security-opt", "no-new-privileges", "--cap-drop", "all",
 		"--network", "none",
-		"-v", "/run/user/1000/wayland-1:/run/hyprzinc/wayland-1:ro",
+		"-v", "/run/user/1000/wayland-1:/run/zinc/wayland-1:ro",
 		"-e", "WAYLAND_DISPLAY=wayland-1",
-		"-e", "XDG_RUNTIME_DIR=/run/hyprzinc",
-		"--label", "hyprzinc.wayland=security-context",
-		"-v", "/home/user/.local/share/hyprzinc/theme-bundle:/etc/hyprzinc/theme:ro",
+		"-e", "XDG_RUNTIME_DIR=/run/zinc",
+		"--label", "zinc.wayland=security-context",
+		"-v", "/home/user/.local/share/zinc/theme-bundle:/etc/zinc/theme:ro",
 		"docker.io/library/firefox@sha256:abc",
 	}
 	if !slices.Equal(got, want) {
@@ -55,71 +58,65 @@ func TestAppRunArgs_StrictNone(t *testing.T) {
 	}
 }
 
-func TestAppRunArgs_ContainerGPUMountCap(t *testing.T) {
-	cfg := domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App:           domain.App{Name: "work-app", Image: "hyprzinc/trusted-go-dev:latest", Background: true},
-		Display:       domain.Display{Wayland: domain.WaylandPassthrough, GPU: true},
-		Network:       domain.Network{Mode: domain.NetworkContainer, Target: "vpn-container"},
-		Theme:         domain.Theme{Mode: domain.ThemeNone},
-		Mounts:        []domain.Mount{{Host: "/home/user/code", Container: "/work", Mode: domain.MountRW}},
-		Audio:         domain.Audio{Pipewire: true},
-		Capabilities:  domain.Capabilities{Extra: []string{"NET_RAW"}},
+// A background app with GPU, a host bind mount, pipewire, and an extra cap: the
+// enforcer's netFlags are spliced verbatim and every wiring is present.
+func TestAppRunArgs_BackgroundGPUMountCap(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:      "work-app",
+		ImageMeta:      schema.ImageMeta{Image: "localhost/zinc-go-dev:latest"},
+		StopConditions: schema.StopConditions{Background: true},
+		DisplayMeta:    schema.DisplayMeta{DisableSecurityContext: true}, // passthrough; GPU on (default)
+		Volumes:        []schema.Volume{{InnerMount: "/work", HostMounted: true, HostMount: "/home/user/code", Writable: true}},
+		AudioMeta:      schema.AudioMeta{Pipewire: true},
+		Capabilities:   []string{"NET_RAW"},
 	}
-	got := appArgs(t, cfg, baseOpts(), []string{"--network", "container:vpn-container"})
-	assertContainsSeq(t, got, "--network", "container:vpn-container")
-	assertContainsSeq(t, got, "--cap-drop", "all")    // least-privilege baseline
-	assertContainsSeq(t, got, "--cap-add", "NET_RAW") // explicit grant on top
-	assertContains(t, got, "-d")                      // background
-	assertContains(t, got, "/dev/dri")                // gpu device
-	mustNotContain(t, got, "/dev/snd")                // legacy_alsa was false
-	assertContainsSeq(t, got, "-v", "/home/user/code:/work:rw")
-	mustNotContain(t, got, "/etc/hyprzinc/theme") // theme.mode=none → no bundle mount
-	assertContainsSeq(t, got, "-v", "/run/user/1000/pipewire-0:/run/hyprzinc/pipewire-0:ro")
-	if got[len(got)-1] != "hyprzinc/trusted-go-dev:latest" {
+	got := appArgs(t, cfg, baseOpts(), []string{"--network", "container:vpn"})
+	assertContainsSeq(t, got, "--network", "container:vpn") // spliced verbatim
+	assertContainsSeq(t, got, "--cap-drop", "all")          // least-privilege baseline
+	assertContainsSeq(t, got, "--cap-add", "NET_RAW")       // explicit grant on top
+	assertContains(t, got, "-d")                            // background
+	assertContains(t, got, "/dev/dri")                      // gpu on (opt-out default)
+	mustNotContain(t, got, "/dev/snd")                      // legacy_alsa was false
+	assertContainsSeq(t, got, "-v", "/home/user/code:/work:rw,noexec")
+	mustNotContain(t, got, "/etc/zinc/theme") // HostTheme false → no bundle mount
+	assertContainsSeq(t, got, "-v", "/run/user/1000/pipewire-0:/run/zinc/pipewire-0:ro")
+	if got[len(got)-1] != "localhost/zinc-go-dev:latest" {
 		t.Fatalf("image must be last arg, got %q", got[len(got)-1])
 	}
 }
 
 func TestAppRunArgs_PipewireWithoutWayland(t *testing.T) {
-	cfg := domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App:           domain.App{Name: "mpd", Image: "img@sha256:abc"},
-		Display:       domain.Display{Wayland: domain.WaylandSecurityContext},
-		Network:       domain.Network{Mode: domain.NetworkNone},
-		Theme:         domain.Theme{Mode: domain.ThemeNone},
-		Audio:         domain.Audio{Pipewire: true},
+	cfg := schema.AppConfig{
+		AppNameID: "mpd",
+		ImageMeta: schema.ImageMeta{Image: "img@sha256:abc"},
+		AudioMeta: schema.AudioMeta{Pipewire: true},
 	}
 	opt := baseOpts()
 	opt.WaylandDisplay = "" // headless: no Wayland socket wired
 	got := appArgs(t, cfg, opt, netNone())
-	assertContainsSeq(t, got, "-v", "/run/user/1000/pipewire-0:/run/hyprzinc/pipewire-0:ro")
-	assertContainsSeq(t, got, "-e", "XDG_RUNTIME_DIR=/run/hyprzinc")
+	assertContainsSeq(t, got, "-v", "/run/user/1000/pipewire-0:/run/zinc/pipewire-0:ro")
+	assertContainsSeq(t, got, "-e", "XDG_RUNTIME_DIR=/run/zinc")
 }
 
 func TestAppRunArgs_NoRuntimeDirWithoutSockets(t *testing.T) {
-	cfg := domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App:           domain.App{Name: "tool", Image: "img@sha256:abc"},
-		Display:       domain.Display{Wayland: domain.WaylandSecurityContext},
-		Network:       domain.Network{Mode: domain.NetworkNone},
-		Theme:         domain.Theme{Mode: domain.ThemeNone},
+	cfg := schema.AppConfig{
+		AppNameID:   "tool",
+		ImageMeta:   schema.ImageMeta{Image: "img@sha256:abc"},
+		DisplayMeta: schema.DisplayMeta{DisableGpuAccess: true},
 	}
 	opt := baseOpts()
 	opt.WaylandDisplay = "" // no wayland, no audio → runtime dir stays empty
 	got := appArgs(t, cfg, opt, netNone())
-	mustNotContain(t, got, "XDG_RUNTIME_DIR=/run/hyprzinc")
+	mustNotContain(t, got, "XDG_RUNTIME_DIR=/run/zinc")
 	assertContainsSeq(t, got, "--security-opt", "no-new-privileges")
 	assertContainsSeq(t, got, "--cap-drop", "all")
 }
 
 func TestAppRunArgs_Terminal(t *testing.T) {
-	cfg := domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App:           domain.App{Name: "shell", Image: "docker.io/library/alpine@sha256:abc", Terminal: true},
-		Display:       domain.Display{Wayland: domain.WaylandSecurityContext},
-		Network:       domain.Network{Mode: domain.NetworkNone},
-		Theme:         domain.Theme{Mode: domain.ThemeNone},
+	cfg := schema.AppConfig{
+		AppNameID:       "shell",
+		ImageMeta:       schema.ImageMeta{Image: "docker.io/library/alpine@sha256:abc"},
+		StartConditions: schema.StartConditions{Terminal: true},
 	}
 	got := appArgs(t, cfg, baseOpts(), netNone())
 	if got[0] != "run" {
@@ -129,38 +126,47 @@ func TestAppRunArgs_Terminal(t *testing.T) {
 	mustNotContain(t, got, "-d")             // terminal apps are never detached/background
 }
 
-func TestAppRunArgs_Command(t *testing.T) {
-	cfg := domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App:           domain.App{Name: "shell", Image: "img@sha256:abc", Command: []string{"htop", "--tree"}},
-		Display:       domain.Display{Wayland: domain.WaylandSecurityContext},
-		Network:       domain.Network{Mode: domain.NetworkNone},
-		Theme:         domain.Theme{Mode: domain.ThemeNone},
+// The entrypoint overrides the image ENTRYPOINT via --entrypoint (exec form); the
+// image is the last arg with no trailing command.
+func TestAppRunArgs_Entrypoint(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:       "shell",
+		ImageMeta:       schema.ImageMeta{Image: "img@sha256:abc"},
+		StartConditions: schema.StartConditions{Entrypoint: "htop"},
 	}
 	got := appArgs(t, cfg, baseOpts(), netNone())
-	if tail := got[len(got)-3:]; !slices.Equal(tail, []string{"img@sha256:abc", "htop", "--tree"}) {
-		t.Fatalf("command argv must come right after the image, got tail %v", tail)
+	assertContainsSeq(t, got, "--entrypoint", "htop")
+	if last := got[len(got)-1]; last != "img@sha256:abc" {
+		t.Fatalf("image must be the last arg (no trailing cmd with --entrypoint), got %q", last)
 	}
+}
+
+// KeepAlive keeps the container after its entrypoint exits, so --rm is dropped.
+func TestAppRunArgs_KeepAlive(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:      "job",
+		ImageMeta:      schema.ImageMeta{Image: "img@sha256:abc"},
+		StopConditions: schema.StopConditions{KeepAlive: true},
+	}
+	got := appArgs(t, cfg, baseOpts(), netNone())
+	mustNotContain(t, got, "--rm")
 }
 
 func TestAppRunArgs_Holder(t *testing.T) {
 	// A multiterminal app's container is a detached holder: -d --rm, no -it, and
 	// HolderCmd as PID 1 — the app's own command runs per-terminal via ExecArgs.
-	cfg := domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App: domain.App{
-			Name: "dev", Image: "docker.io/library/alpine@sha256:abc",
-			Terminal: true, Multiterminal: true, Command: []string{"htop"},
+	cfg := schema.AppConfig{
+		AppNameID: "dev",
+		ImageMeta: schema.ImageMeta{Image: "docker.io/library/alpine@sha256:abc"},
+		StartConditions: schema.StartConditions{
+			Terminal: true, Multiterminal: true, Entrypoint: "htop",
 		},
-		Display: domain.Display{Wayland: domain.WaylandSecurityContext},
-		Network: domain.Network{Mode: domain.NetworkNone},
-		Theme:   domain.Theme{Mode: domain.ThemeNone},
 	}
 	got := appArgs(t, cfg, baseOpts(), netNone())
 	assertContainsSeq(t, got, "-d", "--rm")
-	assertContains(t, got, "--init") // prompt `podman stop` (PID-1 signal semantics)
-	mustNotContain(t, got, "-it")    // holder has no TTY
-	mustNotContain(t, got, "htop")   // the app command does NOT run as PID 1
+	assertContains(t, got, "--init")       // prompt `podman stop` (PID-1 signal semantics)
+	mustNotContain(t, got, "-it")          // holder has no TTY
+	mustNotContain(t, got, "--entrypoint") // holder ignores the app entrypoint
 	wantTail := append([]string{"docker.io/library/alpine@sha256:abc"}, HolderCmd()...)
 	if tail := got[len(got)-len(wantTail):]; !slices.Equal(tail, wantTail) {
 		t.Fatalf("holder cmd must follow the image, got tail %v want %v", tail, wantTail)
@@ -169,25 +175,21 @@ func TestAppRunArgs_Holder(t *testing.T) {
 
 // --- derived images (install) ---
 
-func installCfg(install string) domain.AppConfig {
-	return domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App: domain.App{
-			Name:    "hollywood",
+func installCfg(install ...string) schema.AppConfig {
+	return schema.AppConfig{
+		AppNameID: "hollywood",
+		ImageMeta: schema.ImageMeta{
 			Image:   "docker.io/library/debian@sha256:abc",
 			Install: install,
 		},
-		Display: domain.Display{Wayland: domain.WaylandSecurityContext},
-		Network: domain.Network{Mode: domain.NetworkNone},
-		Theme:   domain.Theme{Mode: domain.ThemeNone},
 	}
 }
 
-// With app.install set, the container must run the locally built derived image, not
-// the pinned base — the base is only the FROM of that build.
+// With ImageMeta.Install set, the container must run the locally built derived image,
+// not the pinned base — the base is only the FROM of that build.
 func TestAppRunArgs_InstallRunsDerivedImage(t *testing.T) {
 	got := appArgs(t, installCfg("apt-get install -y hollywood"), baseOpts(), netNone())
-	if last := got[len(got)-1]; last != "hyprzinc/app-hollywood:local" {
+	if last := got[len(got)-1]; last != "zinc/app-hollywood:local" {
 		t.Fatalf("install app must run the derived image, got last arg %q", last)
 	}
 	mustNotContain(t, got, "docker.io/library/debian@sha256:abc") // base is only the FROM
@@ -195,10 +197,10 @@ func TestAppRunArgs_InstallRunsDerivedImage(t *testing.T) {
 
 func TestAppRunArgs_InstallHolder(t *testing.T) {
 	cfg := installCfg("apk add --no-cache htop")
-	cfg.App.Terminal, cfg.App.Multiterminal = true, true
-	cfg.App.Command = []string{"htop"}
+	cfg.StartConditions.Terminal, cfg.StartConditions.Multiterminal = true, true
+	cfg.StartConditions.Entrypoint = "htop"
 	got := appArgs(t, cfg, baseOpts(), netNone())
-	wantTail := append([]string{"hyprzinc/app-hollywood:local"}, HolderCmd()...)
+	wantTail := append([]string{"zinc/app-hollywood:local"}, HolderCmd()...)
 	if tail := got[len(got)-len(wantTail):]; !slices.Equal(tail, wantTail) {
 		t.Fatalf("holder install app must run the derived image, got tail %v want %v", tail, wantTail)
 	}
@@ -210,8 +212,8 @@ func TestImageBuildArgs(t *testing.T) {
 	if got[0] != "build" || got[len(got)-1] != "-" {
 		t.Fatalf("want `build … -` (Containerfile on stdin), got %v", got)
 	}
-	assertContainsSeq(t, got, "-t", "hyprzinc/app-hollywood:local")
-	assertContainsSeq(t, got, "--label", "hyprzinc.build="+domain.BuildFingerprint(cfg))
+	assertContainsSeq(t, got, "-t", "zinc/app-hollywood:local")
+	assertContainsSeq(t, got, "--label", "zinc.build="+derived.BuildFingerprint(cfg))
 }
 
 // --- pure builders + detached command wiring ---
@@ -235,9 +237,9 @@ func TestTerminalLaunch(t *testing.T) {
 	}
 }
 
-// With keep_open the podman argv is wrapped in `sh -c` so the window pauses after
-// the command exits; the argv must be single-quoted (no break-out) and the script
-// must block on input at the end.
+// With hold the podman argv is wrapped in `sh -c` so the window pauses after the
+// command exits; the argv must be single-quoted (no break-out) and the script must
+// block on input at the end.
 func TestTerminalLaunchHold(t *testing.T) {
 	got := TerminalLaunch([]string{"foot"}, []string{"run", "--rm", "-it", "alpine"}, true)
 	if len(got) != 4 || got[0] != "foot" || got[1] != "sh" || got[2] != "-c" {
@@ -252,8 +254,8 @@ func TestTerminalLaunchHold(t *testing.T) {
 	}
 }
 
-// shellQuote must neutralise an embedded single quote so a crafted command argv
-// cannot escape the keep_open wrapper.
+// shellQuote must neutralise an embedded single quote so a crafted command argv cannot
+// escape the hold wrapper.
 func TestShellQuoteEscapesSingleQuote(t *testing.T) {
 	if got, want := shellQuote(`a'b`), `'a'\''b'`; got != want {
 		t.Fatalf("shellQuote(%q) = %q, want %q", `a'b`, got, want)
@@ -281,15 +283,15 @@ func TestLifecycleArgs(t *testing.T) {
 	}
 }
 
-func validCfg() domain.AppConfig {
-	cfg, _ := domain.DefaultsFor(domain.PresetStrict)
-	cfg.App.Name = "demo"
-	cfg.App.Image = "docker.io/library/demo@sha256:abc"
-	return cfg
+func validCfg() schema.AppConfig {
+	return schema.AppConfig{
+		AppNameID: "demo",
+		ImageMeta: schema.ImageMeta{Image: "docker.io/library/demo@sha256:abc"},
+	}
 }
 
 func TestAppCmd_GUI(t *testing.T) {
-	pc, err := appCmd(validCfg(), domain.HostOptions{}, []string{"run", "--rm", "img"})
+	pc, err := appCmd(validCfg(), options.HostOptions{}, []string{"run", "--rm", "img"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,9 +304,9 @@ func TestAppCmd_GUI(t *testing.T) {
 }
 
 func TestAppCmd_Terminal(t *testing.T) {
-	c := validCfg()
-	c.App.Terminal = true
-	pc, err := appCmd(c, domain.HostOptions{Terminal: []string{"foot"}}, []string{"run", "--rm", "-it", "img"})
+	cfg := validCfg()
+	cfg.StartConditions.Terminal = true
+	pc, err := appCmd(cfg, options.HostOptions{Terminal: []string{"foot"}}, []string{"run", "--rm", "-it", "img"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,9 +316,9 @@ func TestAppCmd_Terminal(t *testing.T) {
 }
 
 func TestAppCmd_TerminalNoEmulator(t *testing.T) {
-	c := validCfg()
-	c.App.Terminal = true
-	if _, err := appCmd(c, domain.HostOptions{}, []string{"run"}); err == nil {
+	cfg := validCfg()
+	cfg.StartConditions.Terminal = true
+	if _, err := appCmd(cfg, options.HostOptions{}, []string{"run"}); err == nil {
 		t.Fatal("a terminal app with no configured emulator must error, not launch blind")
 	}
 }

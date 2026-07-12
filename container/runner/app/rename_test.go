@@ -4,26 +4,26 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crispuscrew/hyprzinc/core/adapters/fs"
-	"github.com/crispuscrew/hyprzinc/core/domain"
-	"github.com/crispuscrew/hyprzinc/core/ports"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/container/runner/adapters/fs"
+	"github.com/crispuscrew/zinc/container/runner/ports"
 )
 
 // renameSvc wires a real on-disk store (so the load → rewrite-name → save → delete
 // round-trip is exercised for real) with a fake runtime carrying the running set.
-// depApp / digestPin / the netenforce wiring are shared with the package's other tests.
-func renameSvc(t *testing.T, engine ports.Runtime, apps ...domain.AppConfig) (Service, *fs.Store) {
+// depApp / digestPin are shared with the package's other tests.
+func renameSvc(t *testing.T, engine ports.Runtime, apps ...schema.AppConfig) (Service, *fs.Store) {
 	t.Helper()
 	sto := &fs.Store{Root: t.TempDir()}
 	for _, cfg := range apps {
 		if err := sto.Save(cfg); err != nil {
-			t.Fatalf("seed %s: %v", cfg.App.Name, err)
+			t.Fatalf("seed %s: %v", cfg.AppNameID, err)
 		}
 	}
 	return New(sto, engine, nil, nil, nil), sto
 }
 
-// A plain rename rewrites app.name, persists under the new name, and removes the old
+// A plain rename rewrites AppNameID, persists under the new name, and removes the old
 // definition; the new file decodes with the new name inside it (not just a moved file).
 func TestRename(t *testing.T) {
 	svc, sto := renameSvc(t, newFakeRuntime(), depApp("old"))
@@ -37,8 +37,8 @@ func TestRename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new definition should load: %v", err)
 	}
-	if cfg.App.Name != "new" {
-		t.Fatalf("app.name inside the file should be rewritten, got %q", cfg.App.Name)
+	if cfg.AppNameID != "new" {
+		t.Fatalf("AppNameID inside the file should be rewritten, got %q", cfg.AppNameID)
 	}
 }
 
