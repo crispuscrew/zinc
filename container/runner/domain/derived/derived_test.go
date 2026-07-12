@@ -3,29 +3,27 @@ package derived
 import (
 	"strings"
 	"testing"
+
+	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-func installCfg(install string) AppConfig {
-	return AppConfig{
-		SchemaVersion: SchemaVersion,
-		App: App{
-			Name:    "hollywood",
+func installCfg(install ...string) schema.AppConfig {
+	return schema.AppConfig{
+		AppNameID: "hollywood",
+		ImageMeta: schema.ImageMeta{
 			Image:   "docker.io/library/debian@sha256:abc",
 			Install: install,
 		},
-		Display: Display{Wayland: WaylandSecurityContext},
-		Network: Network{Mode: NetworkNone},
-		Theme:   Theme{Mode: ThemeNone},
 	}
 }
 
 func TestRunImageSelectsDerived(t *testing.T) {
-	plain := installCfg("")
-	if got := RunImage(plain); got != plain.App.Image {
+	plain := installCfg()
+	if got := RunImage(plain); got != plain.ImageMeta.Image {
 		t.Fatalf("no install: run image should be the base, got %q", got)
 	}
 	withInstall := installCfg("apt-get install -y hollywood")
-	if got := RunImage(withInstall); got != "hyprzinc/app-hollywood:local" {
+	if got := RunImage(withInstall); got != "zinc/app-hollywood:local" {
 		t.Fatalf("install set: run image should be the derived tag, got %q", got)
 	}
 	if HasInstall(plain) || !HasInstall(withInstall) {
@@ -41,11 +39,11 @@ func TestDerivedContainerfile(t *testing.T) {
 	}
 }
 
-func TestDerivedContainerfileCollapsesMultilineInstall(t *testing.T) {
-	got := DerivedContainerfile(installCfg("apt-get update\n\n  apt-get install -y foo  \n"))
+func TestDerivedContainerfileJoinsMultiStepInstall(t *testing.T) {
+	got := DerivedContainerfile(installCfg("apt-get update", "", "  apt-get install -y foo  "))
 	want := "FROM docker.io/library/debian@sha256:abc\nRUN apt-get update && apt-get install -y foo\n"
 	if got != want {
-		t.Fatalf("multi-line install should collapse to one && RUN:\n got %q\nwant %q", got, want)
+		t.Fatalf("multi-step install should join with && into one RUN:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -61,7 +59,7 @@ func TestBuildFingerprintChangesWithInputs(t *testing.T) {
 		t.Fatal("a changed install line must change the fingerprint")
 	}
 	other := installCfg("apt-get install -y hollywood")
-	other.App.Image = "docker.io/library/debian@sha256:def" // re-pinned base
+	other.ImageMeta.Image = "docker.io/library/debian@sha256:def" // re-pinned base
 	if base == BuildFingerprint(other) {
 		t.Fatal("a changed base image must change the fingerprint")
 	}

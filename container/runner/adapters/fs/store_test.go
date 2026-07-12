@@ -6,18 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crispuscrew/hyprzinc/core/domain"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 )
 
 // digestPin is a canonical sha256 digest (64 hex chars) — the form §5.5 requires for
 // third-party images, so saved/marshalled fixtures pass Validate.
 const digestPin = "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-func sampleApp(name string) domain.AppConfig {
-	cfg, _ := domain.DefaultsFor(domain.PresetStrict)
-	cfg.App.Name = name
-	cfg.App.Image = "docker.io/library/" + name + digestPin
-	return cfg
+func sampleApp(name string) schema.AppConfig {
+	return schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion,
+		Type:          schema.ZincContainer,
+		AppNameID:     name,
+		ImageMeta:     schema.ImageMeta{Image: "docker.io/library/" + name + digestPin},
+	}
 }
 
 func tempStore(t *testing.T) *Store {
@@ -36,11 +39,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if got.App.Name != want.App.Name || got.App.Image != want.App.Image ||
-		got.Network.Mode != want.Network.Mode || got.Display.Wayland != want.Display.Wayland {
+	if got.AppNameID != want.AppNameID || got.ImageMeta.Image != want.ImageMeta.Image || got.Type != want.Type {
 		t.Fatalf("round-trip mismatch:\n got: %+v\nwant: %+v", got, want)
 	}
-	if err := domain.Validate(got); err != nil {
+	if err := validate.Validate(got); err != nil {
 		t.Fatalf("round-tripped config does not validate: %v", err)
 	}
 }
@@ -86,7 +88,7 @@ func TestListExistsDelete(t *testing.T) {
 func TestSaveRejectsInvalid(t *testing.T) {
 	sto := tempStore(t)
 	bad := sampleApp("firefox")
-	bad.App.Image = "alpine:latest" // third-party, not digest-pinned (§5.5)
+	bad.ImageMeta.Image = "alpine:latest" // third-party, not digest-pinned (§5.5)
 
 	if err := sto.Save(bad); err == nil {
 		t.Fatal("Save should reject invalid config")
@@ -97,19 +99,19 @@ func TestSaveRejectsInvalid(t *testing.T) {
 }
 
 func TestMarshalLoadRoundtrip(t *testing.T) {
-	// The $EDITOR flow marshals a draft, lets the user edit it, then re-reads via
-	// Load — which rejects unknown keys. So Marshal's output must round-trip cleanly.
-	cfg, _ := domain.DefaultsFor(domain.PresetNetworked)
-	cfg.App.Name = "rt"
-	cfg.App.Image = "docker.io/x" + digestPin
-	cfg.Network.IPv4CIDR = []string{"1.1.1.1/32"}
-	cfg.Network.Ports = []int{443}
+	// The $EDITOR flow marshals a draft, lets the user edit it, then re-reads via Load
+	// — which rejects unknown keys. So Marshal's output must round-trip cleanly.
+	cfg := sampleApp("rt")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
+		IPv4CIDR: []string{"1.1.1.1/32"},
+		Ports:    []int{443},
+	}}}
 
 	data, err := Marshal(cfg)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "rt.toml")
+	path := filepath.Join(t.TempDir(), "rt.yaml")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -117,26 +119,27 @@ func TestMarshalLoadRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("round-trip Load failed (Marshal emitted a key Load rejects?): %v", err)
 	}
-	if got.App.Image != cfg.App.Image || got.Network.Mode != cfg.Network.Mode ||
-		len(got.Network.IPv4CIDR) != 1 || len(got.Network.Ports) != 1 {
+	if got.ImageMeta.Image != cfg.ImageMeta.Image || len(got.NetworkMeta.NetworkLists) != 1 ||
+		len(got.NetworkMeta.NetworkLists[0].IPv4CIDR) != 1 || len(got.NetworkMeta.NetworkLists[0].Ports) != 1 {
 		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", got, cfg)
 	}
 }
 
 func TestLoad_UnknownKey(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "bad.toml")
-	const body = `schema_version = 1
-[app]
-name = "x"
-image = "img@sha256:abc"
-typpo = "drift"
+	path := filepath.Join(dir, "bad.yaml")
+	const body = `SchemaVersion: 2
+Type: ZincContainer
+AppNameID: x
+ImageMeta:
+  Image: img@sha256:abc
+typpo: drift
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "unknown key") {
-		t.Fatalf("expected unknown-key error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "typpo") {
+		t.Fatalf("expected unknown-key error mentioning the stray field, got: %v", err)
 	}
 }

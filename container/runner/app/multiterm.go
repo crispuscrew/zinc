@@ -1,16 +1,16 @@
 package app
 
-// Multiterminal apps (docs/architecture.md §9.1). A `multiterminal` app runs as a
+// Multiterminal apps (docs/architecture.md §9.1). A multiterminal app runs as a
 // detached "holder" container (HolderCmd as PID 1) so it outlives any single
 // terminal; each terminal is a `podman exec -it` session into it, wrapped in the
 // configured emulator. The app lives until the LAST terminal closes — unless it is
-// also `background`, which keeps the holder running.
+// also StopConditions.Background, which keeps the holder running.
 //
 // Coordination is by filesystem flock, with no central daemon or socket: each
-// terminal is its own detached waiter process. A per-app coordination lock
-// serializes holder start-up and the liveness bookkeeping; each waiter holds an
-// flock on its own marker file for its lifetime (auto-released on death, so a killed
-// terminal cannot wedge the count). The last waiter to exit stops the container.
+// terminal is its own detached waiter process. A per-app coordination lock serializes
+// holder start-up and the liveness bookkeeping; each waiter holds an flock on its own
+// marker file for its lifetime (auto-released on death, so a killed terminal cannot
+// wedge the count). The last waiter to exit stops the container.
 //
 // The waiter's three actions (start the holder, run the terminal, stop) are injected
 // so the flock/ref-count logic is testable without podman, an emulator, or a TTY.
@@ -24,41 +24,42 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/crispuscrew/hyprzinc/core/domain"
-	"github.com/crispuscrew/hyprzinc/core/ports"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/schema/validate"
+	"github.com/crispuscrew/zinc/container/runner/domain/options"
+	"github.com/crispuscrew/zinc/container/runner/ports"
 )
 
-// defaultShell is what a "shell" terminal runs when it isn't re-running the app's
-// own command. /bin/sh is present in all trusted-* images and any real terminal app
-// image (§9.1 honesty note).
+// defaultShell is what a "shell" terminal runs when it isn't re-running the app's own
+// command. /bin/sh is present in any real terminal app image (§9.1 honesty note).
 const defaultShell = "/bin/sh"
 
-// OpenTerminal spawns one more terminal for a multiterminal app. It builds the
-// derived image if needed, then launches a detached waiter (`<this-binary> __term
-// <name> [--shell]`, in its own session) and returns immediately. The first terminal
-// also starts the holder; subsequent ones attach. shell selects a plain shell over
-// the app's own command. It validates up front so the UI reports common errors
+// OpenTerminal spawns one more terminal for a multiterminal app. It builds the derived
+// image if needed, then launches a detached waiter (`<this-binary> __term <name>
+// [--shell]`, in its own session) and returns immediately. The first terminal also
+// starts the holder; subsequent ones attach. shell selects a plain shell over the
+// app's own command. It validates up front so the UI reports common errors
 // synchronously instead of in a silent detached process.
-func (svc Service) OpenTerminal(cfg domain.AppConfig, opt domain.HostOptions, shell bool) error {
-	if err := domain.Validate(cfg); err != nil {
-		return fmt.Errorf("%s: %w", cfg.App.Name, err)
+func (svc Service) OpenTerminal(cfg schema.AppConfig, opt options.HostOptions, shell bool) error {
+	if err := validate.Validate(cfg); err != nil {
+		return fmt.Errorf("%s: %w", cfg.AppNameID, err)
 	}
-	if !cfg.App.Multiterminal {
-		return fmt.Errorf("%s: not a multiterminal app", cfg.App.Name)
+	if !cfg.StartConditions.Multiterminal {
+		return fmt.Errorf("%s: not a multiterminal app", cfg.AppNameID)
 	}
 	if len(opt.Terminal) == 0 {
-		return fmt.Errorf("%s: terminal app but no terminal emulator configured (set HYPRZINC_TERMINAL)", cfg.App.Name)
+		return fmt.Errorf("%s: terminal app but no terminal emulator configured (set ZINC_TERMINAL)", cfg.AppNameID)
 	}
-	// Build the derived image (if app.install is set) here, in the foreground, so a
-	// build failure is reported to the caller — not lost in the detached waiter.
+	// Build the derived image (if ImageMeta.Install is set) here, in the foreground, so
+	// a build failure is reported to the caller — not lost in the detached waiter.
 	if err := svc.ensureImage(cfg); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("%s: locate self: %w", cfg.App.Name, err)
+		return fmt.Errorf("%s: locate self: %w", cfg.AppNameID, err)
 	}
-	argv := []string{"__term", cfg.App.Name}
+	argv := []string{"__term", cfg.AppNameID}
 	if shell {
 		argv = append(argv, "--shell")
 	}
@@ -66,7 +67,7 @@ func (svc Service) OpenTerminal(cfg domain.AppConfig, opt domain.HostOptions, sh
 	proc.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	proc.Stdout, proc.Stderr = nil, nil // detached: don't corrupt the parent's TUI
 	if err := proc.Start(); err != nil {
-		return fmt.Errorf("%s: open terminal: %w", cfg.App.Name, err)
+		return fmt.Errorf("%s: open terminal: %w", cfg.AppNameID, err)
 	}
 	go proc.Wait() // reap if the caller (long-lived TUI) outlives the waiter
 	return nil
@@ -75,15 +76,15 @@ func (svc Service) OpenTerminal(cfg domain.AppConfig, opt domain.HostOptions, sh
 // Term is the blocking waiter that runs inside a `__term` process: it ensures the
 // holder is up, opens one terminal, and on close stops the container if it was the
 // last one out.
-func (svc Service) Term(cfg domain.AppConfig, opt domain.HostOptions, shell bool) error {
-	if err := domain.Validate(cfg); err != nil {
-		return fmt.Errorf("%s: %w", cfg.App.Name, err)
+func (svc Service) Term(cfg schema.AppConfig, opt options.HostOptions, shell bool) error {
+	if err := validate.Validate(cfg); err != nil {
+		return fmt.Errorf("%s: %w", cfg.AppNameID, err)
 	}
-	if !cfg.App.Multiterminal {
-		return fmt.Errorf("%s: not a multiterminal app", cfg.App.Name)
+	if !cfg.StartConditions.Multiterminal {
+		return fmt.Errorf("%s: not a multiterminal app", cfg.AppNameID)
 	}
 	if len(opt.Terminal) == 0 {
-		return fmt.Errorf("%s: terminal app but no terminal emulator configured (set HYPRZINC_TERMINAL)", cfg.App.Name)
+		return fmt.Errorf("%s: terminal app but no terminal emulator configured (set ZINC_TERMINAL)", cfg.AppNameID)
 	}
 	root, err := runRoot()
 	if err != nil {
@@ -91,37 +92,33 @@ func (svc Service) Term(cfg domain.AppConfig, opt domain.HostOptions, shell bool
 	}
 	wtr := &waiter{
 		runRoot:     root,
-		background:  cfg.App.Background,
+		background:  cfg.StopConditions.Background,
 		ensureUp:    func() error { return svc.ensureHolder(cfg, opt) },
 		runTerminal: func() error { return svc.runTerminalSession(cfg, opt, shell) },
 		stop:        func() error { return svc.Stop(cfg) },
 	}
-	return wtr.run(cfg.App.Name)
+	return wtr.run(cfg.AppNameID)
 }
 
-// ensureHolder starts the holder container if it isn't already running. For a pasta
+// ensureHolder starts the holder container if it isn't already running. For a filtered
 // app this runs the enforcer's pre-steps (pod create → nft) so there is no
 // unfiltered-egress window; the holder's `podman run -d` returns at once.
-func (svc Service) ensureHolder(cfg domain.AppConfig, opt domain.HostOptions) error {
-	if svc.runtime.Exists(cfg.App.Name) {
+func (svc Service) ensureHolder(cfg schema.AppConfig, opt options.HostOptions) error {
+	if svc.runtime.Exists(cfg.AppNameID) {
 		return nil
 	}
-	enf, err := svc.enforcer(cfg)
-	if err != nil {
-		return err
-	}
-	steps := enf.Prepare(cfg, opt)
+	steps := svc.net.Prepare(cfg, opt)
 	for _, cmd := range steps {
 		if err := svc.runtime.Exec(cmd); err != nil {
-			return errors.Join(fmt.Errorf("start %s (%s): %w", cfg.App.Name, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
+			return errors.Join(fmt.Errorf("start %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
 		}
 	}
-	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, enf.RunFlags(cfg))
+	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, svc.net.RunFlags(cfg))
 	if err != nil {
 		return errors.Join(err, svc.teardown(cfg, len(steps) > 0))
 	}
 	if err := svc.runtime.Exec(ports.Command{Args: appArgs, Desc: "start holder"}); err != nil {
-		return errors.Join(fmt.Errorf("start %s holder: %w", cfg.App.Name, err), svc.teardown(cfg, len(steps) > 0))
+		return errors.Join(fmt.Errorf("start %s holder: %w", cfg.AppNameID, err), svc.teardown(cfg, len(steps) > 0))
 	}
 	return nil
 }
@@ -129,12 +126,24 @@ func (svc Service) ensureHolder(cfg domain.AppConfig, opt domain.HostOptions) er
 // runTerminalSession opens one terminal: the configured emulator wrapping a `podman
 // exec -it` into the holder, running the app's own command (or a shell). It blocks
 // until the terminal window closes.
-func (svc Service) runTerminalSession(cfg domain.AppConfig, opt domain.HostOptions, shell bool) error {
-	cmd := cfg.App.Command
-	if shell {
+func (svc Service) runTerminalSession(cfg schema.AppConfig, opt options.HostOptions, shell bool) error {
+	cmd := multitermCmd(cfg)
+	if shell || len(cmd) == 0 {
 		cmd = []string{defaultShell}
 	}
-	return svc.runtime.OpenSession(cfg.App.Name, cmd, opt, cfg.App.KeepOpen)
+	return svc.runtime.OpenSession(cfg.AppNameID, cmd, opt, false)
+}
+
+// multitermCmd is the argv each terminal runs: MultiterminalEntrypoint (else the app
+// Entrypoint), split on whitespace since `podman exec` takes an argv (unlike the
+// single-container run path, which uses --entrypoint). Empty → the caller falls back
+// to a shell.
+func multitermCmd(cfg schema.AppConfig) []string {
+	spec := strings.TrimSpace(cfg.StartConditions.MultiterminalEntrypoint)
+	if spec == "" {
+		spec = strings.TrimSpace(cfg.StartConditions.Entrypoint)
+	}
+	return strings.Fields(spec)
 }
 
 // waiter owns one terminal's lifecycle. Its three actions are injected so the
@@ -196,8 +205,8 @@ func (wtr *waiter) run(app string) error {
 
 // lockFile opens path (creating it) and takes an exclusive flock — blocking by
 // default, non-blocking when nonblock is set. The returned file holds the lock until
-// Close. The fd is O_CLOEXEC (Go default), so a child exec'd while it is held does
-// not inherit the lock.
+// Close. The fd is O_CLOEXEC (Go default), so a child exec'd while it is held does not
+// inherit the lock.
 func lockFile(path string, nonblock bool) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -215,8 +224,8 @@ func lockFile(path string, nonblock bool) (*os.File, error) {
 }
 
 // marker is a waiter's liveness token: a uniquely named file under the app dir whose
-// flock the waiter holds for its whole life. release drops the lock and the file.
-// Call it only while holding the coordination lock.
+// flock the waiter holds for its whole life. release drops the lock and the file. Call
+// it only while holding the coordination lock.
 type marker struct {
 	file *os.File
 	path string
@@ -227,8 +236,8 @@ func (mrk *marker) release() {
 	os.Remove(mrk.path)
 }
 
-// claimMarker creates a uniquely named "term.*" file (unique even within one
-// process, so the in-process test can run many waiters) and flock-holds it.
+// claimMarker creates a uniquely named "term.*" file (unique even within one process,
+// so the in-process test can run many waiters) and flock-holds it.
 func claimMarker(appDir string) (*marker, error) {
 	file, err := os.CreateTemp(appDir, "term.*")
 	if err != nil {
@@ -242,11 +251,10 @@ func claimMarker(appDir string) (*marker, error) {
 	return &marker{file: file, path: file.Name()}, nil
 }
 
-// anyLive reports whether any terminal other than the caller is still alive, and
-// reaps stale markers as a side effect. A marker whose flock can be taken
-// non-blocking is held by nobody (its waiter died) — stale, so it is removed. One
-// that can't be taken is held by a live waiter. Call it only while holding the
-// coordination lock.
+// anyLive reports whether any terminal other than the caller is still alive, and reaps
+// stale markers as a side effect. A marker whose flock can be taken non-blocking is
+// held by nobody (its waiter died) — stale, so it is removed. One that can't be taken
+// is held by a live waiter. Call it only while holding the coordination lock.
 func anyLive(appDir string) bool {
 	entries, err := os.ReadDir(appDir)
 	if err != nil {
@@ -273,15 +281,15 @@ func anyLive(appDir string) bool {
 	return live
 }
 
-// runRoot is the per-app coordination directory root: $XDG_RUNTIME_DIR/hyprzinc/run,
-// else the user cache dir. Never a predictable /tmp path (multi-user collisions).
+// runRoot is the per-app coordination directory root: $XDG_RUNTIME_DIR/zinc/run, else
+// the user cache dir. Never a predictable /tmp path (multi-user collisions).
 func runRoot() (string, error) {
 	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return filepath.Join(dir, "hyprzinc", "run"), nil
+		return filepath.Join(dir, "zinc", "run"), nil
 	}
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("multiterm: locate runtime dir: %w", err)
 	}
-	return filepath.Join(cache, "hyprzinc", "run"), nil
+	return filepath.Join(cache, "zinc", "run"), nil
 }

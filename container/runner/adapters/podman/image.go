@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/crispuscrew/hyprzinc/core/ports"
+	"github.com/crispuscrew/zinc/container/runner/ports"
 )
 
 // Resolver implements ports.ImageResolver: it finds images and pins tags to digests

@@ -5,21 +5,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crispuscrew/hyprzinc/core/domain"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/container/runner/domain/options"
 )
 
-func pastaApp() domain.AppConfig {
-	return domain.AppConfig{
-		SchemaVersion: domain.SchemaVersion,
-		App:           domain.App{Name: "browser", Image: "docker.io/library/firefox@sha256:abc"},
-		Display:       domain.Display{Wayland: domain.WaylandPassthrough},
-		Network: domain.Network{
-			Mode:     domain.NetworkHost,
+// pastaApp is a filtered app: one self-scoped whitelist list (default-drop egress,
+// allow the listed CIDRs/ports).
+func pastaApp() schema.AppConfig {
+	return schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion,
+		Type:          schema.ZincContainer,
+		AppNameID:     "browser",
+		ImageMeta:     schema.ImageMeta{Image: "docker.io/library/firefox@sha256:abc"},
+		NetworkMeta: schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
 			IPv4CIDR: []string{"1.1.1.1/32", "9.9.9.9/32"},
 			Ports:    []int{443, 80},
-			BlockDNS: true,
-		},
-		Theme: domain.Theme{Mode: domain.ThemeNone},
+		}}},
 	}
 }
 
@@ -29,8 +30,6 @@ func TestNFTRuleset_Allowlist(t *testing.T) {
 		"policy drop;",
 		`oif "lo" accept`,
 		"ct state established,related accept",
-		"udp dport { 53, 853 } drop",
-		"tcp dport { 53, 853 } drop",
 		"ip daddr { 1.1.1.1/32, 9.9.9.9/32 } tcp dport { 443, 80 } accept",
 		"ip daddr { 1.1.1.1/32, 9.9.9.9/32 } udp dport { 443, 80 } accept",
 	} {
@@ -43,18 +42,51 @@ func TestNFTRuleset_Allowlist(t *testing.T) {
 	}
 }
 
-func TestNFTRuleset_NoDNSBlock(t *testing.T) {
+// An all-blacklist app is allow-all-except: the chain default is accept and only the
+// listed CIDRs are dropped.
+func TestNFTRuleset_BlacklistIsAllowAllExcept(t *testing.T) {
 	cfg := pastaApp()
-	cfg.Network.BlockDNS = false
-	if rules := NFTRuleset(cfg); strings.Contains(rules, "dport { 53, 853 } drop") {
-		t.Errorf("block_dns off → no explicit 53/853 drop expected:\n%s", rules)
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{
+		Blacklist: true,
+		IPv4CIDR:  []string{"10.0.0.0/8"},
+	}}
+	rules := NFTRuleset(cfg)
+	if !strings.Contains(rules, "policy accept;") {
+		t.Errorf("all-blacklist app should default-accept:\n%s", rules)
+	}
+	if !strings.Contains(rules, "ip daddr { 10.0.0.0/8 } drop") {
+		t.Errorf("blacklist entry should drop the listed CIDR:\n%s", rules)
+	}
+}
+
+// DNS blocking is no longer a dedicated flag: it is a normal blacklist rule for ports
+// 53/853 scoped to all destinations. validate rejects a port rule with no CIDR, so this
+// is the canonical form (allow-all-except-DNS: chain default accept, DNS dropped).
+func TestNFTRuleset_DNSBlockViaBlacklist(t *testing.T) {
+	cfg := pastaApp()
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{
+		Blacklist: true,
+		IPv4CIDR:  []string{"0.0.0.0/0"},
+		IPv6CIDR:  []string{"::/0"},
+		Ports:     []int{53, 853},
+	}}
+	rules := NFTRuleset(cfg)
+	for _, want := range []string{
+		"policy accept;",
+		"ip daddr { 0.0.0.0/0 } tcp dport { 53, 853 } drop",
+		"ip daddr { 0.0.0.0/0 } udp dport { 53, 853 } drop",
+		"ip6 daddr { ::/0 } tcp dport { 53, 853 } drop",
+		"ip6 daddr { ::/0 } udp dport { 53, 853 } drop",
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("DNS-block ruleset missing %q\n---\n%s", want, rules)
+		}
 	}
 }
 
 func TestNFTRuleset_CIDRWithoutPorts(t *testing.T) {
 	cfg := pastaApp()
-	cfg.Network.Ports = nil
-	cfg.Network.BlockDNS = false
+	cfg.NetworkMeta.NetworkLists[0].Ports = nil
 	rules := NFTRuleset(cfg)
 	if !strings.Contains(rules, "ip daddr { 1.1.1.1/32, 9.9.9.9/32 } accept") {
 		t.Errorf("no ports → all-ports accept to CIDRs expected:\n%s", rules)
@@ -66,26 +98,26 @@ func TestNFTRuleset_CIDRWithoutPorts(t *testing.T) {
 
 func TestNFTRuleset_IPv6(t *testing.T) {
 	cfg := pastaApp()
-	cfg.Network.IPv6CIDR = []string{"2001:db8::/32"}
+	cfg.NetworkMeta.NetworkLists[0].IPv6CIDR = []string{"2001:db8::/32"}
 	if rules := NFTRuleset(cfg); !strings.Contains(rules, "ip6 daddr { 2001:db8::/32 } tcp dport { 443, 80 } accept") {
 		t.Errorf("ipv6 allow rule missing:\n%s", rules)
 	}
 }
 
-// The pasta enforcer attaches the app to its pod and prepares the netns with two
-// steps — pod create (pasta netns) then nft lock — before the app ever runs, so
-// there is no unfiltered-egress window (§5.3).
-func TestPasta_RunFlagsAndPrepare(t *testing.T) {
+// The enforcer attaches a filtered app to its pod and prepares the netns with two
+// steps — pod create (pasta netns) then nft lock — before the app ever runs, so there
+// is no unfiltered-egress window (§5.3).
+func TestEnforcer_RunFlagsAndPrepare(t *testing.T) {
 	cfg := pastaApp()
-	pod := PodName(cfg.App.Name)
+	pod := PodName(cfg.AppNameID)
 
-	if got := (Pasta{}).RunFlags(cfg); !slices.Equal(got, []string{"--pod", pod}) {
-		t.Fatalf("pasta RunFlags should join the pod, got %v", got)
+	if got := (Enforcer{}).RunFlags(cfg); !slices.Equal(got, []string{"--pod", pod}) {
+		t.Fatalf("filtered RunFlags should join the pod, got %v", got)
 	}
 
-	steps := Pasta{}.Prepare(cfg, domain.HostOptions{})
+	steps := Enforcer{}.Prepare(cfg, options.HostOptions{})
 	if len(steps) != 2 {
-		t.Fatalf("pasta prepare should be two steps (pod create, nft lock), got %d", len(steps))
+		t.Fatalf("filtered prepare should be two steps (pod create, nft lock), got %d", len(steps))
 	}
 	// 1. pod create with pasta networking
 	assertContainsSeq(t, steps[0].Args, "pod", "create")
@@ -103,33 +135,32 @@ func TestPasta_RunFlagsAndPrepare(t *testing.T) {
 	}
 }
 
-func TestPasta_NetfilterImageOverride(t *testing.T) {
-	steps := Pasta{}.Prepare(pastaApp(), domain.HostOptions{NetfilterImage: "my/nft:local"})
+func TestEnforcer_NetfilterImageOverride(t *testing.T) {
+	steps := Enforcer{}.Prepare(pastaApp(), options.HostOptions{NetfilterImage: "my/nft:local"})
 	if !slices.Contains(steps[1].Args, "my/nft:local") {
 		t.Fatalf("nft step should use the override image, got %v", steps[1].Args)
 	}
 }
 
-func TestEnforcers_Teardown(t *testing.T) {
-	pasta := pastaApp()
-	if got, want := (Pasta{}).Teardown(pasta), []string{"pod", "rm", "-f", PodName(pasta.App.Name)}; !slices.Equal(got, want) {
-		t.Fatalf("pasta teardown: got %v want %v", got, want)
+// An app with no NetworkLists is unfiltered: --network none, nothing to prepare, and a
+// plain container stop on teardown.
+func TestEnforcer_Unfiltered(t *testing.T) {
+	cfg := schema.AppConfig{AppNameID: "solo"}
+	if got := (Enforcer{}).RunFlags(cfg); !slices.Equal(got, []string{"--network", "none"}) {
+		t.Fatalf("unfiltered RunFlags: %v", got)
 	}
-	if got, want := (None{}).Teardown(pasta), []string{"stop", pasta.App.Name}; !slices.Equal(got, want) {
-		t.Fatalf("none teardown: got %v want %v", got, want)
+	if steps := (Enforcer{}).Prepare(cfg, options.HostOptions{}); steps != nil {
+		t.Fatalf("unfiltered app has nothing to prepare, got %v", steps)
+	}
+	if got, want := (Enforcer{}).Teardown(cfg), []string{"stop", "solo"}; !slices.Equal(got, want) {
+		t.Fatalf("unfiltered teardown: got %v want %v", got, want)
 	}
 }
 
-func TestBasicEnforcers_RunFlags(t *testing.T) {
-	if got := (None{}).RunFlags(domain.AppConfig{}); !slices.Equal(got, []string{"--network", "none"}) {
-		t.Fatalf("none RunFlags: %v", got)
-	}
-	cfg := domain.AppConfig{Network: domain.Network{Mode: domain.NetworkContainer, Target: "vpn-container"}}
-	if got := (Container{}).RunFlags(cfg); !slices.Equal(got, []string{"--network", "container:vpn-container"}) {
-		t.Fatalf("container RunFlags: %v", got)
-	}
-	if (None{}).Prepare(cfg, domain.HostOptions{}) != nil || (Container{}).Prepare(cfg, domain.HostOptions{}) != nil {
-		t.Fatal("none/container enforcers must have no prepare steps")
+func TestEnforcer_FilteredTeardown(t *testing.T) {
+	cfg := pastaApp()
+	if got, want := (Enforcer{}).Teardown(cfg), []string{"pod", "rm", "-f", PodName(cfg.AppNameID)}; !slices.Equal(got, want) {
+		t.Fatalf("filtered teardown: got %v want %v", got, want)
 	}
 }
 
