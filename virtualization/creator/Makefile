@@ -3,4 +3,4 @@
 
 TOOL := hzv
 
-include ../tool.mk
+include ../../tool.mk

@@ -9,14 +9,17 @@ ifndef TOOL
 $(error TOOL is not set — put `TOOL := hzc` above `include ../tool.mk`)
 endif
 
-include ../check.mk
+# Include check.mk relative to THIS file (not the invoking dir), so it resolves
+# whatever depth the tool's Makefile sits at. check.mk defines REPO_REL, used below.
+include $(dir $(lastword $(MAKEFILE_LIST)))check.mk
 
 BIN_DIR        ?= bin
 BIN            ?= $(BIN_DIR)/$(TOOL)
 
-# Reproducible build image + the generic Containerfile shared by all tools.
+# Reproducible build image + the generic Containerfile shared by all tools (at the
+# repo root, reached via REPO_REL so it is correct at any module depth).
 BUILD_IMAGE    ?= hyprzinc/$(TOOL)-build:local
-CONTAINERFILE  ?= ../Containerfile
+CONTAINERFILE  ?= $(REPO_REL)/Containerfile
 
 # Extra args for `make run` (hzc sets `run <app>`); empty for the others.
 RUN_ARGS       ?=
