@@ -52,25 +52,49 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 }
 
 // checkNetwork fails closed on NetworkLists this build cannot enforce yet. Supported:
-// self-scoped egress allow/deny lists (own pasta netns + nft output chain, §5.3) and
-// tier-3 LAN publishing (Ingress && Host — nft input chain + pod `-p`). Deferred and
-// rejected here so a config using them is stopped at launch rather than silently
-// mis-enforced: self-scoped ingress (tier-2 sibling reach), host-scoped egress, a
-// sibling AppName link, and a routing gateway (multi-homing).
+// self-scoped egress allow/deny lists (own pasta netns + nft output chain, §5.3), tier-3
+// LAN publishing (Ingress && Host — nft input chain + pod `-p`), and tier-2 sibling links
+// (a producer's self-scoped ingress, a consumer's egress naming its AppName — a private
+// interface-gated bridge). Rejected so a config is stopped at launch rather than silently
+// mis-enforced: a routing gateway (multi-homing), an ingress list that targets an AppName
+// (contradictory), host-scoped egress, and mixing tier-2 links with any other networking
+// (the coexisting-egress design is deferred).
 func checkNetwork(cfg schema.AppConfig) error {
+	tier2 := hasSiblingLink(cfg)
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
+		appName := strings.TrimSpace(netList.AppName)
 		switch {
 		case netList.GatewayV4 != "" || netList.GatewayV6 != "":
 			return fmt.Errorf("%s: NetworkLists[%d]: routing through a gateway (multi-homing) is not supported in this build yet", cfg.AppNameID, index)
-		case netList.Ingress && netList.Host:
-			// tier-3: publish ports to the LAN. Supported.
-		case netList.Ingress:
-			return fmt.Errorf("%s: NetworkLists[%d]: publishing to a sibling app (self-scoped Ingress) is not supported in this build yet", cfg.AppNameID, index)
-		case netList.Host:
+		case netList.Ingress && appName != "":
+			return fmt.Errorf("%s: NetworkLists[%d]: an ingress list cannot target an AppName — a producer publishes to any sibling that joins its link, and the consumer names the producer", cfg.AppNameID, index)
+		case netList.Host && !netList.Ingress:
 			return fmt.Errorf("%s: NetworkLists[%d]: host-scoped egress is not supported in this build yet", cfg.AppNameID, index)
-		case strings.TrimSpace(netList.AppName) != "":
-			return fmt.Errorf("%s: NetworkLists[%d]: sharing a sibling app's network (AppName %q) is not supported in this build yet", cfg.AppNameID, index, netList.AppName)
+		}
+		if tier2 && !isLinkList(netList) {
+			return fmt.Errorf("%s: NetworkLists[%d]: combining sibling links with other networking (egress rules or LAN publish) is not supported in this build yet", cfg.AppNameID, index)
 		}
 	}
 	return nil
+}
+
+// isLinkList reports whether a NetworkList is a tier-2 sibling link: a producer's
+// self-scoped ingress (Ingress, no Host, no AppName) or a consumer's sibling egress
+// (egress, no Host, an AppName).
+func isLinkList(netList schema.NetworkList) bool {
+	appName := strings.TrimSpace(netList.AppName)
+	producer := netList.Ingress && !netList.Host && appName == ""
+	consumer := !netList.Ingress && !netList.Host && appName != ""
+	return producer || consumer
+}
+
+// hasSiblingLink reports whether any list makes cfg a tier-2 participant (producer or
+// consumer), which requires the app to be link-only.
+func hasSiblingLink(cfg schema.AppConfig) bool {
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if isLinkList(netList) {
+			return true
+		}
+	}
+	return false
 }

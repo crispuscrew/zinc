@@ -9,11 +9,12 @@
 // sidecar, an external traffic controller — is one more file here implementing the
 // same interface; nothing in app or the podman runtime changes (docs §5.3, §13).
 //
-// Scope (this build): self-scoped egress lists (Host=false, empty AppName) and tier-3
-// LAN publishing (Ingress && Host — an nft input chain plus pod `-p` forwards). Deferred
-// and rejected by the app layer's checkNetwork before this adapter runs: self-scoped
-// ingress (tier-2 sibling reach), host-scoped egress, sibling (AppName), and gateway
-// (multi-homing) lists.
+// Scope (this build): self-scoped egress lists (Host=false, empty AppName), tier-3 LAN
+// publishing (Ingress && Host — an nft input chain plus pod `-p` forwards), and tier-2
+// sibling links (a private --internal bridge per producer, interface-gated per-port nft;
+// a producer's self-scoped ingress + a consumer's egress naming its AppName). checkNetwork
+// forbids mixing tier-2 with other networking, and still rejects host-scoped egress and
+// gateway (multi-homing) lists before this adapter runs.
 package netenforce
 
 import (
@@ -44,9 +45,60 @@ type Enforcer struct{}
 // PodName is the pod that owns a filtered app's netns.
 func PodName(app string) string { return app + "-pod" }
 
-// filtered reports whether cfg needs a pasta pod + nft: any NetworkList present. An
-// app with none gets --network none. checkNetwork (app layer) has already rejected
-// host/sibling/gateway lists, so any list here is self-scoped and enforceable.
+// LinkNetwork is the private, --internal bridge that connects a producer to the siblings
+// that consume it (tier 2). A producer owns zinc-link-<self>; a consumer attaches to the
+// producer's. The name is deterministic so both sides agree without coordination.
+func LinkNetwork(producer string) string { return "zinc-link-" + producer }
+
+// linkEntry is one bridge a tier-2 app attaches to, paired with the fixed in-container
+// interface name (zlink0, zlink1, …) used both for `--network name:interface_name=` and
+// for the nft rules that gate that interface (validated: podman names it exactly that).
+type linkEntry struct {
+	network string
+	iface   string
+}
+
+// links returns the ordered bridges a tier-2 app attaches to: one per self-scoped
+// ingress list (its own link, as a producer) and one per sibling it consumes (an egress
+// list naming an AppName), de-duplicated. Empty for a non-tier-2 app. The slice index
+// fixes each link's interface name, so the ruleset and the pod attach agree.
+func links(cfg schema.AppConfig) []linkEntry {
+	var out []linkEntry
+	seen := map[string]bool{}
+	add := func(network string) {
+		if seen[network] {
+			return
+		}
+		seen[network] = true
+		out = append(out, linkEntry{network: network, iface: "zlink" + strconv.Itoa(len(out))})
+	}
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		appName := strings.TrimSpace(netList.AppName)
+		switch {
+		case netList.Ingress && !netList.Host && appName == "":
+			add(LinkNetwork(cfg.AppNameID)) // producer: own link
+		case !netList.Ingress && !netList.Host && appName != "":
+			add(LinkNetwork(appName)) // consumer: the producer's link
+		}
+	}
+	return out
+}
+
+// ownLinkIface is the interface of an app's own producer link (zinc-link-<self>), or ""
+// when the app is not a producer. The app's published ports are accepted on it.
+func ownLinkIface(cfg schema.AppConfig) string {
+	own := LinkNetwork(cfg.AppNameID)
+	for _, entry := range links(cfg) {
+		if entry.network == own {
+			return entry.iface
+		}
+	}
+	return ""
+}
+
+// filtered reports whether cfg needs a netns + nft: any NetworkList present. An app with
+// none gets --network none. checkNetwork (app layer) has already rejected the scopes this
+// build can't enforce, so every list reaching here is one the enforcer handles.
 func filtered(cfg schema.AppConfig) bool {
 	return len(cfg.NetworkMeta.NetworkLists) > 0
 }
@@ -62,10 +114,11 @@ func (Enforcer) RunFlags(cfg schema.AppConfig) []string {
 	return []string{"--network", "none"}
 }
 
-// Prepare returns the steps that guarantee no unfiltered-egress window (§5.3): create
-// the pod (pasta netns), then lock the netns with nft *before any app starts*. The
-// app run itself is appended by the caller (app layer) using RunFlags. An unfiltered
-// app has nothing to prepare.
+// Prepare returns the steps that guarantee no unfiltered window (§5.3): ensure any tier-2
+// link bridges exist, create the pod (its netns), then lock the netns with nft *before
+// any app starts*. The app run itself is appended by the caller (app layer) using
+// RunFlags. An unfiltered app has nothing to prepare. Link networks are created
+// idempotently (--ignore) and left in place on teardown — a sibling may still use one.
 func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.Command {
 	if !filtered(cfg) {
 		return nil
@@ -75,10 +128,17 @@ func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.C
 	if image == "" {
 		image = DefaultNetfilterImage
 	}
-	return []ports.Command{
-		{Args: podCreateArgs(cfg, pod), Desc: "create pod (pasta netns)"},
-		{Args: nftApplyArgs(pod, image), Stdin: NFTRuleset(cfg), Desc: "lock netns with nft (before app)"},
+	var steps []ports.Command
+	for _, entry := range links(cfg) {
+		steps = append(steps, ports.Command{
+			Args: []string{"network", "create", "--ignore", "--internal", entry.network},
+			Desc: "ensure link network " + entry.network,
+		})
 	}
+	return append(steps,
+		ports.Command{Args: podCreateArgs(cfg, pod), Desc: "create pod (netns)"},
+		ports.Command{Args: nftApplyArgs(pod, image), Stdin: NFTRuleset(cfg), Desc: "lock netns with nft (before app)"},
+	)
 }
 
 // Teardown removes the pod (owns the filtered netns — app and firewall go in one
@@ -91,10 +151,55 @@ func (Enforcer) Teardown(cfg schema.AppConfig) []string {
 	return []string{"stop", cfg.AppNameID}
 }
 
-// NFTRuleset renders the nftables ruleset enforcing an app's NetworkLists (§5.3).
-// Pure function over the validated config; loaded into the pod's own netns by the
-// netfilter init step, before the app container starts — so the app never sees an
-// open network.
+// NFTRuleset renders the nftables ruleset locked into an app's netns before it starts
+// (§5.3). Pure over the validated config. A tier-2 app (private sibling links) is gated
+// per interface; every other filtered app (egress and/or tier-3 LAN publish) is gated by
+// address and port. checkNetwork forbids mixing the two, so this dispatch is total.
+func NFTRuleset(cfg schema.AppConfig) string {
+	if len(links(cfg)) > 0 {
+		return linkRuleset(cfg)
+	}
+	return standardRuleset(cfg)
+}
+
+// linkRuleset gates a tier-2 app by interface: the private zlink* bridges are always
+// accepted (a consumer reaches its producer, a producer replies over the established
+// rule), and a producer's own published Ports are accepted inbound on its own link
+// interface — nothing else. Both chains default-drop, so an app with only sibling links
+// has no other connectivity; a consumer accepts nothing new inbound.
+func linkRuleset(cfg schema.AppConfig) string {
+	var bld strings.Builder
+	bld.WriteString("table inet zinc {\n")
+
+	bld.WriteString("\tchain output {\n")
+	bld.WriteString("\t\ttype filter hook output priority 0; policy drop;\n")
+	bld.WriteString("\t\toif \"lo\" accept\n")
+	bld.WriteString("\t\tct state established,related accept\n")
+	for _, entry := range links(cfg) {
+		fmt.Fprintf(&bld, "\t\toifname %q accept\n", entry.iface)
+	}
+	bld.WriteString("\t}\n")
+
+	bld.WriteString("\tchain input {\n")
+	bld.WriteString("\t\ttype filter hook input priority 0; policy drop;\n")
+	bld.WriteString("\t\tiif \"lo\" accept\n")
+	bld.WriteString("\t\tct state established,related accept\n")
+	if own := ownLinkIface(cfg); own != "" {
+		for _, netList := range cfg.NetworkMeta.NetworkLists {
+			if netList.Ingress && !netList.Host && strings.TrimSpace(netList.AppName) == "" && len(netList.Ports) > 0 {
+				fmt.Fprintf(&bld, "\t\tiifname %q tcp dport { %s } accept\n", own, portList(netList.Ports))
+				fmt.Fprintf(&bld, "\t\tiifname %q udp dport { %s } accept\n", own, portList(netList.Ports))
+			}
+		}
+	}
+	bld.WriteString("\t}\n")
+
+	bld.WriteString("}\n")
+	return bld.String()
+}
+
+// standardRuleset renders the address/port ruleset for an egress and/or tier-3 app
+// (§5.3), loaded into the pod's netns by the netfilter init step before the app starts.
 //
 // A list's direction picks its chain: an egress list (Ingress=false) becomes an output
 // rule (where the app may connect to — daddr), an ingress list (Ingress=true) becomes
@@ -113,7 +218,7 @@ func (Enforcer) Teardown(cfg schema.AppConfig) []string {
 // first match wins. Blocking DNS is just an egress blacklist for ports 53/853 (validate
 // rejects a port rule with no CIDR, so it cannot silently no-op), ordered ahead of any
 // broad allow so it wins.
-func NFTRuleset(cfg schema.AppConfig) string {
+func standardRuleset(cfg schema.AppConfig) string {
 	var egress, ingress []schema.NetworkList
 	for _, netList := range cfg.NetworkMeta.NetworkLists {
 		if netList.Ingress {
@@ -244,16 +349,28 @@ func portList(ports []int) string {
 	return strings.Join(strs, ", ")
 }
 
-// podCreateArgs builds `podman pod create` for a filtered app's netns. When a list
-// names a host interface, pasta copies its addressing (the first such interface wins),
-// which also scopes tier-3 publishing to that interface. Tier-3 (LAN) ingress lists add
+// podCreateArgs builds `podman pod create` for a filtered app's netns. A tier-2 app
+// attaches to its private link bridge(s), each pinned to a fixed interface name the nft
+// rules match (no pasta, no host publish — checkNetwork forbids mixing). Otherwise the
+// pod is a pasta netns: a list naming a host interface makes pasta copy its addressing
+// (first wins), which also scopes tier-3 publishing, and tier-3 (LAN) ingress lists add
 // their ports as `-p` forwards here (pod ports live on the pod, not the container).
 func podCreateArgs(cfg schema.AppConfig, pod string) []string {
+	args := []string{"pod", "create", "--name", pod}
+	if entries := links(cfg); len(entries) > 0 {
+		// alias=<AppNameID>: podman resolves the network alias but NOT the pod's app
+		// container name, so this makes each app reachable on the link at its AppNameID
+		// (a consumer connects to "<producer>:<port>") instead of the pod name.
+		for _, entry := range entries {
+			args = append(args, "--network", entry.network+":interface_name="+entry.iface+",alias="+cfg.AppNameID)
+		}
+		return args
+	}
 	netspec := "pasta"
 	if iface := firstInterface(cfg); iface != "" {
 		netspec = "pasta:--interface," + iface
 	}
-	args := []string{"pod", "create", "--name", pod, "--network", netspec}
+	args = append(args, "--network", netspec)
 	return append(args, publishArgs(cfg)...)
 }
 
