@@ -9,10 +9,11 @@
 // sidecar, an external traffic controller — is one more file here implementing the
 // same interface; nothing in app or the podman runtime changes (docs §5.3, §13).
 //
-// Scope (this build): only self-scoped lists (Host=false, empty AppName, no gateway)
-// are enforceable. Host-scoped, sibling (AppName), and gateway (multi-homing) lists
-// are schema-legal but deferred; the app layer's checkNetwork rejects a config using
-// them before this adapter runs, so every list reaching here is self-scoped.
+// Scope (this build): self-scoped egress lists (Host=false, empty AppName) and tier-3
+// LAN publishing (Ingress && Host — an nft input chain plus pod `-p` forwards). Deferred
+// and rejected by the app layer's checkNetwork before this adapter runs: self-scoped
+// ingress (tier-2 sibling reach), host-scoped egress, sibling (AppName), and gateway
+// (multi-homing) lists.
 package netenforce
 
 import (
@@ -95,47 +96,87 @@ func (Enforcer) Teardown(cfg schema.AppConfig) []string {
 // netfilter init step, before the app container starts — so the app never sees an
 // open network.
 //
-// Chain policy follows the lists' orientation: a whitelist ("only these") means
-// default-drop, so the app that lists an allowlist is fail-closed; an all-blacklist
-// app ("all but these") means default-accept — allow-all-except. Any whitelist
-// present flips the whole app to restrictive default-drop (see allBlacklist), so a
-// mixed app never silently opens.
+// A list's direction picks its chain: an egress list (Ingress=false) becomes an output
+// rule (where the app may connect to — daddr), an ingress list (Ingress=true) becomes
+// an input rule (who may connect in to the app's published ports — saddr). Egress lists
+// build the output chain, ingress lists the input chain; each is sized independently.
 //
-// Loopback and established/related return traffic are always accepted. Then each
-// NetworkList contributes rules in priority order (first entry first), first match
-// wins (nft evaluates top-down; accept/drop are terminal): a whitelist list accepts
-// its CIDRs/ports, a blacklist list drops them. Blocking DNS is just a blacklist list
-// for ports 53/853 (validate rejects a port rule with no CIDR, so it cannot silently
-// no-op), ordered ahead of any broad allow so it wins.
+// Per-direction chain policy follows that direction's lists: a whitelist ("only these")
+// means default-drop (fail-closed); an all-blacklist direction ("all but these") means
+// default-accept. A single whitelist present flips the direction to restrictive
+// default-drop (see chainPolicy/allBlacklist), so it never silently opens. A direction
+// with no lists is default-drop — a pure publisher gets no egress, an egress-only app
+// gets no input chain at all.
+//
+// Loopback and established/related traffic are always accepted (a server's reply rides
+// the established output rule). Then each list contributes rules in priority order,
+// first match wins. Blocking DNS is just an egress blacklist for ports 53/853 (validate
+// rejects a port rule with no CIDR, so it cannot silently no-op), ordered ahead of any
+// broad allow so it wins.
 func NFTRuleset(cfg schema.AppConfig) string {
-	policy := "drop"
-	if allBlacklist(cfg.NetworkMeta.NetworkLists) {
-		policy = "accept" // allow-all-except: only the listed CIDRs/ports are dropped
+	var egress, ingress []schema.NetworkList
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if netList.Ingress {
+			ingress = append(ingress, netList)
+		} else {
+			egress = append(egress, netList)
+		}
 	}
+
 	var bld strings.Builder
 	bld.WriteString("table inet zinc {\n")
+
+	// output (egress): where the app may connect out to.
 	bld.WriteString("\tchain output {\n")
-	fmt.Fprintf(&bld, "\t\ttype filter hook output priority 0; policy %s;\n", policy)
+	fmt.Fprintf(&bld, "\t\ttype filter hook output priority 0; policy %s;\n", chainPolicy(egress))
 	bld.WriteString("\t\toif \"lo\" accept\n")
 	bld.WriteString("\t\tct state established,related accept\n")
-	for _, netList := range cfg.NetworkMeta.NetworkLists {
-		verdict := "accept"
-		if netList.Blacklist {
-			verdict = "drop"
-		}
+	for _, netList := range egress {
+		verdict := verdictFor(netList)
 		writeRules(&bld, "ip", netList.IPv4CIDR, netList.Ports, verdict)
 		writeRules(&bld, "ip6", netList.IPv6CIDR, netList.Ports, verdict)
 	}
 	bld.WriteString("\t}\n")
+
+	// input (ingress): who may reach the app's published ports. Emitted only when the
+	// app publishes; without it there is no input base chain, so ingress stays closed.
+	if len(ingress) > 0 {
+		bld.WriteString("\tchain input {\n")
+		fmt.Fprintf(&bld, "\t\ttype filter hook input priority 0; policy %s;\n", chainPolicy(ingress))
+		bld.WriteString("\t\tiif \"lo\" accept\n")
+		bld.WriteString("\t\tct state established,related accept\n")
+		for _, netList := range ingress {
+			writeIngressRules(&bld, netList, verdictFor(netList))
+		}
+		bld.WriteString("\t}\n")
+	}
+
 	bld.WriteString("}\n")
 	return bld.String()
 }
 
-// allBlacklist reports whether every list is a blacklist, which makes the chain
-// default accept (allow-all-except). A single whitelist present returns false, so the
-// app is restrictive (default-drop) and the blacklist lists become high-priority
-// deny carve-outs above the whitelist's accepts. Callers only invoke NFTRuleset for a
-// filtered app, so the slice is non-empty here.
+// verdictFor is the terminal verdict a list contributes: a whitelist accepts its
+// matches, a blacklist drops them.
+func verdictFor(netList schema.NetworkList) string {
+	if netList.Blacklist {
+		return "drop"
+	}
+	return "accept"
+}
+
+// chainPolicy is the default policy for one direction's lists: default-accept only when
+// there is at least one list and every one is a blacklist (allow-all-except); otherwise
+// default-drop. An empty direction is default-drop (closed).
+func chainPolicy(lists []schema.NetworkList) string {
+	if len(lists) > 0 && allBlacklist(lists) {
+		return "accept"
+	}
+	return "drop"
+}
+
+// allBlacklist reports whether every list is a blacklist. A single whitelist present
+// returns false, so the direction is restrictive (default-drop) and the blacklist lists
+// become high-priority deny carve-outs above the whitelist's accepts.
 func allBlacklist(lists []schema.NetworkList) bool {
 	for _, netList := range lists {
 		if !netList.Blacklist {
@@ -161,6 +202,40 @@ func writeRules(bld *strings.Builder, family string, cidrs []string, ports []int
 	fmt.Fprintf(bld, "\t\t%s udp dport { %s } %s\n", daddr, portsList, verdict)
 }
 
+// writeIngressRules emits input-chain rules for one ingress list: match the app's own
+// published Ports, restricted to the source CIDRs (saddr). Unlike egress, an empty CIDR
+// is legal and means "any source" (validate exempts ingress from the ports-need-CIDR
+// rule), so a list with ports but no CIDR opens those ports to anyone the pod forwards.
+// v4 and v6 source sets are emitted separately so a v4 CIDR never gates v6 traffic.
+func writeIngressRules(bld *strings.Builder, netList schema.NetworkList, verdict string) {
+	ports := portList(netList.Ports)
+	emit := func(saddr string) {
+		switch {
+		case ports == "" && saddr == "":
+			return // nothing to match
+		case ports == "":
+			fmt.Fprintf(bld, "\t\t%s %s\n", saddr, verdict)
+		case saddr == "":
+			fmt.Fprintf(bld, "\t\ttcp dport { %s } %s\n", ports, verdict)
+			fmt.Fprintf(bld, "\t\tudp dport { %s } %s\n", ports, verdict)
+		default:
+			fmt.Fprintf(bld, "\t\t%s tcp dport { %s } %s\n", saddr, ports, verdict)
+			fmt.Fprintf(bld, "\t\t%s udp dport { %s } %s\n", saddr, ports, verdict)
+		}
+	}
+	hasV4, hasV6 := len(netList.IPv4CIDR) > 0, len(netList.IPv6CIDR) > 0
+	if !hasV4 && !hasV6 {
+		emit("") // any source
+		return
+	}
+	if hasV4 {
+		emit("ip saddr { " + strings.Join(netList.IPv4CIDR, ", ") + " }")
+	}
+	if hasV6 {
+		emit("ip6 saddr { " + strings.Join(netList.IPv6CIDR, ", ") + " }")
+	}
+}
+
 func portList(ports []int) string {
 	strs := make([]string, len(ports))
 	for idx, port := range ports {
@@ -170,13 +245,37 @@ func portList(ports []int) string {
 }
 
 // podCreateArgs builds `podman pod create` for a filtered app's netns. When a list
-// names a host interface, pasta copies its addressing (the first such interface wins).
+// names a host interface, pasta copies its addressing (the first such interface wins),
+// which also scopes tier-3 publishing to that interface. Tier-3 (LAN) ingress lists add
+// their ports as `-p` forwards here (pod ports live on the pod, not the container).
 func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	netspec := "pasta"
 	if iface := firstInterface(cfg); iface != "" {
 		netspec = "pasta:--interface," + iface
 	}
-	return []string{"pod", "create", "--name", pod, "--network", netspec}
+	args := []string{"pod", "create", "--name", pod, "--network", netspec}
+	return append(args, publishArgs(cfg)...)
+}
+
+// publishArgs maps tier-3 (LAN) ingress lists — Ingress && Host — onto pod `-p` port
+// forwards so the LAN can reach the app's published ports; the nft input chain then
+// restricts who (source CIDR) actually gets through, and pasta binds the pod's interface
+// (firstInterface). Each port is forwarded for both tcp and udp to match the input
+// chain; there is no host-port remap (published port == container port). Self-scoped
+// ingress (tier 2) publishes nothing to the host and never reaches here — checkNetwork
+// rejects it in this build.
+func publishArgs(cfg schema.AppConfig) []string {
+	var args []string
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if !netList.Ingress || !netList.Host {
+			continue
+		}
+		for _, port := range netList.Ports {
+			mapping := strconv.Itoa(port) + ":" + strconv.Itoa(port)
+			args = append(args, "-p", mapping+"/tcp", "-p", mapping+"/udp")
+		}
+	}
+	return args
 }
 
 // firstInterface returns the first non-blank Interface across the app's NetworkLists.

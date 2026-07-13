@@ -135,8 +135,8 @@ func TestLaunch_DependencyCycleRejected(t *testing.T) {
 	}
 }
 
-// Fail-closed: a NetworkList this build can't enforce yet (here host-scoped) aborts the
-// launch before any dependency or container starts.
+// Fail-closed: a NetworkList this build can't enforce yet (here host-scoped egress)
+// aborts the launch before any dependency or container starts.
 func TestLaunch_UnsupportedNetworkFailsClosed(t *testing.T) {
 	cfg := depApp("app", "vpn")
 	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{Host: true}}}
@@ -148,5 +148,28 @@ func TestLaunch_UnsupportedNetworkFailsClosed(t *testing.T) {
 	}
 	if len(engine.started) != 0 {
 		t.Fatalf("nothing should start when the network is unsupported, got %v", engine.started)
+	}
+}
+
+// tier-3 LAN publish (Ingress && Host) is enforceable now, so checkNetwork accepts it.
+func TestCheckNetwork_Tier3PublishAllowed(t *testing.T) {
+	cfg := depApp("pub")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
+		Ingress: true, Host: true, Ports: []int{80},
+	}}}
+	if err := checkNetwork(cfg); err != nil {
+		t.Fatalf("tier-3 publish should be allowed, got: %v", err)
+	}
+}
+
+// Self-scoped ingress (tier-2 sibling reach) is still deferred, so it fails closed.
+func TestCheckNetwork_SelfIngressFailsClosed(t *testing.T) {
+	cfg := depApp("pub")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
+		Ingress: true, Ports: []int{5432},
+	}}}
+	err := checkNetwork(cfg)
+	if err == nil || !strings.Contains(err.Error(), "not supported in this build yet") {
+		t.Fatalf("self-scoped ingress should fail closed, got: %v", err)
 	}
 }
