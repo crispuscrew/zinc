@@ -104,6 +104,72 @@ func TestNFTRuleset_IPv6(t *testing.T) {
 	}
 }
 
+// An egress-only app has no input base chain at all — ingress stays closed by omission.
+func TestNFTRuleset_NoInputChainForEgressOnly(t *testing.T) {
+	if rules := NFTRuleset(pastaApp()); strings.Contains(rules, "chain input") {
+		t.Errorf("egress-only app should have no input chain:\n%s", rules)
+	}
+}
+
+// A tier-3 (LAN) publish builds a default-drop input chain that accepts the published
+// ports only from the source CIDRs; its output chain still default-drops egress.
+func TestNFTRuleset_IngressInputChain(t *testing.T) {
+	cfg := pastaApp()
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{
+		Ingress:  true,
+		Host:     true,
+		IPv4CIDR: []string{"192.168.1.0/24"},
+		Ports:    []int{80, 443},
+	}}
+	rules := NFTRuleset(cfg)
+	for _, want := range []string{
+		"chain input {",
+		"hook input priority 0; policy drop;",
+		`iif "lo" accept`,
+		"ip saddr { 192.168.1.0/24 } tcp dport { 80, 443 } accept",
+		"ip saddr { 192.168.1.0/24 } udp dport { 80, 443 } accept",
+		"hook output priority 0; policy drop;", // pure publisher: no egress
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("input-chain ruleset missing %q\n---\n%s", want, rules)
+		}
+	}
+}
+
+// With no source CIDR an ingress list opens the ports to any source (no saddr match).
+func TestNFTRuleset_IngressAnySource(t *testing.T) {
+	cfg := pastaApp()
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Host: true, Ports: []int{8080}}}
+	rules := NFTRuleset(cfg)
+	if !strings.Contains(rules, "tcp dport { 8080 } accept") {
+		t.Errorf("no CIDR should accept the port from any source:\n%s", rules)
+	}
+	if strings.Contains(rules, "saddr") {
+		t.Errorf("no CIDR should emit no saddr match:\n%s", rules)
+	}
+}
+
+// A tier-3 list forwards its ports onto the pod (tcp and udp), with no host-port remap.
+func TestPodCreate_PublishesTier3Ports(t *testing.T) {
+	cfg := pastaApp()
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Host: true, Ports: []int{80}}}
+	steps := Enforcer{}.Prepare(cfg, options.HostOptions{})
+	create := steps[0].Args
+	assertContainsSeq(t, create, "-p", "80:80/tcp")
+	assertContainsSeq(t, create, "-p", "80:80/udp")
+}
+
+// A self-scoped ingress (tier 2) publishes nothing to the host — pod create carries no
+// -p (the app layer rejects such a config anyway, but the enforcer must not host-expose).
+func TestPodCreate_SelfIngressPublishesNothing(t *testing.T) {
+	cfg := pastaApp()
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
+	steps := Enforcer{}.Prepare(cfg, options.HostOptions{})
+	if slices.Contains(steps[0].Args, "-p") {
+		t.Errorf("self-scoped ingress must not publish to the host:\n%v", steps[0].Args)
+	}
+}
+
 // The enforcer attaches a filtered app to its pod and prepares the netns with two
 // steps — pod create (pasta netns) then nft lock — before the app ever runs, so there
 // is no unfiltered-egress window (§5.3).

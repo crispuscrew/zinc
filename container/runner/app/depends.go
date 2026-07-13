@@ -51,23 +51,25 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 	return nil
 }
 
-// checkNetwork fails closed on NetworkLists this build cannot enforce yet: an ingress
-// (published-port) list, a host-scoped list, a sibling AppName link, or a routing
-// gateway (multi-homing). Only self-scoped egress allow/deny lists (own pasta netns +
-// nft output chain, §5.3) are supported; the rest are schema-legal but deferred, so a
-// config using them is rejected at launch rather than silently mis-enforced (an ingress
-// list would otherwise be read as an egress grant).
+// checkNetwork fails closed on NetworkLists this build cannot enforce yet. Supported:
+// self-scoped egress allow/deny lists (own pasta netns + nft output chain, §5.3) and
+// tier-3 LAN publishing (Ingress && Host — nft input chain + pod `-p`). Deferred and
+// rejected here so a config using them is stopped at launch rather than silently
+// mis-enforced: self-scoped ingress (tier-2 sibling reach), host-scoped egress, a
+// sibling AppName link, and a routing gateway (multi-homing).
 func checkNetwork(cfg schema.AppConfig) error {
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		switch {
-		case netList.Ingress:
-			return fmt.Errorf("%s: NetworkLists[%d]: publishing ports (Ingress) is not supported in this build yet", cfg.AppNameID, index)
-		case netList.Host:
-			return fmt.Errorf("%s: NetworkLists[%d]: host-scoped networking is not supported in this build yet", cfg.AppNameID, index)
-		case strings.TrimSpace(netList.AppName) != "":
-			return fmt.Errorf("%s: NetworkLists[%d]: sharing a sibling app's network (AppName %q) is not supported in this build yet", cfg.AppNameID, index, netList.AppName)
 		case netList.GatewayV4 != "" || netList.GatewayV6 != "":
 			return fmt.Errorf("%s: NetworkLists[%d]: routing through a gateway (multi-homing) is not supported in this build yet", cfg.AppNameID, index)
+		case netList.Ingress && netList.Host:
+			// tier-3: publish ports to the LAN. Supported.
+		case netList.Ingress:
+			return fmt.Errorf("%s: NetworkLists[%d]: publishing to a sibling app (self-scoped Ingress) is not supported in this build yet", cfg.AppNameID, index)
+		case netList.Host:
+			return fmt.Errorf("%s: NetworkLists[%d]: host-scoped egress is not supported in this build yet", cfg.AppNameID, index)
+		case strings.TrimSpace(netList.AppName) != "":
+			return fmt.Errorf("%s: NetworkLists[%d]: sharing a sibling app's network (AppName %q) is not supported in this build yet", cfg.AppNameID, index, netList.AppName)
 		}
 	}
 	return nil
