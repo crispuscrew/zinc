@@ -159,14 +159,78 @@ func TestPodCreate_PublishesTier3Ports(t *testing.T) {
 	assertContainsSeq(t, create, "-p", "80:80/udp")
 }
 
-// A self-scoped ingress (tier 2) publishes nothing to the host — pod create carries no
-// -p (the app layer rejects such a config anyway, but the enforcer must not host-expose).
-func TestPodCreate_SelfIngressPublishesNothing(t *testing.T) {
+// A tier-2 producer (self-scoped ingress) publishes nothing to the host — no `-p` in any
+// prepare step (it is reachable only over its private link).
+func TestPodCreate_Tier2PublishesNothing(t *testing.T) {
 	cfg := pastaApp()
 	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
+	for _, step := range (Enforcer{}).Prepare(cfg, options.HostOptions{}) {
+		if slices.Contains(step.Args, "-p") {
+			t.Errorf("tier-2 producer must not publish to the host:\n%v", step.Args)
+		}
+	}
+}
+
+// A tier-2 producer's pod attaches only to its own private link on a fixed interface —
+// no pasta — after the bridge is created idempotently as internal.
+func TestTier2_ProducerPrepare(t *testing.T) {
+	cfg := pastaApp()
+	cfg.AppNameID = "db"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
 	steps := Enforcer{}.Prepare(cfg, options.HostOptions{})
-	if slices.Contains(steps[0].Args, "-p") {
-		t.Errorf("self-scoped ingress must not publish to the host:\n%v", steps[0].Args)
+	assertContainsSeq(t, steps[0].Args, "network", "create")
+	for _, want := range []string{"--ignore", "--internal", "zinc-link-db"} {
+		if !slices.Contains(steps[0].Args, want) {
+			t.Fatalf("link create missing %q, got %v", want, steps[0].Args)
+		}
+	}
+	if !slices.Contains(steps[1].Args, "zinc-link-db:interface_name=zlink0,alias=db") {
+		t.Fatalf("pod should attach to its link on zlink0 with alias=db, got %v", steps[1].Args)
+	}
+	if slices.Contains(steps[1].Args, "pasta") {
+		t.Fatalf("a tier-2 pod must not use pasta, got %v", steps[1].Args)
+	}
+}
+
+// A tier-2 consumer attaches to the producer's link and reaches it over that interface;
+// it accepts nothing new inbound (it publishes no ports).
+func TestTier2_ConsumerRuleset(t *testing.T) {
+	cfg := pastaApp()
+	cfg.AppNameID = "client"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{AppName: "db"}}
+	if !slices.Contains(podCreateArgs(cfg, PodName("client")), "zinc-link-db:interface_name=zlink0,alias=client") {
+		t.Fatalf("consumer should attach to the producer's link with its own alias")
+	}
+	rules := NFTRuleset(cfg)
+	if !strings.Contains(rules, `oifname "zlink0" accept`) {
+		t.Errorf("consumer should reach the producer over the link:\n%s", rules)
+	}
+	if strings.Contains(rules, "dport") {
+		t.Errorf("a consumer publishes nothing, so no dport accepts expected:\n%s", rules)
+	}
+}
+
+// A tier-2 producer's ruleset is interface-gated: its published ports are accepted inbound
+// only on its own link interface, link traffic is permitted out, both chains default-drop,
+// and there are no address rules.
+func TestTier2_ProducerRuleset(t *testing.T) {
+	cfg := pastaApp()
+	cfg.AppNameID = "db"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
+	rules := NFTRuleset(cfg)
+	for _, want := range []string{
+		"hook input priority 0; policy drop;",
+		"hook output priority 0; policy drop;",
+		`iifname "zlink0" tcp dport { 5432 } accept`,
+		`iifname "zlink0" udp dport { 5432 } accept`,
+		`oifname "zlink0" accept`,
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("producer link ruleset missing %q\n---\n%s", want, rules)
+		}
+	}
+	if strings.Contains(rules, "daddr") || strings.Contains(rules, "saddr") {
+		t.Errorf("a tier-2 ruleset must be interface-gated, not address-gated:\n%s", rules)
 	}
 }
 

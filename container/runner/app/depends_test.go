@@ -162,14 +162,47 @@ func TestCheckNetwork_Tier3PublishAllowed(t *testing.T) {
 	}
 }
 
-// Self-scoped ingress (tier-2 sibling reach) is still deferred, so it fails closed.
-func TestCheckNetwork_SelfIngressFailsClosed(t *testing.T) {
-	cfg := depApp("pub")
+// A tier-2 producer (self-scoped ingress) is enforceable now, so checkNetwork accepts it.
+func TestCheckNetwork_Tier2ProducerAllowed(t *testing.T) {
+	cfg := depApp("db")
 	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
 		Ingress: true, Ports: []int{5432},
 	}}}
+	if err := checkNetwork(cfg); err != nil {
+		t.Fatalf("tier-2 producer should be allowed, got: %v", err)
+	}
+}
+
+// A tier-2 consumer (egress naming a sibling AppName) is enforceable now.
+func TestCheckNetwork_Tier2ConsumerAllowed(t *testing.T) {
+	cfg := depApp("client")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{AppName: "db"}}}
+	if err := checkNetwork(cfg); err != nil {
+		t.Fatalf("tier-2 consumer should be allowed, got: %v", err)
+	}
+}
+
+// A tier-2 app may not also carry other networking — coexistence is deferred, fail closed.
+func TestCheckNetwork_Tier2MixRejected(t *testing.T) {
+	cfg := depApp("db")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{
+		{Ingress: true, Ports: []int{5432}},
+		{IPv4CIDR: []string{"1.1.1.1/32"}, Ports: []int{443}},
+	}}
 	err := checkNetwork(cfg)
 	if err == nil || !strings.Contains(err.Error(), "not supported in this build yet") {
-		t.Fatalf("self-scoped ingress should fail closed, got: %v", err)
+		t.Fatalf("mixing links with other networking should fail closed, got: %v", err)
+	}
+}
+
+// An ingress list that names an AppName is contradictory and rejected.
+func TestCheckNetwork_IngressWithAppNameRejected(t *testing.T) {
+	cfg := depApp("db")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
+		Ingress: true, AppName: "client", Ports: []int{5432},
+	}}}
+	err := checkNetwork(cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot target an AppName") {
+		t.Fatalf("ingress with AppName should be rejected, got: %v", err)
 	}
 }
