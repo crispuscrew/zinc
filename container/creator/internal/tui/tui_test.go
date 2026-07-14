@@ -7,13 +7,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/crispuscrew/hyprzinc/core/adapters/fs"
-	"github.com/crispuscrew/hyprzinc/core/domain"
-	"github.com/crispuscrew/hyprzinc/core/wire"
-	"github.com/crispuscrew/hyprzinc/hzc/internal/keys"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/schema/validate"
+	"github.com/crispuscrew/zinc/container/creator/internal/backend"
+	"github.com/crispuscrew/zinc/container/creator/internal/keys"
+	"github.com/crispuscrew/zinc/container/creator/internal/store"
 )
 
-var errTest = errors.New("bad toml")
+var errTest = errors.New("bad yaml")
 
 func key(spec string) tea.KeyMsg {
 	switch spec {
@@ -38,34 +39,41 @@ func key(spec string) tea.KeyMsg {
 	}
 }
 
-func sample(name string) domain.AppConfig {
-	cfg, _ := domain.DefaultsFor(domain.PresetStrict)
-	cfg.App.Name = name
-	cfg.App.Image = "docker.io/library/" + name + "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	return cfg
+// img is a valid digest-pinned reference for a name (§5.5).
+func img(name string) string {
+	return "docker.io/library/" + name + "@sha256:" + strings.Repeat("a", 64)
 }
 
-// newLoaded returns a model whose store holds the given apps, already loaded, using
-// the default keybind scheme.
-func newLoaded(t *testing.T, names ...string) (Model, *fs.Store) {
+func sample(name string) schema.AppConfig {
+	return schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion,
+		Type:          schema.ZincContainer,
+		AppNameID:     name,
+		ImageMeta:     schema.ImageMeta{Image: img(name)},
+	}
+}
+
+// newLoaded returns a model whose store holds the given apps, already loaded, using the
+// default keybind scheme.
+func newLoaded(t *testing.T, names ...string) (Model, *store.Store) {
 	t.Helper()
 	return loadedWith(t, keys.Active{}, names...)
 }
 
 // loadedWith is newLoaded with an explicit keybind scheme (for remap tests). A zero
-// keys.Active falls back to the default scheme. The service is wired with the real
-// podman adapters; the runtime queries (running set) degrade to empty without podman,
-// which is exactly what these UI-logic tests want.
-func loadedWith(t *testing.T, active keys.Active, names ...string) (Model, *fs.Store) {
+// keys.Active falls back to the default scheme. The backend delegates runtime queries
+// (the running set) to zcr, which is absent under test; that degrades to "nothing
+// running", which is exactly what these UI-logic tests want.
+func loadedWith(t *testing.T, active keys.Active, names ...string) (Model, *store.Store) {
 	t.Helper()
-	sto := &fs.Store{Root: t.TempDir()}
+	sto := &store.Store{Root: t.TempDir()}
 	for _, name := range names {
 		if err := sto.Save(sample(name)); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
 	}
-	svc := wire.Service(sto)
-	mdl := New(svc, domain.HostOptions{}, active)
+	svc := backend.New(sto)
+	mdl := New(svc, active)
 	updated, _ := mdl.Update(loadApps(svc)()) // run the load command synchronously
 	return updated.(Model), sto
 }
@@ -107,8 +115,8 @@ func TestListToFormModes(t *testing.T) {
 	if edit.mode != modeForm || edit.form == nil || edit.form.creating {
 		t.Fatalf("e should open an edit form for the selected app")
 	}
-	if edit.form.draft.App.Name != "alpha" {
-		t.Fatalf("edit form should load 'alpha', got %q", edit.form.draft.App.Name)
+	if edit.form.draft.AppNameID != "alpha" {
+		t.Fatalf("edit form should load 'alpha', got %q", edit.form.draft.AppNameID)
 	}
 
 	back := send(edit, key("esc"))
@@ -191,10 +199,10 @@ func TestRenameUnchangedIsNoOp(t *testing.T) {
 }
 
 func TestSaveInvalidStaysInForm(t *testing.T) {
-	sto := &fs.Store{Root: t.TempDir()}
-	mdl := New(wire.Service(sto), domain.HostOptions{}, keys.Active{})
+	sto := &store.Store{Root: t.TempDir()}
+	mdl := New(backend.New(sto), keys.Active{})
 	mdl.mode = modeForm
-	mdl.form = newForm(domain.AppConfig{}, true)
+	mdl.form = newForm(schema.AppConfig{}, true)
 	mdl.form.name.SetValue("x")
 	mdl.form.image.SetValue("alpine:latest") // third-party, not digest-pinned (§5.5)
 
@@ -211,12 +219,12 @@ func TestSaveInvalidStaysInForm(t *testing.T) {
 }
 
 func TestSaveValid(t *testing.T) {
-	sto := &fs.Store{Root: t.TempDir()}
-	mdl := New(wire.Service(sto), domain.HostOptions{}, keys.Active{})
+	sto := &store.Store{Root: t.TempDir()}
+	mdl := New(backend.New(sto), keys.Active{})
 	mdl.mode = modeForm
-	mdl.form = newForm(domain.AppConfig{}, true)
+	mdl.form = newForm(schema.AppConfig{}, true)
 	mdl.form.name.SetValue("zed")
-	mdl.form.image.SetValue("docker.io/zed@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	mdl.form.image.SetValue(img("zed"))
 
 	mdl = send(mdl, key("ctrl+s"))
 	if mdl.mode != modeList {
@@ -227,31 +235,19 @@ func TestSaveValid(t *testing.T) {
 	}
 }
 
-func TestFormPresetReseed(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
-	if frm.draft.Network.Mode != domain.NetworkNone || frm.draft.Display.Wayland != domain.WaylandSecurityContext {
-		t.Fatalf("create form should start from strict defaults: %+v", frm.draft)
-	}
-	frm.applyPreset(domain.PresetNetworked)
-	if frm.draft.Network.Mode != domain.NetworkHost || frm.draft.Display.Wayland != domain.WaylandPassthrough {
-		t.Fatalf("networked preset should reseed mode/wayland: %+v", frm.draft)
-	}
-	if frm.draft.App.Preset != domain.PresetNetworked {
-		t.Fatalf("preset label should update, got %q", frm.draft.App.Preset)
-	}
-}
-
 func TestFormToConfigKeepsTypedValues(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
-	frm.image.SetValue("docker.io/firefox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	frm.applyPreset(domain.PresetNetworked) // must not clobber the typed image
+	frm := newForm(schema.AppConfig{}, true)
+	frm.image.SetValue(img("firefox"))
 	frm.name.SetValue("firefox")
 
 	cfg := frm.toConfig()
-	if cfg.App.Name != "firefox" || cfg.App.Image != "docker.io/firefox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
-		t.Fatalf("typed values lost: %+v", cfg.App)
+	if cfg.AppNameID != "firefox" || cfg.ImageMeta.Image != img("firefox") {
+		t.Fatalf("typed values lost: name=%q image=%q", cfg.AppNameID, cfg.ImageMeta.Image)
 	}
-	if err := domain.Validate(cfg); err != nil {
+	if cfg.SchemaVersion != schema.SchemaVersion || cfg.Type != schema.ZincContainer {
+		t.Fatalf("form config should carry the schema version + type: %+v", cfg)
+	}
+	if err := validate.Validate(cfg); err != nil {
 		t.Fatalf("form config should validate: %v", err)
 	}
 }
@@ -266,9 +262,9 @@ func fieldIdx(frm *formModel, label string) int {
 }
 
 func TestFormClearField(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
+	frm := newForm(schema.AppConfig{}, true)
 	frm.focus(fieldIdx(frm, "image"))
-	frm.image.SetValue("docker.io/x@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	frm.image.SetValue(img("x"))
 
 	_, res := frm.update(key("ctrl+d"))
 	if res != formStay {
@@ -279,27 +275,29 @@ func TestFormClearField(t *testing.T) {
 	}
 }
 
-func TestFormInstallApplyHintThenNewline(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
-	frm.image.SetValue("docker.io/library/alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	frm.focus(fieldIdx(frm, "install"))
-	// enter on the empty multi-line install field applies the image's suggested prefix.
-	if _, res := frm.update(key("enter")); res != formStay {
-		t.Fatalf("enter on install should stay in the form, got %v", res)
+// The entrypoint field folds to StartConditions.Entrypoint (a trimmed command line) and
+// the multi-line install folds to ImageMeta.Install (one entry per non-blank line).
+func TestFormEntrypointAndInstall(t *testing.T) {
+	frm := newForm(schema.AppConfig{}, true)
+	frm.name.SetValue("hollywood")
+	frm.image.SetValue(img("debian"))
+	frm.entrypoint.SetValue("  hollywood --speed 2 ")
+	frm.install.SetValue("  apt-get update \n apt-get install -y hollywood \n\n")
+
+	cfg := frm.toConfig()
+	if cfg.StartConditions.Entrypoint != "hollywood --speed 2" {
+		t.Fatalf("entrypoint should be trimmed and kept as a line, got %q", cfg.StartConditions.Entrypoint)
 	}
-	if got := frm.install.Value(); got != "apk add --no-cache " {
-		t.Fatalf("enter should apply the alpine install template, got %q", got)
+	if got := cfg.ImageMeta.Install; len(got) != 2 || got[0] != "apt-get update" || got[1] != "apt-get install -y hollywood" {
+		t.Fatalf("install should split to non-blank lines, got %v", got)
 	}
-	// With content, enter now inserts a newline rather than re-applying or clobbering.
-	frm.install.SetValue("apk add --no-cache firefox")
-	frm.update(key("enter"))
-	if got := frm.install.Value(); !strings.Contains(got, "apk add --no-cache firefox") || !strings.Contains(got, "\n") {
-		t.Fatalf("enter on a non-empty install field should add a line, keeping the text, got %q", got)
+	if err := validate.Validate(cfg); err != nil {
+		t.Fatalf("form config should validate: %v", err)
 	}
 }
 
 func TestFormAdvancedTriggersEdit(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
+	frm := newForm(schema.AppConfig{}, true)
 	frm.focus(fieldIdx(frm, "advanced"))
 	if _, res := frm.update(key("enter")); res != formEdit {
 		t.Fatalf("enter on the advanced row should request an editor, got %v", res)
@@ -307,20 +305,20 @@ func TestFormAdvancedTriggersEdit(t *testing.T) {
 }
 
 func TestFormReloadKeepsCreating(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true) // creating
+	frm := newForm(schema.AppConfig{}, true) // creating
 	edited := sample("edited")
-	edited.App.Image = "docker.io/edited@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	edited.Network.Mode = domain.NetworkHost
+	edited.ImageMeta.Image = "docker.io/edited@sha256:" + strings.Repeat("d", 64)
+	edited.HostTheme = true
 
 	frm.reload(edited)
 	if !frm.creating {
 		t.Fatal("reload must preserve the creating flag")
 	}
-	if frm.image.Value() != edited.App.Image {
+	if frm.image.Value() != edited.ImageMeta.Image {
 		t.Fatalf("reload should re-seed the image input, got %q", frm.image.Value())
 	}
-	if frm.draft.Network.Mode != domain.NetworkHost {
-		t.Fatalf("reload should swap in the edited draft, got mode %q", frm.draft.Network.Mode)
+	if !frm.draft.HostTheme {
+		t.Fatal("reload should swap in the edited draft (HostTheme)")
 	}
 }
 
@@ -331,11 +329,11 @@ func TestEditedMsgReloadsForm(t *testing.T) {
 		t.Fatal("e should open the edit form")
 	}
 	cfg := mdl.form.draft
-	cfg.App.Image = "docker.io/new@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.ImageMeta.Image = img("new")
 
 	updated, _ := mdl.Update(editedMsg{cfg: cfg})
 	mdl = updated.(Model)
-	if mdl.form == nil || mdl.form.image.Value() != cfg.App.Image {
+	if mdl.form == nil || mdl.form.image.Value() != cfg.ImageMeta.Image {
 		t.Fatalf("editedMsg should reload the form with the edited image")
 	}
 }
@@ -351,19 +349,19 @@ func TestEditedMsgErrorStaysInForm(t *testing.T) {
 }
 
 func TestFormTerminalToggle(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
+	frm := newForm(schema.AppConfig{}, true)
 	frm.focus(fieldIdx(frm, "terminal"))
-	if frm.draft.App.Terminal {
+	if frm.draft.StartConditions.Terminal {
 		t.Fatal("terminal should default off")
 	}
 	frm.update(key("enter"))
-	if !frm.draft.App.Terminal {
-		t.Fatal("enter on the terminal row should toggle app.terminal on")
+	if !frm.draft.StartConditions.Terminal {
+		t.Fatal("enter on the terminal row should toggle StartConditions.Terminal on")
 	}
 }
 
 func TestFormResolveKey(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
+	frm := newForm(schema.AppConfig{}, true)
 	frm.focus(fieldIdx(frm, "image"))
 	if _, res := frm.update(tea.KeyMsg{Type: tea.KeyCtrlR}); res != formResolve {
 		t.Fatalf("ctrl+r on the image field should request resolve, got %v", res)
@@ -377,40 +375,16 @@ func TestFormResolveKey(t *testing.T) {
 func TestResolvedMsgUpdatesImage(t *testing.T) {
 	mdl, _ := newLoaded(t, "alpha")
 	mdl = send(mdl, key("e"))
-	updated, _ := mdl.Update(resolvedMsg{ref: "docker.io/library/alpha@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"})
+	pinned := "docker.io/library/alpha@sha256:" + strings.Repeat("d", 64)
+	updated, _ := mdl.Update(resolvedMsg{ref: pinned})
 	mdl = updated.(Model)
-	if mdl.form == nil || mdl.form.image.Value() != "docker.io/library/alpha@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" {
+	if mdl.form == nil || mdl.form.image.Value() != pinned {
 		t.Fatalf("resolvedMsg should set the image field, got %q", mdl.form.image.Value())
 	}
 }
 
-func TestFormHidesNetworkTarget(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true) // strict default → network mode none
-	if fieldIdx(frm, "network.target") != -1 {
-		t.Fatal("network.target must be hidden when mode != container")
-	}
-	frm.focus(fieldIdx(frm, "network.mode"))
-	frm.update(key("right")) // none → pasta
-	frm.update(key("right")) // pasta → container
-	if frm.draft.Network.Mode != domain.NetworkContainer {
-		t.Fatalf("expected container mode after two cycles, got %q", frm.draft.Network.Mode)
-	}
-	if fieldIdx(frm, "network.target") == -1 {
-		t.Fatal("network.target must appear when mode == container")
-	}
-}
-
-func TestFormClearsTargetWhenNotContainer(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
-	frm.target.SetValue("vpn-container") // stale value from a prior container selection
-	frm.draft.Network.Mode = domain.NetworkNone
-	if got := frm.toConfig().Network.Target; got != "" {
-		t.Fatalf("target must be cleared when mode != container, got %q", got)
-	}
-}
-
-// TestSchemeDrivesListKeys proves list keys come from the active scheme, not
-// hardcoded literals: "g" refreshes under default but is unbound under vim.
+// TestSchemeDrivesListKeys proves list keys come from the active scheme, not hardcoded
+// literals: "g" refreshes under default but is unbound under vim.
 func TestSchemeDrivesListKeys(t *testing.T) {
 	def, _ := newLoaded(t, "alpha", "beta")
 	if _, cmd := def.Update(key("g")); cmd == nil {
@@ -429,14 +403,14 @@ func TestSchemeDrivesListKeys(t *testing.T) {
 // TestSchemeRemapsFormNav proves the form resolves keys through the scheme too: vim
 // binds ctrl+n to next-field; default does not.
 func TestSchemeRemapsFormNav(t *testing.T) {
-	vimForm := newForm(domain.AppConfig{}, true)
+	vimForm := newForm(schema.AppConfig{}, true)
 	vimForm.scheme = keys.Vim
 	startIdx := vimForm.idx
 	vimForm.update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	if vimForm.idx == startIdx {
 		t.Fatal("vim: ctrl+n should advance to the next field")
 	}
-	defForm := newForm(domain.AppConfig{}, true) // nil scheme → default bindings
+	defForm := newForm(schema.AppConfig{}, true) // nil scheme → default bindings
 	defStart := defForm.idx
 	defForm.update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	if defForm.idx != defStart {
@@ -468,21 +442,21 @@ func TestKeysPickerOpens(t *testing.T) {
 	}
 }
 
-// The Shell action opens another terminal only for a multiterminal app; for any
-// other app it is a no-op with an explanatory status.
+// The Shell action opens another terminal only for a multiterminal app; for any other
+// app it is a no-op with an explanatory status.
 func TestShellActionMultiterminalOnly(t *testing.T) {
-	sto := &fs.Store{Root: t.TempDir()}
+	sto := &store.Store{Root: t.TempDir()}
 	multi := sample("alpha") // sorts first → selected at start
-	multi.App.Terminal = true
-	multi.App.Multiterminal = true
-	multi.App.Command = []string{"htop"}
-	for _, cfg := range []domain.AppConfig{multi, sample("beta")} {
+	multi.StartConditions.Terminal = true
+	multi.StartConditions.Multiterminal = true
+	multi.StartConditions.Entrypoint = "htop"
+	for _, cfg := range []schema.AppConfig{multi, sample("beta")} {
 		if err := sto.Save(cfg); err != nil {
-			t.Fatalf("seed %s: %v", cfg.App.Name, err)
+			t.Fatalf("seed %s: %v", cfg.AppNameID, err)
 		}
 	}
-	svc := wire.Service(sto)
-	mdl := New(svc, domain.HostOptions{}, keys.Active{})
+	svc := backend.New(sto)
+	mdl := New(svc, keys.Active{})
 	updated, _ := mdl.Update(loadApps(svc)())
 	mdl = updated.(Model)
 
@@ -499,73 +473,31 @@ func TestShellActionMultiterminalOnly(t *testing.T) {
 	}
 }
 
-// The Build action needs an install line: it returns a build command for an app with
-// app.install, and is a no-op (with a status hint) for one without.
+// The Build action needs install lines: it returns a build command for an app with
+// ImageMeta.Install, and is a no-op (with a status hint) for one without.
 func TestBuildActionRequiresInstall(t *testing.T) {
-	sto := &fs.Store{Root: t.TempDir()}
+	sto := &store.Store{Root: t.TempDir()}
 	withInstall := sample("alpha") // sorts first → selected at start
-	withInstall.App.Install = "apk add --no-cache sl"
-	for _, cfg := range []domain.AppConfig{withInstall, sample("beta")} {
+	withInstall.ImageMeta.Install = []string{"apk add --no-cache sl"}
+	for _, cfg := range []schema.AppConfig{withInstall, sample("beta")} {
 		if err := sto.Save(cfg); err != nil {
-			t.Fatalf("seed %s: %v", cfg.App.Name, err)
+			t.Fatalf("seed %s: %v", cfg.AppNameID, err)
 		}
 	}
-	svc := wire.Service(sto)
-	mdl := New(svc, domain.HostOptions{}, keys.Active{})
+	svc := backend.New(sto)
+	mdl := New(svc, keys.Active{})
 	updated, _ := mdl.Update(loadApps(svc)())
 	mdl = updated.(Model)
 
 	if _, cmd := mdl.Update(key("b")); cmd == nil {
-		t.Fatal("build on an app with an install line should return a command")
+		t.Fatal("build on an app with install lines should return a command")
 	}
 	mdl = send(mdl, key("j")) // move to beta (no install)
 	updated, cmd := mdl.Update(key("b"))
 	if cmd != nil {
-		t.Fatal("build on an app without an install line should be a no-op")
+		t.Fatal("build on an app without install lines should be a no-op")
 	}
 	if got := updated.(Model).status; !strings.Contains(got, "nothing to build") {
 		t.Fatalf("expected a 'nothing to build' status, got %q", got)
-	}
-}
-
-// The form's entrypoint + install fields fold into App.Command / App.Install: a
-// space-separated command splits to argv, and the install line passes through.
-func TestFormCommandAndInstallRoundtrip(t *testing.T) {
-	frm := newForm(domain.AppConfig{}, true)
-	frm.name.SetValue("hollywood")
-	frm.image.SetValue("docker.io/library/debian@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	frm.command.SetValue("  hollywood --speed 2 ")
-	frm.install.SetValue("  apt-get update && apt-get install -y hollywood ")
-
-	cfg := frm.toConfig()
-	if got := cfg.App.Command; len(got) != 3 || got[0] != "hollywood" || got[2] != "2" {
-		t.Fatalf("command should split on whitespace, got %v", got)
-	}
-	if cfg.App.Install != "apt-get update && apt-get install -y hollywood" {
-		t.Fatalf("install line should be trimmed and kept, got %q", cfg.App.Install)
-	}
-	if err := domain.Validate(cfg); err != nil {
-		t.Fatalf("form config should validate: %v", err)
-	}
-}
-
-// Editing an app without touching the command field must not flatten a complex argv
-// (quoted, multi-word) that was authored via the advanced TOML editor.
-func TestFormCommandPreservesComplexArgv(t *testing.T) {
-	cfg := sample("svc")
-	cfg.App.Command = []string{"sh", "-c", "echo hi"} // 3 elements; field shows "sh -c echo hi"
-	frm := newForm(cfg, false)
-	if got := frm.toConfig().App.Command; len(got) != 3 {
-		t.Fatalf("untouched command must be preserved verbatim, got %v", got)
-	}
-}
-
-func TestCycle(t *testing.T) {
-	opts := []string{domain.NetworkNone, domain.NetworkHost, domain.NetworkContainer}
-	if got := cycle(opts, domain.NetworkNone, +1); got != domain.NetworkHost {
-		t.Fatalf("cycle +1 = %q, want pasta", got)
-	}
-	if got := cycle(opts, domain.NetworkNone, -1); got != domain.NetworkContainer {
-		t.Fatalf("cycle -1 should wrap to container, got %q", got)
 	}
 }

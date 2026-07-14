@@ -6,7 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/crispuscrew/hyprzinc/hzc/internal/keys"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/container/creator/internal/keys"
 )
 
 var (
@@ -42,7 +43,7 @@ func (mdl Model) View() string {
 
 func (mdl Model) listView() string {
 	var bld strings.Builder
-	bld.WriteString(titleStyle.Render("HyprZinc — apps") + "\n\n")
+	bld.WriteString(titleStyle.Render("Zinc — apps") + "\n\n")
 
 	if len(mdl.apps) == 0 {
 		bld.WriteString(dim.Render("no apps yet — press n to create one") + "\n")
@@ -56,13 +57,13 @@ func (mdl Model) listView() string {
 		if row.running {
 			dot = runDot.Render("●")
 		}
-		name := fmt.Sprintf("%-16s", row.cfg.App.Name)
-		preset := fmt.Sprintf("%-10s", presetLabel(row.cfg.App.Preset))
-		detail := row.cfg.App.Image
+		name := fmt.Sprintf("%-16s", row.cfg.AppNameID)
+		net := fmt.Sprintf("%-10s", netLabel(row.cfg))
+		detail := row.cfg.ImageMeta.Image
 		if row.loadErr != nil {
 			detail = errStyle.Render("(invalid: " + row.loadErr.Error() + ")")
 		}
-		line := cursor + dot + " " + name + " " + preset + " " + detail
+		line := cursor + dot + " " + name + " " + net + " " + detail
 		if idx == mdl.cursor {
 			line = selected.Render(line)
 		}
@@ -80,11 +81,11 @@ func (mdl Model) listView() string {
 	return bld.String()
 }
 
-// listFooter shows only the actions that apply to the current selection and its
-// state — so the help line is never a "porridge" of every key (§9.1). Global actions
+// listFooter shows only the actions that apply to the current selection and its state —
+// so the help line is never a "porridge" of every key (§9.1). Global actions
 // (new/refresh/keys/quit) always show; edit/delete need a selection; run shows when
 // stopped (or for any multiterminal app, where it adds a terminal), stop/logs when
-// running, build when an install line is set. Each gesture shows its primary key only.
+// running, build when install lines are set. Each gesture shows its primary key only.
 func (mdl Model) listFooter() string {
 	scheme := mdl.keys.Scheme
 	var segs []string
@@ -98,17 +99,17 @@ func (mdl Model) listFooter() string {
 		if row.loadErr == nil {
 			add(keys.Edit, "edit")
 			add(keys.Rename, "rename")
-			if !row.running || row.cfg.App.Multiterminal {
+			if !row.running || row.cfg.StartConditions.Multiterminal {
 				add(keys.Run, "run")
 			}
-			if row.cfg.App.Multiterminal {
+			if row.cfg.StartConditions.Multiterminal {
 				add(keys.Shell, "shell")
 			}
 			if row.running {
 				add(keys.Stop, "stop")
 				add(keys.Logs, "logs")
 			}
-			if row.cfg.App.Install != "" {
+			if len(row.cfg.ImageMeta.Install) > 0 {
 				add(keys.Build, "build")
 			}
 		}
@@ -124,7 +125,7 @@ func (frm *formModel) view() string {
 	var bld strings.Builder
 	title := "New app"
 	if !frm.creating {
-		title = "Edit " + frm.draft.App.Name
+		title = "Edit " + frm.draft.AppNameID
 	}
 	bld.WriteString(titleStyle.Render(title) + "\n\n")
 
@@ -133,7 +134,7 @@ func (frm *formModel) view() string {
 		if idx == frm.idx {
 			cursor = "▸ "
 		}
-		label := fmt.Sprintf("%-18s", fld.label)
+		label := fmt.Sprintf("%-32s", fld.label)
 		if idx == frm.idx {
 			label = selected.Render(label)
 		}
@@ -155,8 +156,6 @@ func (frm *formModel) view() string {
 			if idx != frm.idx && fld.input.Value() == "" {
 				val = dim.Render("(empty)")
 			}
-		case kindEnum:
-			val = renderEnum(fld.options, fld.get(), idx == frm.idx)
 		case kindBool:
 			val = renderBool(fld.bget())
 		case kindInfo, kindAction:
@@ -173,9 +172,9 @@ func (frm *formModel) view() string {
 }
 
 // footer shows only the gestures for the focused field's kind, plus the always-
-// available move/save/cancel — so an enum row doesn't advertise "toggle", a bool row
-// doesn't advertise "resolve", and the help line stays short (§9.1). Each gesture
-// shows its primary key only, drawn from the active scheme.
+// available move/save/cancel — so a bool row doesn't advertise "resolve" and the help
+// line stays short (§9.1). Each gesture shows its primary key only, from the active
+// scheme.
 func (frm *formModel) footer() string {
 	scheme := frm.scheme
 	var segs []string
@@ -194,14 +193,7 @@ func (frm *formModel) footer() string {
 			}
 		case kindMultiline:
 			add(scheme.HintPrimary(keys.CtxForm, keys.ClearField), "clear")
-			if fld.area != nil && strings.TrimSpace(fld.area.Value()) == "" {
-				add(scheme.HintPrimary(keys.CtxForm, keys.Activate), "apply hint")
-			} else {
-				add(scheme.HintPrimary(keys.CtxForm, keys.Activate), "newline")
-			}
-		case kindEnum:
-			change := strings.Trim(scheme.HintPrimary(keys.CtxForm, keys.EnumPrev)+"/"+scheme.HintPrimary(keys.CtxForm, keys.EnumNext), "/")
-			add(change, "change")
+			add(scheme.HintPrimary(keys.CtxForm, keys.Activate), "newline")
 		case kindBool:
 			add(scheme.HintPrimary(keys.CtxForm, keys.Toggle), "toggle")
 		case kindAction:
@@ -228,8 +220,8 @@ func (mdl Model) confirmView() string {
 		scheme.HintPrimary(keys.CtxConfirm, keys.Yes), scheme.HintPrimary(keys.CtxConfirm, keys.No))) + "\n"
 }
 
-// renameView is the rename prompt (modeRename): a single text input prefilled with
-// the current name. enter/esc are intrinsic prompt keys, so they stay literal.
+// renameView is the rename prompt (modeRename): a single text input prefilled with the
+// current name. enter/esc are intrinsic prompt keys, so they stay literal.
 func (mdl Model) renameView() string {
 	return "\n  " + titleStyle.Render("Rename "+mdl.renameFrom) +
 		"\n\n  " + mdl.rename.View() +
@@ -237,11 +229,11 @@ func (mdl Model) renameView() string {
 		"\n  " + dim.Render("renames by recreating under the new name; the app must be stopped") + "\n"
 }
 
-// keysView is the keybind-scheme picker (modeKeys): every selectable scheme, the
-// active one marked, built-in vs custom labelled.
+// keysView is the keybind-scheme picker (modeKeys): every selectable scheme, the active
+// one marked, built-in vs custom labelled.
 func (mdl Model) keysView() string {
 	var bld strings.Builder
-	bld.WriteString(titleStyle.Render("HyprZinc — keybind schemes") + "\n\n")
+	bld.WriteString(titleStyle.Render("Zinc — keybind schemes") + "\n\n")
 	if len(mdl.keysList) == 0 {
 		bld.WriteString(dim.Render("loading…") + "\n")
 	}
@@ -276,22 +268,6 @@ func (mdl Model) keysView() string {
 	return bld.String()
 }
 
-func renderEnum(opts []string, cur string, active bool) string {
-	parts := make([]string, len(opts))
-	for idx, opt := range opts {
-		if opt == cur {
-			parts[idx] = enumSel.Render(opt)
-		} else {
-			parts[idx] = dim.Render(opt)
-		}
-	}
-	rendered := strings.Join(parts, "  ")
-	if active {
-		rendered = "‹ " + rendered + " ›"
-	}
-	return rendered
-}
-
 func renderBool(val bool) string {
 	if val {
 		return enumSel.Render("[x] on")
@@ -299,9 +275,11 @@ func renderBool(val bool) string {
 	return dim.Render("[ ] off")
 }
 
-func presetLabel(preset string) string {
-	if preset == "" {
-		return "(none)"
+// netLabel summarizes an app's network posture for the app list: "isolated" when it has
+// no NetworkLists (own localhost only), else the number of lists it carries.
+func netLabel(cfg schema.AppConfig) string {
+	if n := len(cfg.NetworkMeta.NetworkLists); n > 0 {
+		return fmt.Sprintf("net:%d", n)
 	}
-	return preset
+	return "isolated"
 }

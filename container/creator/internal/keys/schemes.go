@@ -2,14 +2,14 @@ package keys
 
 // Built-in schemes. There are two, by design:
 //
-//   - default — exactly hzc's historical bindings, so an install with no
+//   - default — exactly zcc's historical bindings, so an install with no
 //     keys.toml behaves identically to before this feature existed.
 //   - vim     — a small variant for muscle-memory: ctrl+n/ctrl+p also move
 //     between form fields, and the list "refresh" drops bare "g" (freeing it
 //     for vim-flavoured custom bindings). ctrl+n/ctrl+p are used rather than
 //     ctrl+j/ctrl+k because Ctrl+J is the newline byte and clashes with Enter.
 //
-// Honest note: hzc's defaults are already largely keyboard/vim-friendly (j/k
+// Honest note: zcc's defaults are already largely keyboard/vim-friendly (j/k
 // navigate, h/l cycle), so the gap between the two presets is intentionally
 // small. The real point of the feature is letting users define their own
 // schemes (see store.go); the two built-ins are the starting points to copy.
