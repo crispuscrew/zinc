@@ -1,15 +1,15 @@
-// Package keys defines hzc's TUI keybindings as selectable schemes
+// Package keys defines zcc's TUI keybindings as selectable schemes
 // (docs/architecture.md §9.1).
 //
-// These are hzc's OWN terminal-UI keys — how you drive the Bubbletea app
+// These are zcc's OWN terminal-UI keys — how you drive the Bubbletea app
 // (move the list, save the form, scroll logs). They are deliberately distinct
-// from the Hyprland desktop hotkeys (§12), which are a separate, host-level
-// concern owned by the Nix module (M8/M10).
+// from the desktop hotkeys (§12), which are a separate, host-level concern
+// owned by the Nix module (M8/M10).
 //
 // The package is split functional-core / imperative-shell like the rest of the
 // project: this file plus schemes.go and validate.go are pure (no I/O) — a
 // Scheme is just data and Resolve is a lookup — while store.go reads and writes
-// the on-disk selection under ~/.config/hyprzinc/hzc.
+// the on-disk selection under ~/.config/zinc/zcc.
 package keys
 
 import "strings"
@@ -82,7 +82,7 @@ var ContextName = map[Context]string{
 
 // ActionsByContext is every valid action per context, in display order. It is
 // the source of truth for validation (unknown action names) and for iterating
-// bindings in `hzc keys show`.
+// bindings in `zcc keys show`.
 var ActionsByContext = map[Context][]Action{
 	CtxList:    {Up, Down, Refresh, New, Edit, Run, Shell, Build, Stop, Logs, Rename, Delete, Keys, Quit},
 	CtxForm:    {NextField, PrevField, EnumPrev, EnumNext, Toggle, Activate, ClearField, ResolveImage, Save, Cancel},

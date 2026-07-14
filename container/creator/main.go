@@ -1,21 +1,26 @@
-// Command hzc is HyprZinc's container-definition tool (docs/architecture.md §9.1).
+// Command zcc is Zinc's app-definition tool (docs/architecture.md §9.1).
 //
-// It is the composition root of the hexagon: it assembles the core application
-// service (core/wire → store + podman runtime/builder/resolver + the egress
-// enforcers) and drives it from the CLI and the Bubbletea TUI.
+// It authors app files (~/.config/zinc/apps/<name>.yaml) and manages them: create, edit,
+// list, validate, delete, and a keyboard-first TUI. To RUN what it authors it shells out
+// to the `zcr` binary — Zinc's container runtime — so zcc never imports the runner and
+// knows nothing about podman; the two meet only at the on-disk format and at that process
+// boundary. zcr must be on $PATH for the run/manage commands; authoring works without it.
 //
-//	hzc tui                           keyboard-first manager
-//	hzc new <name> --image <img> [--preset strict|standard|networked]
-//	hzc list                          # defined apps
-//	hzc validate <name|app.toml>      # parse + validate, report problems
-//	hzc delete <name>
-//	hzc run <name|app.toml> [--exec]  # build the launch plan; print it, or launch
-//	hzc build <name|app.toml>         # (re)build an app's derived image (app.install)
-//	hzc stop|restart|inspect <name>
-//	hzc logs <name> [-f]
+//	zcc tui                             keyboard-first manager (create/edit/run/stop/logs)
+//	zcc new <name> --image <img> [--desc d] [--icon i]
+//	zcc list
+//	zcc validate <name|app.yaml>
+//	zcc delete <name>
+//	zcc keys list|show|set <s>|edit|validate|path   TUI keybind schemes
+//	zcc run <name|app.yaml> [--exec]    ⟶ zcr run
+//	zcc build <name|app.yaml>           ⟶ zcr build
+//	zcc stop|restart|inspect <name>     ⟶ zcr
+//	zcc logs <name> [-f]                ⟶ zcr logs
+//	zcc term <name> [--shell]           ⟶ zcr term
+//	zcc image search <term>|resolve <ref>   ⟶ zcr image
 //
-// A bare <name> resolves against the store (~/.config/hyprzinc/apps); an argument
-// that looks like a path (contains "/" or ends in ".toml") is read directly.
+// A bare <name> resolves against the store (~/.config/zinc/apps); an argument that looks
+// like a path (contains "/" or ends in ".yaml") is read directly.
 package main
 
 import (
@@ -27,35 +32,33 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/crispuscrew/hyprzinc/core/adapters/host"
-	"github.com/crispuscrew/hyprzinc/core/adapters/podman"
-	"github.com/crispuscrew/hyprzinc/core/app"
-	"github.com/crispuscrew/hyprzinc/core/domain"
-	"github.com/crispuscrew/hyprzinc/core/ports"
-	"github.com/crispuscrew/hyprzinc/core/wire"
-	"github.com/crispuscrew/hyprzinc/hzc/internal/keys"
-	"github.com/crispuscrew/hyprzinc/hzc/internal/tui"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/schema/validate"
+	"github.com/crispuscrew/zinc/container/creator/internal/backend"
+	"github.com/crispuscrew/zinc/container/creator/internal/keys"
+	"github.com/crispuscrew/zinc/container/creator/internal/runner"
+	"github.com/crispuscrew/zinc/container/creator/internal/store"
+	"github.com/crispuscrew/zinc/container/creator/internal/tui"
 )
 
-const usage = `usage: hzc <command> [args]
+const usage = `usage: zcc <command> [args]
 
   tui                               keyboard-first manager (create/edit/run/stop/logs)
-  new <name> --image <img> [--preset strict|standard|networked] [--desc d] [--icon i]
+  new <name> --image <img> [--desc d] [--icon i]
   list
-  validate <name|app.toml>
+  validate <name|app.yaml>
   delete <name>
-  run <name|app.toml> [--exec]
-  build <name|app.toml>            (re)build the derived image for an app with app.install (§5.5)
-  image search <term>              find images on configured registries
-  image resolve <ref>              pin a tag to its @sha256 digest (§5.5)
   keys list|show|set <s>|edit|validate|path   TUI keybind schemes (default|vim|custom)
-  term <name> [--shell]            open a terminal for a multiterminal app (§9.1)
-  stop|restart|inspect <name>
-  logs <name> [-f]`
+  run <name|app.yaml> [--exec]      build the launch plan; print it, or launch    (⟶ zcr)
+  build <name|app.yaml>             (re)build the derived image (ImageMeta.Install) (⟶ zcr)
+  stop|restart|inspect <name>       (⟶ zcr)
+  logs <name> [-f]                  (⟶ zcr)
+  term <name> [--shell]             open a terminal for a multiterminal app        (⟶ zcr)
+  image search <term>|resolve <ref> find/pin an image (§5.5)                       (⟶ zcr)`
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "hzc: "+err.Error())
+		fmt.Fprintln(os.Stderr, "zcc: "+err.Error())
 		os.Exit(1)
 	}
 }
@@ -64,22 +67,32 @@ func run(argv []string) error {
 	if len(argv) < 1 {
 		return fmt.Errorf("%s", usage)
 	}
-	// keys is self-contained (hzc's own config dir), so dispatch it before wiring the
-	// app service — it needs neither the store nor podman.
 	cmd, rest := argv[0], argv[1:]
+
+	// keys is self-contained (zcc's own config dir); dispatch it before building the
+	// store — it needs neither the store nor the runtime.
 	if cmd == "keys" {
 		return cmdKeys(rest)
 	}
 
-	svc, err := wire.DefaultService()
+	// Runtime commands are delegated verbatim to the zcr binary (Zinc's runtime): zcc
+	// authors app files, zcr runs them. Forwarding the whole argv keeps `zcc run X`
+	// identical to `zcr run X`, streaming output live and preserving the exit status.
+	switch cmd {
+	case "run", "build", "stop", "restart", "inspect", "logs", "term", "image":
+		return runner.Passthrough(argv...)
+	}
+
+	// Authoring commands work on the store locally; no runtime needed.
+	sto, err := store.Default()
 	if err != nil {
 		return err
 	}
-	opt := host.Options()
+	svc := backend.New(sto)
 
 	switch cmd {
 	case "tui":
-		return cmdTUI(svc, opt)
+		return cmdTUI(svc)
 	case "new":
 		return cmdNew(svc, rest)
 	case "list":
@@ -88,59 +101,42 @@ func run(argv []string) error {
 		return cmdValidate(svc, rest)
 	case "delete":
 		return cmdDelete(svc, rest)
-	case "run":
-		return cmdRun(svc, opt, rest)
-	case "build":
-		return cmdBuild(svc, rest)
-	case "image":
-		return cmdImage(svc, rest)
-	case "term":
-		return cmdTerm(svc, opt, rest)
-	case "__term":
-		// Hidden: the per-terminal waiter process spawned by OpenTerminal. It blocks
-		// until the terminal closes and is responsible for the last-one-out stop.
-		return cmdTermWaiter(svc, opt, rest)
-	case "stop", "restart", "inspect":
-		return cmdLifecycle(svc, opt, cmd, rest)
-	case "logs":
-		return cmdLogs(svc, rest)
 	default:
 		return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 	}
 }
 
-func cmdTUI(svc app.Service, opt domain.HostOptions) error {
-	_, err := tea.NewProgram(tui.New(svc, opt, loadKeys()), tea.WithAltScreen()).Run()
+func cmdTUI(svc backend.Service) error {
+	_, err := tea.NewProgram(tui.New(svc, loadKeys()), tea.WithAltScreen()).Run()
 	return err
 }
 
-// loadKeys resolves the active TUI keybind scheme. A missing or broken scheme must
-// never stop the TUI from starting, so any error falls back to the default (today's
-// bindings) with a warning on stderr.
+// loadKeys resolves the active TUI keybind scheme. A missing or broken scheme must never
+// stop the TUI from starting, so any error falls back to the default (today's bindings)
+// with a warning on stderr.
 func loadKeys() keys.Active {
 	if kst, err := keys.DefaultStore(); err == nil {
 		if active, lerr := kst.Load(); lerr == nil {
 			return active
 		} else {
-			fmt.Fprintln(os.Stderr, "hzc: keybinds: "+lerr.Error()+" — using default")
+			fmt.Fprintln(os.Stderr, "zcc: keybinds: "+lerr.Error()+" — using default")
 		}
 	} else {
-		fmt.Fprintln(os.Stderr, "hzc: keybinds: "+err.Error()+" — using default")
+		fmt.Fprintln(os.Stderr, "zcc: keybinds: "+err.Error()+" — using default")
 	}
 	return keys.Active{Name: "default", Scheme: keys.Default}
 }
 
-func cmdNew(svc app.Service, argv []string) error {
+func cmdNew(svc backend.Service, argv []string) error {
 	// The name is the first argument; flags follow it (Go's flag parser stops at the
 	// first positional, so "new <name> --image …" must split this way).
 	if len(argv) < 1 || strings.HasPrefix(argv[0], "-") {
-		return fmt.Errorf("usage: hzc new <name> --image <img> [--preset strict|standard|networked]")
+		return fmt.Errorf("usage: zcc new <name> --image <img> [--desc d] [--icon i]")
 	}
 	name, flags := argv[0], argv[1:]
 
 	fset := flag.NewFlagSet("new", flag.ContinueOnError)
 	image := fset.String("image", "", "container image (digest-pinned for third-party; §5.5)")
-	preset := fset.String("preset", domain.PresetDefaultNew, "preset template: strict|standard|networked")
 	desc := fset.String("desc", "", "human-readable description")
 	icon := fset.String("icon", "", "icon name")
 	if err := fset.Parse(flags); err != nil {
@@ -149,32 +145,35 @@ func cmdNew(svc app.Service, argv []string) error {
 	if fset.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q (flags must follow the name)", fset.Arg(0))
 	}
-	cfg, ok := domain.DefaultsFor(*preset)
-	if !ok {
-		return fmt.Errorf("unknown preset %q (want strict|standard|networked)", *preset)
-	}
-	cfg.App.Name = name
-	cfg.App.Image = *image
-	cfg.App.Description = *desc
-	cfg.App.Icon = *icon
 
-	if svc.Exists(cfg.App.Name) {
-		return fmt.Errorf("app %q already exists at %s", cfg.App.Name, svc.Path(cfg.App.Name))
+	// Seed a minimal container definition; validate.Validate (via Save) enforces the rest
+	// (image policy, schema). The user fleshes it out with `zcc tui` or a hand edit.
+	cfg := schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion,
+		Type:          schema.ZincContainer,
+		AppNameID:     name,
+		Description:   *desc,
+		Icon:          *icon,
+	}
+	cfg.ImageMeta.Image = *image
+
+	if svc.Exists(cfg.AppNameID) {
+		return fmt.Errorf("app %q already exists at %s", cfg.AppNameID, svc.Path(cfg.AppNameID))
 	}
 	if err := svc.Save(cfg); err != nil { // validates first (image policy, schema, …)
 		return err
 	}
-	fmt.Printf("created %s (%s preset) → %s\n", cfg.App.Name, *preset, svc.Path(cfg.App.Name))
+	fmt.Printf("created %s → %s\n", cfg.AppNameID, svc.Path(cfg.AppNameID))
 	return nil
 }
 
-func cmdList(svc app.Service) error {
+func cmdList(svc backend.Service) error {
 	names, err := svc.List()
 	if err != nil {
 		return err
 	}
 	if len(names) == 0 {
-		fmt.Println("no apps defined yet — create one with: hzc new <name> --image <img>")
+		fmt.Println("no apps defined yet — create one with: zcc new <name> --image <img>")
 		return nil
 	}
 	for _, name := range names {
@@ -183,30 +182,32 @@ func cmdList(svc app.Service) error {
 			fmt.Printf("%-20s (error: %v)\n", name, err)
 			continue
 		}
-		fmt.Printf("%-20s %-12s %s\n", name, presetLabel(cfg.App.Preset), cfg.App.Image)
+		fmt.Printf("%-20s %-10s %s\n", name, netLabel(cfg), cfg.ImageMeta.Image)
 	}
 	return nil
 }
 
-func cmdValidate(svc app.Service, argv []string) error {
+func cmdValidate(svc backend.Service, argv []string) error {
 	if len(argv) != 1 {
-		return fmt.Errorf("usage: hzc validate <name|app.toml>")
+		return fmt.Errorf("usage: zcc validate <name|app.yaml>")
 	}
 	cfg, err := loadApp(svc, argv[0])
 	if err != nil {
 		return err
 	}
-	if verr := domain.Validate(cfg); verr != nil {
+	if verr := validate.Validate(cfg); verr != nil {
 		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
 	}
-	fmt.Printf("ok: %s — image=%s preset=%s network=%s\n",
-		cfg.App.Name, cfg.App.Image, presetLabel(cfg.App.Preset), cfg.Network.Mode)
+	fmt.Printf("ok: %s — image=%s network=%s\n", cfg.AppNameID, cfg.ImageMeta.Image, netLabel(cfg))
+	for _, warn := range validate.Warnings(cfg) {
+		fmt.Println("warning: " + warn)
+	}
 	return nil
 }
 
-func cmdDelete(svc app.Service, argv []string) error {
+func cmdDelete(svc backend.Service, argv []string) error {
 	if len(argv) != 1 {
-		return fmt.Errorf("usage: hzc delete <name>")
+		return fmt.Errorf("usage: zcc delete <name>")
 	}
 	if !svc.Exists(argv[0]) {
 		return fmt.Errorf("no app %q defined", argv[0])
@@ -218,182 +219,10 @@ func cmdDelete(svc app.Service, argv []string) error {
 	return nil
 }
 
-func cmdRun(svc app.Service, opt domain.HostOptions, argv []string) error {
-	if len(argv) < 1 {
-		return fmt.Errorf("usage: hzc run <name|app.toml> [--exec]")
-	}
-	cfg, err := loadApp(svc, argv[0])
-	if err != nil {
-		return err
-	}
-	if contains(argv[1:], "--exec") {
-		// Launch through the shared service (validate → build derived image → lock down
-		// → detach) — the same path the TUI and hzl use.
-		return svc.Launch(cfg, opt)
-	}
-	// Dry-run: validate and print the exact podman command(s) without running them.
-	if verr := domain.Validate(cfg); verr != nil {
-		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
-	}
-	if domain.HasInstall(cfg) {
-		// The app runs a derived image (FROM app.image + the install layer); a real run
-		// builds it first (auto on change, or `hzc build`). Show it so the plan matches.
-		fmt.Println("# build derived image first (auto on run when stale, or: hzc build " + cfg.App.Name + ")")
-		fmt.Println("podman " + strings.Join(quoteForDisplay(podman.ImageBuildArgs(cfg)), " "))
-		fmt.Print(domain.DerivedContainerfile(cfg))
-	}
-	for _, line := range runAdvisories(cfg) {
-		fmt.Println(line)
-	}
-	plan, err := svc.Plan(cfg, opt)
-	if err != nil {
-		return err
-	}
-	printPlan(plan)
-	if cfg.App.Multiterminal {
-		// The plan above starts the shared holder; each terminal attaches with this
-		// exec (run `hzc term <name>` to open one, `--shell` for a shell).
-		fmt.Println("# each terminal attaches to the holder")
-		fmt.Println("podman " + strings.Join(quoteForDisplay(podman.ExecArgs(cfg.App.Name, cfg.App.Command)), " "))
-	}
-	return nil
-}
-
-// runAdvisories returns `#`-prefixed warnings for config that validation allows but a
-// reviewer should see before launching — capabilities re-added past the cap-drop all
-// baseline, an effectively-open pasta allowlist, and host device exposure (GPU/ALSA).
-// Dry-run preview only; the plan itself is unchanged.
-func runAdvisories(cfg domain.AppConfig) []string {
-	var lines []string
-	if len(cfg.Capabilities.Extra) > 0 {
-		lines = append(lines, "# WARNING: capabilities.extra re-adds capabilities beyond the `cap-drop all` baseline: "+strings.Join(cfg.Capabilities.Extra, ", "))
-	}
-	if cfg.Network.Mode == domain.NetworkPasta {
-		if contains(cfg.Network.IPv4CIDR, "0.0.0.0/0") || contains(cfg.Network.IPv6CIDR, "::/0") {
-			lines = append(lines, "# WARNING: pasta egress allowlist includes an all-egress CIDR (0.0.0.0/0 or ::/0) — the allowlist is effectively open")
-		}
-	}
-	if cfg.Display.GPU {
-		lines = append(lines, "# WARNING: display.gpu exposes the host GPU (/dev/dri) to the container")
-	}
-	if cfg.Audio.LegacyALSA {
-		lines = append(lines, "# WARNING: audio.legacy_alsa exposes the host sound device (/dev/snd) to the container")
-	}
-	return lines
-}
-
-// cmdBuild (re)builds an app's derived image (FROM app.image + the app.install
-// layer). A plain `hzc run` already rebuilds on demand when the install line or base
-// changes; this is the explicit build, e.g. to pre-warm it or retry after fixing a
-// failing install line. Build output is captured and surfaced on failure (§5.5, §9.1).
-func cmdBuild(svc app.Service, argv []string) error {
-	if len(argv) != 1 {
-		return fmt.Errorf("usage: hzc build <name|app.toml>")
-	}
-	cfg, err := loadApp(svc, argv[0])
-	if err != nil {
-		return err
-	}
-	if verr := domain.Validate(cfg); verr != nil {
-		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
-	}
-	if !domain.HasInstall(cfg) {
-		return fmt.Errorf("%s: no app.install set — nothing to build; it runs %s directly", cfg.App.Name, cfg.App.Image)
-	}
-	fmt.Printf("# building %s (FROM %s)\n", domain.DerivedImageRef(cfg.App.Name), cfg.App.Image)
-	if err := svc.Build(cfg); err != nil {
-		return err
-	}
-	fmt.Printf("built %s\n", domain.DerivedImageRef(cfg.App.Name))
-	return nil
-}
-
-// parseTermArgs splits `<name> [--shell]` shared by `term` and the hidden `__term`.
-func parseTermArgs(argv []string) (name string, shell bool, err error) {
-	for _, arg := range argv {
-		switch {
-		case arg == "--shell":
-			shell = true
-		case strings.HasPrefix(arg, "-"):
-			return "", false, fmt.Errorf("unknown flag %q\nusage: hzc term <name> [--shell]", arg)
-		case name == "":
-			name = arg
-		default:
-			return "", false, fmt.Errorf("unexpected argument %q\nusage: hzc term <name> [--shell]", arg)
-		}
-	}
-	if name == "" {
-		return "", false, fmt.Errorf("usage: hzc term <name> [--shell]")
-	}
-	return name, shell, nil
-}
-
-// cmdTerm opens one more terminal for a multiterminal app: it spawns a detached
-// waiter and returns. The first terminal starts the shared holder; the holder lives
-// until the last terminal closes, unless the app is background (§9.1).
-func cmdTerm(svc app.Service, opt domain.HostOptions, argv []string) error {
-	name, shell, err := parseTermArgs(argv)
-	if err != nil {
-		return err
-	}
-	cfg, err := loadApp(svc, name)
-	if err != nil {
-		return err
-	}
-	return svc.OpenTerminal(cfg, opt, shell)
-}
-
-// cmdTermWaiter is the hidden `__term` waiter: it runs (and blocks in) the spawned
-// process, opening one terminal and stopping the holder if it is the last to close.
-func cmdTermWaiter(svc app.Service, opt domain.HostOptions, argv []string) error {
-	name, shell, err := parseTermArgs(argv)
-	if err != nil {
-		return err
-	}
-	cfg, err := loadApp(svc, name)
-	if err != nil {
-		return err
-	}
-	return svc.Term(cfg, opt, shell)
-}
-
-// cmdImage helps choose an image without a browser: search registries, or resolve a
-// tag to its digest-pinned form (§5.5) ready to paste into app.image.
-func cmdImage(svc app.Service, argv []string) error {
-	if len(argv) != 2 {
-		return fmt.Errorf("usage: hzc image search <term> | hzc image resolve <ref>")
-	}
-	sub, arg := argv[0], argv[1]
-	switch sub {
-	case "search":
-		results, err := svc.Search(arg)
-		if err != nil {
-			return err
-		}
-		if len(results) == 0 {
-			fmt.Println("no images found")
-			return nil
-		}
-		for _, result := range results {
-			fmt.Printf("%s\t%s\n", result.Name, result.Description)
-		}
-		return nil
-	case "resolve", "pin":
-		pinned, err := svc.Resolve(arg)
-		if err != nil {
-			return err
-		}
-		fmt.Println(pinned)
-		return nil
-	default:
-		return fmt.Errorf("unknown image subcommand %q (want search|resolve)", sub)
-	}
-}
-
-// cmdKeys manages hzc's TUI keybind schemes (§9.1): list the available schemes, show
-// a scheme's effective bindings, set the active one, edit/scaffold a custom scheme,
-// validate, or print the config dir. These are hzc's own UI keys — not the Hyprland
-// desktop hotkeys (§12).
+// cmdKeys manages zcc's TUI keybind schemes (§9.1): list the available schemes, show a
+// scheme's effective bindings, set the active one, edit/scaffold a custom scheme,
+// validate, or print the config dir. These are zcc's own UI keys — not the desktop
+// hotkeys (§12).
 func cmdKeys(argv []string) error {
 	kst, err := keys.DefaultStore()
 	if err != nil {
@@ -437,7 +266,7 @@ func cmdKeys(argv []string) error {
 		return printScheme(active.Name, active.Scheme)
 	case "set":
 		if len(argv) != 2 {
-			return fmt.Errorf("usage: hzc keys set <scheme>")
+			return fmt.Errorf("usage: zcc keys set <scheme>")
 		}
 		if err := kst.SetActive(argv[1]); err != nil {
 			return err
@@ -459,7 +288,7 @@ func cmdKeys(argv []string) error {
 		if verr := kst.Validate(scheme); verr != nil {
 			return fmt.Errorf("scheme %q has problems:\n%w", scheme, verr)
 		}
-		fmt.Printf("saved scheme %q (%s)\n  activate it with: hzc keys set %s\n", scheme, path, scheme)
+		fmt.Printf("saved scheme %q (%s)\n  activate it with: zcc keys set %s\n", scheme, path, scheme)
 		return nil
 	case "validate":
 		if len(argv) > 1 {
@@ -509,98 +338,23 @@ func openInEditor(path string) error {
 	return cmd.Run()
 }
 
-// printPlan shows the launch as the exact podman command(s). For a pasta app this is
-// the three-step pod flow; the nft ruleset that gets piped in is printed too so what
-// will be enforced is fully visible before anything runs.
-func printPlan(plan []ports.Command) {
-	for _, cmd := range plan {
-		fmt.Println("# " + cmd.Desc)
-		fmt.Println("podman " + strings.Join(quoteForDisplay(cmd.Args), " "))
-		if cmd.Stdin != "" {
-			fmt.Print(cmd.Stdin)
-		}
-	}
-}
-
-func cmdLifecycle(svc app.Service, opt domain.HostOptions, cmd string, argv []string) error {
-	if len(argv) != 1 {
-		return fmt.Errorf("usage: hzc %s <name>", cmd)
-	}
-	name := argv[0]
-	if cmd == "inspect" {
-		return svc.Do(podman.InspectArgs(name))
-	}
-	// stop/restart must be pod-aware: a pasta app lives in a pod that owns its
-	// filtered netns, so we load the definition to decide.
-	cfg, err := loadApp(svc, name)
-	if err != nil {
-		return err
-	}
-	switch cmd {
-	case "stop":
-		return svc.Stop(cfg)
-	case "restart":
-		if cfg.Network.Mode == domain.NetworkPasta {
-			// nft rules live in the pod's netns and are lost on a plain pod restart, so
-			// tear the pod down and relaunch through the service (re-applies them).
-			_ = svc.Stop(cfg)
-			return svc.Launch(cfg, opt)
-		}
-		return svc.Do(podman.RestartArgs(name))
-	}
-	return fmt.Errorf("unreachable: %q", cmd)
-}
-
-func cmdLogs(svc app.Service, argv []string) error {
-	fset := flag.NewFlagSet("logs", flag.ContinueOnError)
-	follow := fset.Bool("f", false, "follow log output")
-	if err := fset.Parse(argv); err != nil {
-		return err
-	}
-	if fset.NArg() != 1 {
-		return fmt.Errorf("usage: hzc logs <name> [-f]")
-	}
-	return svc.Do(podman.LogsArgs(fset.Arg(0), *follow))
-}
-
-// loadApp resolves an app by store name or by file path. An argument containing a
-// path separator or ending in ".toml" is read directly; otherwise it is looked up in
-// the store.
-func loadApp(svc app.Service, arg string) (domain.AppConfig, error) {
-	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".toml") {
+// loadApp resolves an app by store name or by file path. An argument containing a path
+// separator or ending in ".yaml" is read directly; otherwise it is looked up in the store.
+func loadApp(svc backend.Service, arg string) (schema.AppConfig, error) {
+	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".yaml") {
 		return svc.LoadFile(arg)
 	}
 	if !svc.Exists(arg) {
-		return domain.AppConfig{}, fmt.Errorf("no app %q defined (try: hzc list)", arg)
+		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zcc list)", arg)
 	}
 	return svc.Load(arg)
 }
 
-func presetLabel(preset string) string {
-	if preset == "" {
-		return "(none)"
+// netLabel summarizes an app's network posture for the list/validate output: "isolated"
+// when it has no NetworkLists (own localhost only), else the number of lists it carries.
+func netLabel(cfg schema.AppConfig) string {
+	if n := len(cfg.NetworkMeta.NetworkLists); n > 0 {
+		return fmt.Sprintf("net:%d", n)
 	}
-	return preset
-}
-
-func contains(list []string, want string) bool {
-	for _, str := range list {
-		if str == want {
-			return true
-		}
-	}
-	return false
-}
-
-// quoteForDisplay lightly quotes args with whitespace, for readable printing only.
-func quoteForDisplay(args []string) []string {
-	out := make([]string, len(args))
-	for idx, arg := range args {
-		if strings.ContainsAny(arg, " \t") {
-			out[idx] = "'" + arg + "'"
-		} else {
-			out[idx] = arg
-		}
-	}
-	return out
+	return "isolated"
 }

@@ -1,14 +1,15 @@
-// Package tui is hzc's keyboard-first terminal UI (docs/architecture.md §9.1, M2).
+// Package tui is zcc's keyboard-first terminal UI (docs/architecture.md §9.1, M2).
 //
 // The Model + Update form the functional core: Update is a pure transition over
-// (Model, Msg). All I/O — store reads/writes and podman exec — happens in tea.Cmd
-// closures (commands.go) that drive the shared application service (core/app), so
-// the decision logic is testable without a terminal and the TUI is a thin driving
-// adapter over the hexagon.
+// (Model, Msg). All I/O — store reads/writes (authoring) and the zcr shell-outs
+// (running apps) — happens in tea.Cmd closures (commands.go) that drive the creator
+// backend, so the decision logic is testable without a terminal and the TUI is a thin
+// driving adapter.
 //
-// Scope (minimum but sufficient for M2): create / edit / delete / launch / stop /
-// logs, end-to-end by keyboard. List-valued fields ([[mounts]], [keys], the pasta
-// allowlist) stay TOML-editable and are shown read-only in the form; profiles are M10.
+// Scope: create / edit / delete / rename / launch / stop / logs, end-to-end by
+// keyboard. The form edits the scalar fields; list-valued fields (Capabilities,
+// NetworkLists, Volumes, Configs, Keys) stay YAML-editable via the advanced $EDITOR
+// action.
 package tui
 
 import (
@@ -18,9 +19,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/crispuscrew/hyprzinc/core/app"
-	"github.com/crispuscrew/hyprzinc/core/domain"
-	"github.com/crispuscrew/hyprzinc/hzc/internal/keys"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/container/creator/internal/backend"
+	"github.com/crispuscrew/zinc/container/creator/internal/keys"
 )
 
 type mode int
@@ -35,16 +36,15 @@ const (
 )
 
 type appRow struct {
-	cfg     domain.AppConfig
+	cfg     schema.AppConfig
 	running bool
 	loadErr error
 }
 
 // Model is the whole TUI state.
 type Model struct {
-	svc  app.Service // application facade (drives store/runtime/build/net)
-	opts domain.HostOptions
-	keys keys.Active // active keybind scheme (mdl.keys.Scheme drives key resolution)
+	svc  backend.Service // authors via the store, runs via the zcr shell-outs
+	keys keys.Active     // active keybind scheme (mdl.keys.Scheme drives key resolution)
 
 	mode   mode
 	apps   []appRow
@@ -70,12 +70,11 @@ type Model struct {
 	quitting      bool
 }
 
-// New builds the initial model. svc is the application service, opts carries the
-// host env wiring for launches, and active is the resolved keybind scheme — all
-// supplied by the caller (the composition root) so this package stays a thin
-// adapter. A zero keys.Active falls back to the default scheme.
-func New(svc app.Service, opts domain.HostOptions, active keys.Active) Model {
-	return Model{svc: svc, opts: opts, keys: active, mode: modeList, logs: viewport.New(80, 20)}
+// New builds the initial model. svc is the creator backend and active is the resolved
+// keybind scheme — both supplied by the caller (the composition root) so this package
+// stays a thin adapter. A zero keys.Active falls back to the default scheme.
+func New(svc backend.Service, active keys.Active) Model {
+	return Model{svc: svc, keys: active, mode: modeList, logs: viewport.New(80, 20)}
 }
 
 func (mdl Model) Init() tea.Cmd { return loadApps(mdl.svc) }
@@ -186,7 +185,7 @@ func (mdl Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return mdl, nil
 			}
 			mdl.mode, mdl.form = modeList, nil
-			mdl.status, mdl.err = "saved "+cfg.App.Name, nil
+			mdl.status, mdl.err = "saved "+cfg.AppNameID, nil
 			return mdl, loadApps(mdl.svc)
 		case formEdit:
 			return mdl, writeDraft(mdl.svc, mdl.form.toConfig())
@@ -247,7 +246,7 @@ func (mdl Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keys.Refresh:
 		return mdl, loadApps(mdl.svc)
 	case keys.New:
-		mdl.form = newForm(domain.AppConfig{}, true)
+		mdl.form = newForm(schema.AppConfig{}, true)
 		mdl.form.scheme = mdl.keys.Scheme
 		mdl.mode, mdl.status = modeForm, ""
 	case keys.Edit:
@@ -258,46 +257,46 @@ func (mdl Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case keys.Run:
 		if row, ok := mdl.selected(); ok {
-			mdl.status = "launching " + row.cfg.App.Name + "…"
-			return mdl, launch(mdl.svc, row.cfg.App.Name, mdl.opts)
+			mdl.status = "launching " + row.cfg.AppNameID + "…"
+			return mdl, launch(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Shell:
 		if row, ok := mdl.selected(); ok {
-			if !row.cfg.App.Multiterminal {
-				mdl.status = row.cfg.App.Name + ": a shell needs a multiterminal app"
+			if !row.cfg.StartConditions.Multiterminal {
+				mdl.status = row.cfg.AppNameID + ": a shell needs a multiterminal app"
 				return mdl, nil
 			}
-			mdl.status = "opening shell for " + row.cfg.App.Name + "…"
-			return mdl, openShell(mdl.svc, row.cfg.App.Name, mdl.opts)
+			mdl.status = "opening shell for " + row.cfg.AppNameID + "…"
+			return mdl, openShell(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Build:
 		if row, ok := mdl.selected(); ok {
-			if row.cfg.App.Install == "" {
-				mdl.status = row.cfg.App.Name + ": no install line — nothing to build"
+			if len(row.cfg.ImageMeta.Install) == 0 {
+				mdl.status = row.cfg.AppNameID + ": no install lines — nothing to build"
 				return mdl, nil
 			}
-			mdl.status = "building image for " + row.cfg.App.Name + "…"
-			return mdl, buildImage(mdl.svc, row.cfg.App.Name)
+			mdl.status = "building image for " + row.cfg.AppNameID + "…"
+			return mdl, buildImage(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Stop:
 		if row, ok := mdl.selected(); ok {
-			return mdl, stop(mdl.svc, row.cfg)
+			return mdl, stop(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Logs:
 		if row, ok := mdl.selected(); ok {
-			return mdl, fetchLogs(mdl.svc, row.cfg.App.Name)
+			return mdl, fetchLogs(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Rename:
 		if row, ok := mdl.selected(); ok && row.loadErr == nil {
-			inp := newInput(row.cfg.App.Name, "")
+			inp := newInput(row.cfg.AppNameID, "")
 			cmd := inp.Focus()
-			mdl.rename, mdl.renameFrom = inp, row.cfg.App.Name
+			mdl.rename, mdl.renameFrom = inp, row.cfg.AppNameID
 			mdl.mode, mdl.status = modeRename, ""
 			return mdl, cmd
 		}
 	case keys.Delete:
 		if row, ok := mdl.selected(); ok {
-			mdl.confirmName = row.cfg.App.Name
+			mdl.confirmName = row.cfg.AppNameID
 			mdl.mode = modeConfirmDelete
 		}
 	case keys.Keys:

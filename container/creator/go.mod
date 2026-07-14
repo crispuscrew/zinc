@@ -1,21 +1,24 @@
-module github.com/crispuscrew/hyprzinc/hzc
+module github.com/crispuscrew/zinc/container/creator
 
 go 1.24.2
 
 toolchain go1.24.13
 
-// Shared functional core (config/runspec/store/launch). The local replace keeps
-// the per-module hermetic build: `go mod vendor` copies core's source into
-// ./vendor, so the digest-pinned container build needs no network or sibling tree.
-require github.com/crispuscrew/hyprzinc/core v0.0.0
+// The creator (zcc) authors app files; it depends only on the shared library (schema +
+// validate). It does NOT import the runner — it shells out to the `zcr` binary to run
+// what it authors. The local replace keeps the per-module hermetic build: `go mod
+// vendor` copies common's source into ./vendor, so the digest-pinned container build
+// needs no network or sibling tree.
+require github.com/crispuscrew/zinc/common v0.0.0
 
-replace github.com/crispuscrew/hyprzinc/core => ../core
+replace github.com/crispuscrew/zinc/common => ../../common
 
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

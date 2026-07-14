@@ -13,9 +13,9 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Store reads and writes hzc's keybind selection under a config directory
-// (~/.config/hyprzinc/hzc). It is the imperative shell around the pure scheme
-// data; like core/store it validates before writing and writes atomically.
+// Store reads and writes zcc's keybind selection under a config directory
+// (~/.config/zinc/zcc). It is the imperative shell around the pure scheme
+// data; like the app store it validates before writing and writes atomically.
 //
 // Layout:
 //
@@ -41,8 +41,8 @@ type customToml struct {
 	Bindings map[string]map[string][]string `toml:"bindings"`
 }
 
-// DefaultStore resolves the standard config dir: $XDG_CONFIG_HOME/hyprzinc/hzc,
-// falling back to ~/.config/hyprzinc/hzc.
+// DefaultStore resolves the standard config dir: $XDG_CONFIG_HOME/zinc/zcc,
+// falling back to ~/.config/zinc/zcc.
 func DefaultStore() (*Store, error) {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
@@ -52,7 +52,7 @@ func DefaultStore() (*Store, error) {
 		}
 		base = filepath.Join(home, ".config")
 	}
-	return &Store{Dir: filepath.Join(base, "hyprzinc", "hzc")}, nil
+	return &Store{Dir: filepath.Join(base, "zinc", "zcc")}, nil
 }
 
 func (s *Store) activePath() string         { return filepath.Join(s.Dir, "keys.toml") }
@@ -125,7 +125,7 @@ func (s *Store) resolve(name string, seen map[string]bool) (Scheme, error) {
 }
 
 // Resolve returns the merged scheme for an arbitrary name (built-in or custom),
-// for `hzc keys show <name>` and for validation.
+// for `zcc keys show <name>` and for validation.
 func (s *Store) Resolve(name string) (Scheme, error) {
 	return s.resolve(name, map[string]bool{})
 }
@@ -263,7 +263,7 @@ func applyOverrides(s Scheme, raw map[string]map[string][]string) error {
 
 // template is the commented starter written for a new custom scheme.
 func template(name, base string) string {
-	return fmt.Sprintf(`# hzc keybind scheme %q — see "hzc keys show %s" for every action name.
+	return fmt.Sprintf(`# zcc keybind scheme %q — see "zcc keys show %s" for every action name.
 # Inherits all bindings from %q; list only the keys you want to change.
 base = %q
 
