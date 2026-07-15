@@ -140,6 +140,11 @@ func TestE2E(t *testing.T) {
 	})
 
 	t.Run("tier2_enforcement", func(t *testing.T) {
+		// This scenario applies real nftables rules in a rootless pod netns. On a runner
+		// without that support, set ZINC_E2E_NO_NET=1 to skip just this scenario.
+		if os.Getenv("ZINC_E2E_NO_NET") != "" {
+			t.Skip("ZINC_E2E_NO_NET set; skipping the network-enforcement scenario")
+		}
 		must(t, zcc, "run", "producer", "--exec")
 		if !waitFor(func() bool { return running("producer") }) {
 			t.Fatal("producer should be running")
