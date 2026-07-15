@@ -30,6 +30,16 @@ func TestRunUsageAndUnknown(t *testing.T) {
 	}
 }
 
+func TestVersionDispatch(t *testing.T) {
+	quiet(t)
+	if err := run([]string{"version"}); err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if err := run([]string{"--version"}); err != nil {
+		t.Fatalf("--version: %v", err)
+	}
+}
+
 // The authoring commands (new/list/validate/delete) work locally against the store, with
 // no runtime needed. XDG_CONFIG_HOME isolates the store to a temp dir.
 func TestAuthoringLifecycle(t *testing.T) {

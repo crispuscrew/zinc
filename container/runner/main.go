@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -37,15 +38,32 @@ import (
 const usage = `usage: zcr <command> [args]
 
   run <app> [--exec]        print the launch plan, or launch it (--exec)
-  build <app>               (re)build the derived image (ImageMeta.Install, §5.5)
+  build <app>               (re)build the derived image (ImageMeta.Install)
   validate <app>            parse + validate; report problems and warnings
   stop|restart|inspect <app>
   logs <app> [-f]
-  term <app> [--shell]      open a terminal for a multiterminal app (§9.1)
+  term <app> [--shell]      open a terminal for a multiterminal app
   ps                        running apps, one per line
   image search <term> | resolve <ref>
+  version                   print the version
 
 <app> is a store name (~/.config/zinc/apps) or a path (has '/' or ends in .yaml).`
+
+// version is stamped at build time via -ldflags "-X main.version=..." (the Makefile
+// derives it from `git describe`). It stays "dev" for a plain build.
+var version = "dev"
+
+// versionString returns the build-stamped version, falling back to the module version
+// embedded by `go install <pkg>@vX` when ldflags did not set one.
+func versionString() string {
+	if version != "dev" && version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -57,6 +75,10 @@ func main() {
 func run(argv []string) error {
 	if len(argv) < 1 {
 		return fmt.Errorf("%s", usage)
+	}
+	if argv[0] == "version" || argv[0] == "--version" {
+		fmt.Println("zcr " + versionString())
+		return nil
 	}
 	svc, err := wire.DefaultService()
 	if err != nil {
