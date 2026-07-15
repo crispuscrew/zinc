@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -54,7 +55,24 @@ const usage = `usage: zcc <command> [args]
   stop|restart|inspect <name>       (⟶ zcr)
   logs <name> [-f]                  (⟶ zcr)
   term <name> [--shell]             open a terminal for a multiterminal app        (⟶ zcr)
-  image search <term>|resolve <ref> find/pin an image (§5.5)                       (⟶ zcr)`
+  image search <term>|resolve <ref> find/pin an image                             (⟶ zcr)
+  version                           print the version`
+
+// version is stamped at build time via -ldflags "-X main.version=..." (the Makefile
+// derives it from `git describe`). It stays "dev" for a plain build.
+var version = "dev"
+
+// versionString returns the build-stamped version, falling back to the module version
+// embedded by `go install <pkg>@vX` when ldflags did not set one.
+func versionString() string {
+	if version != "dev" && version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -69,8 +87,13 @@ func run(argv []string) error {
 	}
 	cmd, rest := argv[0], argv[1:]
 
+	if cmd == "version" || cmd == "--version" {
+		fmt.Println("zcc " + versionString())
+		return nil
+	}
+
 	// keys is self-contained (zcc's own config dir); dispatch it before building the
-	// store — it needs neither the store nor the runtime.
+	// store - it needs neither the store nor the runtime.
 	if cmd == "keys" {
 		return cmdKeys(rest)
 	}

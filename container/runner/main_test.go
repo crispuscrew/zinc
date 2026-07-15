@@ -43,6 +43,16 @@ func TestRunUsageAndUnknown(t *testing.T) {
 	}
 }
 
+func TestVersionDispatch(t *testing.T) {
+	quiet(t)
+	if err := run([]string{"version"}); err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if err := run([]string{"--version"}); err != nil {
+		t.Fatalf("--version: %v", err)
+	}
+}
+
 func TestValidateDispatch(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	quiet(t)

@@ -1,12 +1,12 @@
-# Build logic for HyprZinc TOOLS (hzc, hzl, hzv) — the binary targets layered on
-# top of the shared containerized checks in check.mk. A tool's Makefile sets TOOL
-# (and APP / RUN_ARGS if it has them), then `include ../tool.mk`.
+# Build logic for Zinc TOOLS (zcc, zcr, ...): the binary targets layered on top of the
+# shared containerized checks in check.mk. A tool's Makefile sets TOOL (and APP /
+# RUN_ARGS if it has them), then `include ../../tool.mk`.
 #
-# Podman-only: the binary is produced by the reproducible repo-root ../Containerfile;
-# there is no host `go` and no `go run`. Run from a tool's module root: `make <target>`.
+# Podman-only: the binary is produced by the reproducible repo-root Containerfile; there
+# is no host `go` and no `go run`. Run from a tool's module root: `make <target>`.
 
 ifndef TOOL
-$(error TOOL is not set — put `TOOL := hzc` above `include ../tool.mk`)
+$(error TOOL is not set - put `TOOL := zcc` above `include ../../tool.mk`)
 endif
 
 # Include check.mk relative to THIS file (not the invoking dir), so it resolves
@@ -18,10 +18,15 @@ BIN            ?= $(BIN_DIR)/$(TOOL)
 
 # Reproducible build image + the generic Containerfile shared by all tools (at the
 # repo root, reached via REPO_REL so it is correct at any module depth).
-BUILD_IMAGE    ?= hyprzinc/$(TOOL)-build:local
+BUILD_IMAGE    ?= zinc/$(TOOL)-build:local
 CONTAINERFILE  ?= $(REPO_REL)/Containerfile
 
-# Extra args for `make run` (hzc sets `run <app>`); empty for the others.
+# Release version stamped into the binary (main.version). Derived from the nearest v*
+# tag, else the short commit, plus -dirty for an uncommitted tree; a tree with no git
+# falls back to "dev". Override with VERSION=... for a specific build.
+VERSION        ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo dev)
+
+# Extra args for `make run`; empty unless a tool sets them.
 RUN_ARGS       ?=
 
 ## build: build the binary reproducibly in the pinned container (alias for container-build)
@@ -33,7 +38,7 @@ run: build
 
 ## container-build: build reproducibly in the pinned container, extract to ./bin/<tool>
 container-build:
-	$(CONTAINER_TOOL) build -t $(BUILD_IMAGE) -f $(CONTAINERFILE) .
+	$(CONTAINER_TOOL) build --build-arg VERSION=$(VERSION) -t $(BUILD_IMAGE) -f $(CONTAINERFILE) .
 	@mkdir -p $(BIN_DIR)
 	@cid=$$($(CONTAINER_TOOL) create $(BUILD_IMAGE)); \
 	$(CONTAINER_TOOL) cp $$cid:/app $(BIN); \
