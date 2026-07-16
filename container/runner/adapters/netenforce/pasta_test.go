@@ -92,7 +92,7 @@ func TestNFTRuleset_CIDRWithoutPorts(t *testing.T) {
 		t.Errorf("no ports → all-ports accept to CIDRs expected:\n%s", rules)
 	}
 	if strings.Contains(rules, "dport") {
-		t.Errorf("no ports and no block_dns → no dport rules expected:\n%s", rules)
+		t.Errorf("no ports and no DNS-block: no dport rules expected:\n%s", rules)
 	}
 }
 

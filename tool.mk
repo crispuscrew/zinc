@@ -29,6 +29,11 @@ VERSION        ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/d
 # Extra args for `make run`; empty unless a tool sets them.
 RUN_ARGS       ?=
 
+# Extra flags for the reproducible `podman build`; empty by default. `make repro` sets
+# BUILD_FLAGS=--no-cache on the second pass so it genuinely recompiles rather than
+# hitting the layer cache (which would make the byte-identical check meaningless).
+BUILD_FLAGS    ?=
+
 ## build: build the binary reproducibly in the pinned container (alias for container-build)
 build: container-build
 
@@ -37,8 +42,11 @@ run: build
 	./$(BIN) $(RUN_ARGS)
 
 ## container-build: build reproducibly in the pinned container, extract to ./bin/<tool>
+# --network=none enforces the hermetic-build invariant: the compile step uses only the
+# vendored deps and the pinned toolchain, never the network (the base image is pulled by
+# podman outside the build network before RUN runs).
 container-build:
-	$(CONTAINER_TOOL) build --build-arg VERSION=$(VERSION) -t $(BUILD_IMAGE) -f $(CONTAINERFILE) .
+	$(CONTAINER_TOOL) build $(BUILD_FLAGS) --network=none --build-arg VERSION=$(VERSION) -t $(BUILD_IMAGE) -f $(CONTAINERFILE) .
 	@mkdir -p $(BIN_DIR)
 	@cid=$$($(CONTAINER_TOOL) create $(BUILD_IMAGE)); \
 	$(CONTAINER_TOOL) cp $$cid:/app $(BIN); \
@@ -46,9 +54,11 @@ container-build:
 	@echo "built $(BIN)"
 
 ## repro: build twice in-container and assert the binary is byte-identical
+# The second pass forces --no-cache so the compile actually re-runs; otherwise both
+# extractions would come from one cached image and the check would prove nothing.
 repro:
 	$(MAKE) --no-print-directory container-build BIN=$(BIN_DIR)/$(TOOL).1
-	$(MAKE) --no-print-directory container-build BIN=$(BIN_DIR)/$(TOOL).2
+	$(MAKE) --no-print-directory container-build BIN=$(BIN_DIR)/$(TOOL).2 BUILD_FLAGS=--no-cache
 	@sha256sum $(BIN_DIR)/$(TOOL).1 $(BIN_DIR)/$(TOOL).2
 	@cmp $(BIN_DIR)/$(TOOL).1 $(BIN_DIR)/$(TOOL).2 && echo "REPRODUCIBLE: identical bytes"
 

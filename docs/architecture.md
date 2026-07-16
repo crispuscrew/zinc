@@ -166,7 +166,7 @@ Keys:
 capability drop-all baseline plus `Capabilities`, Wayland socket + security-context label,
 GPU device, the theme bundle, audio (Pipewire socket / `/dev/snd`), explicit host bind
 mounts, SSH/GPG key mounts, the entrypoint override, and the terminal / multiterminal /
-background / keep-alive lifecycle. **Schema-defined and validated but not yet wired into the
+background / keep-alive lifecycle. **Schema-defined but not yet wired into the
 launch:** `ResourcesMeta`, `InternalUserMeta`, `NotificationMeta`, and `Configs`. They are on
 the roadmap and are called out here so the doc does not overclaim.
 

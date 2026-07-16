@@ -5,7 +5,7 @@ go 1.24.2
 toolchain go1.24.13
 
 // The creator (zcc) authors app files; it depends only on the shared library (schema +
-// validate). It does NOT import the runner — it shells out to the `zcr` binary to run
+// validate). It does NOT import the runner - it shells out to the `zcr` binary to run
 // what it authors. The local replace keeps the per-module hermetic build: `go mod
 // vendor` copies common's source into ./vendor, so the digest-pinned container build
 // needs no network or sibling tree.

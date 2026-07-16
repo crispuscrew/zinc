@@ -35,7 +35,7 @@ var _ ports.NetEnforcer = Enforcer{}
 // `make netfilter-image`. The nft step runs it with --pull=never (see nftApplyArgs):
 // the privileged helper is always the locally vetted build, never pulled from a
 // registry, and a missing image fails fast with a clear error. The tag must match the
-// netfilter image build (creator side).
+// netfilter image build (runner side).
 const DefaultNetfilterImage = "zinc/netfilter:local"
 
 // Enforcer drives an app's NetworkLists onto the network. It satisfies
