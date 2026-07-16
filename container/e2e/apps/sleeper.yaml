@@ -1,0 +1,8 @@
+SchemaVersion: 2
+Type: ZincContainer
+AppNameID: sleeper
+Description: lifecycle scenario - a long-lived isolated app
+ImageMeta:
+  Image: localhost/zinc/e2e-app:local
+StartConditions:
+  Entrypoint: /sleeper.sh

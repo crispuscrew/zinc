@@ -1,0 +1,14 @@
+// Local-development workspace tying the per-module tree together so common/ can be
+// edited alongside the tool modules without re-vendoring on every change. It is
+// dev-only: the containerized make targets build from each module's ./vendor (this
+// file is outside the per-tool build context, and `make vendor` runs with
+// GOWORK=off), so reproducible builds never depend on it.
+go 1.24.2
+
+use (
+	./common
+	./container/runner
+	./container/creator
+	./launcher
+	./virtualization/creator
+)

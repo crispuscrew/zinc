@@ -1,0 +1,44 @@
+# Zinc app definition (schema v2). Copy this as a starting point for a new
+# container app; see firefox-broken.yaml for what Validate rejects.
+SchemaVersion: 2
+Type: ZincContainer          # container app (VM support: ZincVirtualization, later)
+
+AppNameID: firefox           # also the container name; [a-z0-9._-], start alphanumeric
+Icon: firefox
+Description: Web browser
+
+ImageMeta:
+  # Base image pinned by digest (third-party, section 5.5). Install builds a derived
+  # image: FROM Image + one RUN per entry (section 5.5, section 9.1).
+  Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+  Install:
+    - apk add --no-cache firefox font-dejavu
+
+StartConditions:
+  Entrypoint: firefox        # process to run; empty = image default
+
+# Locked down by default (fail-closed):
+DisplayMeta:
+  DisableSecurityContext: false   # false = wp_security_context_v1 enforced (restricted)
+  DisableGpuAccess: true          # no GPU passthrough
+
+NetworkMeta:
+  NetworkLists: []                # no egress; add a NetworkList to allow-list CIDRs/ports
+
+InternalUserMeta:
+  UseNonRootUser: true            # run as a non-root user inside the container
+  NonRootUserName: app
+  KeepUserID: false
+
+ResourcesMeta:
+  MaxCPUCores: 2                  # fractional allowed, e.g. 0.5
+  MaxRamMiB: 2048
+  PIDsLimit: 512                  # fork-bomb guard
+
+AudioMeta:
+  Pipewire: false
+  LegacyALSA: false
+
+HostTheme: true                  # share the host's theme
+
+Capabilities: []                 # extra --cap-add entries (none)

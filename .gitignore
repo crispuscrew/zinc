@@ -1,0 +1,13 @@
+# Go
+bin/
+*.test
+*.out
+coverage.*
+
+# Editors
+.obsidian/
+.idea/
+.vscode/
+
+# OS
+.DS_Store
