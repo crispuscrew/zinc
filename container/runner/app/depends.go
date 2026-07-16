@@ -18,7 +18,7 @@ import (
 //
 // chain is the stack of apps currently mid-launch (root → cfg's parent); cfg is
 // appended before recursing, so a name reappearing in it is a cycle.
-func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptions, chain []string) error {
+func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptions, chain []string, started map[string]bool) error {
 	if len(cfg.StartConditions.DependsOn) == 0 {
 		return nil
 	}
@@ -43,7 +43,7 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 		if err != nil {
 			return fmt.Errorf("%s depends on %q: %w", cfg.AppNameID, dep, err)
 		}
-		if err := svc.launch(depCfg, opt, chain); err != nil {
+		if err := svc.launch(depCfg, opt, chain, started); err != nil {
 			return fmt.Errorf("starting dependency %q of %s: %w", dep, cfg.AppNameID, err)
 		}
 		running[dep] = true // so a name listed twice is not started twice
@@ -70,6 +70,8 @@ func checkNetwork(cfg schema.AppConfig) error {
 			return fmt.Errorf("%s: NetworkLists[%d]: an ingress list cannot target an AppName - a producer publishes to any sibling that joins its link, and the consumer names the producer", cfg.AppNameID, index)
 		case netList.Host && !netList.Ingress:
 			return fmt.Errorf("%s: NetworkLists[%d]: host-scoped egress is not supported in this build yet", cfg.AppNameID, index)
+		case isLinkList(netList) && netList.Blacklist:
+			return fmt.Errorf("%s: NetworkLists[%d]: a sibling link list cannot be a blacklist - its Ports are the allowed set and a blacklist would open them instead of gating them", cfg.AppNameID, index)
 		}
 		if tier2 && !isLinkList(netList) {
 			return fmt.Errorf("%s: NetworkLists[%d]: combining sibling links with other networking (egress rules or LAN publish) is not supported in this build yet", cfg.AppNameID, index)

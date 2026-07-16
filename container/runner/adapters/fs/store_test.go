@@ -28,6 +28,23 @@ func tempStore(t *testing.T) *Store {
 	return &Store{Root: t.TempDir()}
 }
 
+// A crafted name (a path separator or a ".." segment) must not escape the apps
+// directory through Load / Delete / Exists.
+func TestStore_RejectsUnsafeNames(t *testing.T) {
+	sto := tempStore(t)
+	for _, bad := range []string{"../evil", "sub/app", "..", ""} {
+		if _, err := sto.Load(bad); err == nil {
+			t.Errorf("Load(%q): want error, got nil", bad)
+		}
+		if err := sto.Delete(bad); err == nil {
+			t.Errorf("Delete(%q): want error, got nil", bad)
+		}
+		if sto.Exists(bad) {
+			t.Errorf("Exists(%q): want false, got true", bad)
+		}
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	sto := tempStore(t)
 	want := sampleApp("firefox")
