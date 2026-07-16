@@ -104,7 +104,7 @@ func TestNFTRuleset_IPv6(t *testing.T) {
 	}
 }
 
-// An egress-only app has no input base chain at all — ingress stays closed by omission.
+// An egress-only app has no input base chain at all - ingress stays closed by omission.
 func TestNFTRuleset_NoInputChainForEgressOnly(t *testing.T) {
 	if rules := NFTRuleset(pastaApp()); strings.Contains(rules, "chain input") {
 		t.Errorf("egress-only app should have no input chain:\n%s", rules)
@@ -159,7 +159,7 @@ func TestPodCreate_PublishesTier3Ports(t *testing.T) {
 	assertContainsSeq(t, create, "-p", "80:80/udp")
 }
 
-// A tier-2 producer (self-scoped ingress) publishes nothing to the host — no `-p` in any
+// A tier-2 producer (self-scoped ingress) publishes nothing to the host - no `-p` in any
 // prepare step (it is reachable only over its private link).
 func TestPodCreate_Tier2PublishesNothing(t *testing.T) {
 	cfg := pastaApp()
@@ -171,8 +171,8 @@ func TestPodCreate_Tier2PublishesNothing(t *testing.T) {
 	}
 }
 
-// A tier-2 producer's pod attaches only to its own private link on a fixed interface —
-// no pasta — after the bridge is created idempotently as internal.
+// A tier-2 producer's pod attaches only to its own private link on a fixed interface -
+// no pasta - after the bridge is created idempotently as internal.
 func TestTier2_ProducerPrepare(t *testing.T) {
 	cfg := pastaApp()
 	cfg.AppNameID = "db"
@@ -235,8 +235,8 @@ func TestTier2_ProducerRuleset(t *testing.T) {
 }
 
 // The enforcer attaches a filtered app to its pod and prepares the netns with two
-// steps — pod create (pasta netns) then nft lock — before the app ever runs, so there
-// is no unfiltered-egress window (§5.3).
+// steps - pod create (pasta netns) then nft lock - before the app ever runs, so there
+// is no unfiltered-egress window (section 5.3).
 func TestEnforcer_RunFlagsAndPrepare(t *testing.T) {
 	cfg := pastaApp()
 	pod := PodName(cfg.AppNameID)

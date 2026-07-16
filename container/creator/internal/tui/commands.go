@@ -39,7 +39,7 @@ type (
 	schemeEditMsg struct{ path string } // a scheme file is ready to open in $EDITOR
 )
 
-// resolveImage pins the image field's tag to its @sha256 digest (§5.5) via zcr — which
+// resolveImage pins the image field's tag to its @sha256 digest (section 5.5) via zcr - which
 // pulls the image, so it runs off the UI thread.
 func resolveImage(svc backend.Service, ref string) tea.Cmd {
 	return func() tea.Msg {
@@ -72,7 +72,7 @@ func writeDraft(svc backend.Service, cfg schema.AppConfig) tea.Cmd {
 
 // openEditor hands the temp file to $EDITOR (default vim), releasing the terminal to it
 // and restoring the TUI on exit, then re-parses the (possibly edited) YAML. Parsing here
-// keeps Update free of I/O — it just consumes the result.
+// keeps Update free of I/O - it just consumes the result.
 func openEditor(svc backend.Service, path string) tea.Cmd {
 	cmd := exec.Command(editorArgv(path)[0], editorArgv(path)[1:]...)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -186,7 +186,7 @@ func loadApps(svc backend.Service) tea.Cmd {
 }
 
 // launch asks zcr to run the app (validate → build derived image → lock down egress →
-// detach). It returns immediately; the TUI carries no launch logic of its own (§9.1).
+// detach). It returns immediately; the TUI carries no launch logic of its own (section 9.1).
 func launch(svc backend.Service, name string) tea.Cmd {
 	return func() tea.Msg {
 		if err := svc.Launch(name); err != nil {
@@ -197,8 +197,8 @@ func launch(svc backend.Service, name string) tea.Cmd {
 }
 
 // openShell opens another terminal as a shell for a multiterminal app. Like launch it
-// returns immediately — zcr spawns a detached waiter that owns the terminal's lifecycle
-// (§9.1).
+// returns immediately - zcr spawns a detached waiter that owns the terminal's lifecycle
+// (section 9.1).
 func openShell(svc backend.Service, name string) tea.Cmd {
 	return func() tea.Msg {
 		if err := svc.OpenTerminal(name, true); err != nil {
@@ -210,7 +210,7 @@ func openShell(svc backend.Service, name string) tea.Cmd {
 
 // buildImage force-rebuilds an app's derived image (FROM ImageMeta.Image + the install
 // layer). This is the explicit-rebuild action; a plain run already rebuilds on demand
-// when the install lines or base change (§9.1).
+// when the install lines or base change (section 9.1).
 func buildImage(svc backend.Service, name string) tea.Cmd {
 	return func() tea.Msg {
 		if _, err := svc.Build(name); err != nil {
@@ -233,7 +233,7 @@ func stop(svc backend.Service, name string) tea.Cmd {
 
 // renameApp renames an app through the store: load the old definition, rewrite
 // AppNameID, save it under the new name (validated), and delete the old one. The store
-// is the single source of truth, so this is the built-in "delete + recreate" (§9.1).
+// is the single source of truth, so this is the built-in "delete + recreate" (section 9.1).
 func renameApp(svc backend.Service, from, to string) tea.Cmd {
 	return func() tea.Msg {
 		if err := svc.Rename(from, to); err != nil {

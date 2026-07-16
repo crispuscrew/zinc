@@ -46,7 +46,7 @@ func TestEgressPortsWithCIDROK(t *testing.T) {
 	}
 }
 
-// Ingress ports need no CIDR — an empty source allowlist means "any source".
+// Ingress ports need no CIDR - an empty source allowlist means "any source".
 func TestIngressPortsWithoutCIDROK(t *testing.T) {
 	err := Validate(withList(schema.NetworkList{Ingress: true, Ports: []int{5432}}))
 	if err != nil {

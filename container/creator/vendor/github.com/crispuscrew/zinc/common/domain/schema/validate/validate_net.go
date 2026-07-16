@@ -33,11 +33,11 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 		add("NetworkLists[%d].Interface %q: only [A-Za-z0-9._-] allowed (no commas or spaces)", index, iface)
 	}
 
-	// Egress: a port carve-out attaches to a destination CIDR (nft `daddr … dport …`);
-	// ports with no CIDR emit nothing and silently revert to the chain's default policy —
+	// Egress: a port carve-out attaches to a destination CIDR (nft `daddr ... dport ...`);
+	// ports with no CIDR emit nothing and silently revert to the chain's default policy -
 	// so a blacklist [53,853] with no CIDR silently keeps DNS open. Reject it: name the
 	// destinations (0.0.0.0/0 and/or ::/0 for "everywhere"), or drop the ports. An ingress
-	// list needs no CIDR — its CIDRs are a source allowlist and empty means "any source".
+	// list needs no CIDR - its CIDRs are a source allowlist and empty means "any source".
 	if !netList.Ingress && len(netList.Ports) > 0 &&
 		len(netList.IPv4CIDR) == 0 && len(netList.IPv6CIDR) == 0 {
 		add("NetworkLists[%d].Ports %s: set without any IPv4CIDR/IPv6CIDR; an egress port rule needs destination CIDRs (use 0.0.0.0/0 and/or ::/0 for all destinations)", index, joinPorts(netList.Ports))
@@ -75,7 +75,7 @@ func checkGateway(index int, netList schema.NetworkList, self bool, add addFunc)
 		}
 	}
 	if self {
-		// Own netns has no next-hop to route through — a gateway needs host/sibling.
+		// Own netns has no next-hop to route through - a gateway needs host/sibling.
 		add("NetworkLists[%d]: a gateway needs a host or sibling AppName link, not the app's own netns", index)
 	}
 

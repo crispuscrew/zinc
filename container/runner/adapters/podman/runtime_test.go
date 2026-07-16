@@ -154,7 +154,7 @@ func TestAppRunArgs_KeepAlive(t *testing.T) {
 
 func TestAppRunArgs_Holder(t *testing.T) {
 	// A multiterminal app's container is a detached holder: -d --rm, no -it, and
-	// HolderCmd as PID 1 — the app's own command runs per-terminal via ExecArgs.
+	// HolderCmd as PID 1 - the app's own command runs per-terminal via ExecArgs.
 	cfg := schema.AppConfig{
 		AppNameID: "dev",
 		ImageMeta: schema.ImageMeta{Image: "docker.io/library/alpine@sha256:abc"},
@@ -186,7 +186,7 @@ func installCfg(install ...string) schema.AppConfig {
 }
 
 // With ImageMeta.Install set, the container must run the locally built derived image,
-// not the pinned base — the base is only the FROM of that build.
+// not the pinned base - the base is only the FROM of that build.
 func TestAppRunArgs_InstallRunsDerivedImage(t *testing.T) {
 	got := appArgs(t, installCfg("apt-get install -y hollywood"), baseOpts(), netNone())
 	if last := got[len(got)-1]; last != "zinc/app-hollywood:local" {
@@ -210,7 +210,7 @@ func TestImageBuildArgs(t *testing.T) {
 	cfg := installCfg("apk add --no-cache sl")
 	got := ImageBuildArgs(cfg)
 	if got[0] != "build" || got[len(got)-1] != "-" {
-		t.Fatalf("want `build … -` (Containerfile on stdin), got %v", got)
+		t.Fatalf("want `build ... -` (Containerfile on stdin), got %v", got)
 	}
 	assertContainsSeq(t, got, "-t", "zinc/app-hollywood:local")
 	assertContainsSeq(t, got, "--label", "zinc.build="+derived.BuildFingerprint(cfg))

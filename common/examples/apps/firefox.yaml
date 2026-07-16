@@ -8,8 +8,8 @@ Icon: firefox
 Description: Web browser
 
 ImageMeta:
-  # Base image pinned by digest (third-party, §5.5). Install builds a derived
-  # image: FROM Image + one RUN per entry (§5.5, §9.1).
+  # Base image pinned by digest (third-party, section 5.5). Install builds a derived
+  # image: FROM Image + one RUN per entry (section 5.5, section 9.1).
   Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
   Install:
     - apk add --no-cache firefox font-dejavu

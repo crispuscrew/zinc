@@ -58,11 +58,11 @@ func checkIdentity(cfg schema.AppConfig, add addFunc) {
 	case strings.TrimSpace(cfg.ImageMeta.Image) == "":
 		add("ImageMeta.Image: must not be empty")
 	case hasUnsafe(cfg.ImageMeta.Image):
-		// Interpolated into a FROM line — must be a single-line ref (§5.5).
+		// Interpolated into a FROM line - must be a single-line ref (section 5.5).
 		add("ImageMeta.Image %q: must be a single-line reference (no whitespace or control characters)", cfg.ImageMeta.Image)
 	case !LocalImage(cfg.ImageMeta.Image) && !digestRE.MatchString(cfg.ImageMeta.Image):
-		// §5.5: third-party images pinned by canonical digest; only localhost/ may use a mutable tag.
-		add("ImageMeta.Image %q: third-party images must be digest-pinned (…@sha256:<64 hex>); only localhost/ images may use a mutable tag (§5.5)", cfg.ImageMeta.Image)
+		// section 5.5: third-party images pinned by canonical digest; only localhost/ may use a mutable tag.
+		add("ImageMeta.Image %q: third-party images must be digest-pinned (...@sha256:<64 hex>); only localhost/ images may use a mutable tag (section 5.5)", cfg.ImageMeta.Image)
 	}
 
 	// NonRootUserName becomes `podman --user`; keep it a safe charset.
@@ -71,7 +71,7 @@ func checkIdentity(cfg schema.AppConfig, add addFunc) {
 	}
 }
 
-// checkLifecycle: terminal / multiterminal / background interplay (§9.1).
+// checkLifecycle: terminal / multiterminal / background interplay (section 9.1).
 func checkLifecycle(cfg schema.AppConfig, add addFunc) {
 	start := cfg.StartConditions
 	switch {
@@ -104,7 +104,7 @@ func checkResources(res schema.ResourcesMeta, add addFunc) {
 }
 
 // Warnings returns non-fatal create-time advisories (zcc); nothing here blocks save or
-// launch — it flags valid-but-risky or probably-unintended configs. Exposing inbound
+// launch - it flags valid-but-risky or probably-unintended configs. Exposing inbound
 // (an Ingress list) is always surfaced, loudest when it reaches the LAN.
 func Warnings(cfg schema.AppConfig) []string {
 	var warns []string
@@ -113,7 +113,7 @@ func Warnings(cfg schema.AppConfig) []string {
 			warns = append(warns, ingressWarnings(index, netList)...)
 			continue
 		}
-		// Egress: an empty blacklist blocks nothing (allow-all) — worth surfacing on a
+		// Egress: an empty blacklist blocks nothing (allow-all) - worth surfacing on a
 		// security tool.
 		if netList.Blacklist &&
 			len(netList.IPv4CIDR) == 0 && len(netList.IPv6CIDR) == 0 && len(netList.Ports) == 0 {
@@ -146,6 +146,6 @@ func ingressWarnings(index int, netList schema.NetworkList) []string {
 			"NetworkLists[%d]: ingress exposes port(s) %s to %s", index, joinPorts(netList.Ports), scope)}
 	default:
 		return []string{fmt.Sprintf(
-			"NetworkLists[%d]: ingress list exposes no ports (Ports is empty) — did you forget Ports? (%s)", index, scope)}
+			"NetworkLists[%d]: ingress list exposes no ports (Ports is empty) - did you forget Ports? (%s)", index, scope)}
 	}
 }

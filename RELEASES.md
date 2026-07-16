@@ -10,5 +10,5 @@
 | 0.5.0   | Launcher      | `zlg` mvp|
 | 0.6.0   | DE | `zde-niri` visual helper|
 | 0.7.0   | Virtualization| `zvc` mvp + `zvr` mvp                   |
-| …       |               |                                                  |
+| ...       |               |                                                  |
 

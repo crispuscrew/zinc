@@ -1,8 +1,8 @@
-// Command zcc is Zinc's app-definition tool (docs/architecture.md §9.1).
+// Command zcc is Zinc's app-definition tool (docs/architecture.md section 9.1).
 //
 // It authors app files (~/.config/zinc/apps/<name>.yaml) and manages them: create, edit,
 // list, validate, delete, and a keyboard-first TUI. To RUN what it authors it shells out
-// to the `zcr` binary — Zinc's container runtime — so zcc never imports the runner and
+// to the `zcr` binary - Zinc's container runtime - so zcc never imports the runner and
 // knows nothing about podman; the two meet only at the on-disk format and at that process
 // boundary. zcr must be on $PATH for the run/manage commands; authoring works without it.
 //
@@ -142,24 +142,24 @@ func loadKeys() keys.Active {
 		if active, lerr := kst.Load(); lerr == nil {
 			return active
 		} else {
-			fmt.Fprintln(os.Stderr, "zcc: keybinds: "+lerr.Error()+" — using default")
+			fmt.Fprintln(os.Stderr, "zcc: keybinds: "+lerr.Error()+" - using default")
 		}
 	} else {
-		fmt.Fprintln(os.Stderr, "zcc: keybinds: "+err.Error()+" — using default")
+		fmt.Fprintln(os.Stderr, "zcc: keybinds: "+err.Error()+" - using default")
 	}
 	return keys.Active{Name: "default", Scheme: keys.Default}
 }
 
 func cmdNew(svc backend.Service, argv []string) error {
 	// The name is the first argument; flags follow it (Go's flag parser stops at the
-	// first positional, so "new <name> --image …" must split this way).
+	// first positional, so "new <name> --image ..." must split this way).
 	if len(argv) < 1 || strings.HasPrefix(argv[0], "-") {
 		return fmt.Errorf("usage: zcc new <name> --image <img> [--desc d] [--icon i]")
 	}
 	name, flags := argv[0], argv[1:]
 
 	fset := flag.NewFlagSet("new", flag.ContinueOnError)
-	image := fset.String("image", "", "container image (digest-pinned for third-party; §5.5)")
+	image := fset.String("image", "", "container image (digest-pinned for third-party; section 5.5)")
 	desc := fset.String("desc", "", "human-readable description")
 	icon := fset.String("icon", "", "icon name")
 	if err := fset.Parse(flags); err != nil {
@@ -183,7 +183,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	if svc.Exists(cfg.AppNameID) {
 		return fmt.Errorf("app %q already exists at %s", cfg.AppNameID, svc.Path(cfg.AppNameID))
 	}
-	if err := svc.Save(cfg); err != nil { // validates first (image policy, schema, …)
+	if err := svc.Save(cfg); err != nil { // validates first (image policy, schema, ...)
 		return err
 	}
 	fmt.Printf("created %s → %s\n", cfg.AppNameID, svc.Path(cfg.AppNameID))
@@ -196,7 +196,7 @@ func cmdList(svc backend.Service) error {
 		return err
 	}
 	if len(names) == 0 {
-		fmt.Println("no apps defined yet — create one with: zcc new <name> --image <img>")
+		fmt.Println("no apps defined yet - create one with: zcc new <name> --image <img>")
 		return nil
 	}
 	for _, name := range names {
@@ -221,7 +221,7 @@ func cmdValidate(svc backend.Service, argv []string) error {
 	if verr := validate.Validate(cfg); verr != nil {
 		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
 	}
-	fmt.Printf("ok: %s — image=%s network=%s\n", cfg.AppNameID, cfg.ImageMeta.Image, netLabel(cfg))
+	fmt.Printf("ok: %s - image=%s network=%s\n", cfg.AppNameID, cfg.ImageMeta.Image, netLabel(cfg))
 	for _, warn := range validate.Warnings(cfg) {
 		fmt.Println("warning: " + warn)
 	}
@@ -242,10 +242,10 @@ func cmdDelete(svc backend.Service, argv []string) error {
 	return nil
 }
 
-// cmdKeys manages zcc's TUI keybind schemes (§9.1): list the available schemes, show a
+// cmdKeys manages zcc's TUI keybind schemes (section 9.1): list the available schemes, show a
 // scheme's effective bindings, set the active one, edit/scaffold a custom scheme,
-// validate, or print the config dir. These are zcc's own UI keys — not the desktop
-// hotkeys (§12).
+// validate, or print the config dir. These are zcc's own UI keys - not the desktop
+// hotkeys (section 12).
 func cmdKeys(argv []string) error {
 	kst, err := keys.DefaultStore()
 	if err != nil {

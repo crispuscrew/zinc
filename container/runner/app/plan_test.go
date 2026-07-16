@@ -11,7 +11,7 @@ import (
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
 )
 
-// planSvc wires the real podman runtime + the nft enforcer — but no store / builder —
+// planSvc wires the real podman runtime + the nft enforcer - but no store / builder -
 // which is all Plan and (validation-only) Launch need. Plan is pure (AppRunArgs builds
 // argv without I/O), so these tests run with no podman present.
 func planSvc() Service {
@@ -23,7 +23,7 @@ func baseOpts() options.HostOptions {
 }
 
 // digestPin is a canonical sha256 digest (64 hex chars) used by the test fixtures so
-// they satisfy the §5.5 digest-pin rule that Plan/Launch now validate.
+// they satisfy the section 5.5 digest-pin rule that Plan/Launch now validate.
 const digestPin = "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // pastaApp is a filtered app: one self-scoped whitelist NetworkList.
@@ -94,8 +94,8 @@ func TestPlan_Pasta(t *testing.T) {
 	}
 }
 
-// A multiterminal pasta app keeps the same lock-down ordering — pod create → nft lock
-// → app — but the final step is the detached holder, so there is still no
+// A multiterminal pasta app keeps the same lock-down ordering - pod create → nft lock
+// → app - but the final step is the detached holder, so there is still no
 // unfiltered-egress window.
 func TestPlan_PastaMultiterminal(t *testing.T) {
 	cfg := pastaApp()
@@ -120,14 +120,14 @@ func TestPlan_PastaMultiterminal(t *testing.T) {
 	}
 }
 
-// Launch must validate before it ever touches a port — an invalid definition can't
+// Launch must validate before it ever touches a port - an invalid definition can't
 // reach podman (here the ports are nil, so any use would panic).
 func TestLaunch_InvalidConfigNeverLaunches(t *testing.T) {
 	cfg := schema.AppConfig{
 		SchemaVersion: schema.SchemaVersion,
 		Type:          schema.ZincContainer,
 		AppNameID:     "demo",
-		ImageMeta:     schema.ImageMeta{Image: "alpine:latest"}, // §5.5 violation
+		ImageMeta:     schema.ImageMeta{Image: "alpine:latest"}, // section 5.5 violation
 	}
 	err := planSvc().Launch(cfg, options.HostOptions{})
 	if err == nil || !strings.Contains(err.Error(), "digest-pinned") {

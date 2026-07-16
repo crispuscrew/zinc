@@ -1,12 +1,12 @@
-// Package app is the runner's application layer — the hexagon's "inside". A Service
+// Package app is the runner's application layer - the hexagon's "inside". A Service
 // orchestrates a launch by composing the ports (Store, Runtime, ImageBuilder,
 // ImageResolver, NetEnforcer) and depends on none of their concrete adapters. The
 // front-ends build the adapters, hand them to New, and drive everything through this
 // one facade.
 //
-// This is where the launch sequence lives — validate, build the derived image if
-// needed, run the egress lock-down through the NetEnforcer, then start the app — so
-// there is exactly one launch path to get right (docs/architecture.md §9.1, §13).
+// This is where the launch sequence lives - validate, build the derived image if
+// needed, run the egress lock-down through the NetEnforcer, then start the app - so
+// there is exactly one launch path to get right (docs/architecture.md section 9.1, section 13).
 package app
 
 import (
@@ -36,10 +36,10 @@ func New(store ports.Store, runtime ports.Runtime, builder ports.ImageBuilder, r
 }
 
 // Plan returns the ordered runtime commands a launch would run, without running them
-// — the NetEnforcer's pre-steps (establish + lock the netns) followed by the app
+// - the NetEnforcer's pre-steps (establish + lock the netns) followed by the app
 // container. Used for dry-run so what will happen is fully visible.
 func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.Command, error) {
-	if err := validate.Validate(cfg); err != nil { // never compose commands from unvalidated config (§3)
+	if err := validate.Validate(cfg); err != nil { // never compose commands from unvalidated config (section 3)
 		return nil, fmt.Errorf("%s: %w", cfg.AppNameID, err)
 	}
 	if err := checkNetwork(cfg); err != nil {
@@ -56,7 +56,7 @@ func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.
 	return append(svc.net.Prepare(cfg, opt), ports.Command{Args: appArgs, Desc: desc}), nil
 }
 
-// Launch validates cfg, auto-starts its depends_on apps (§6.6), ensures its derived
+// Launch validates cfg, auto-starts its depends_on apps (section 6.6), ensures its derived
 // image (if ImageMeta.Install is set), runs the egress lock-down through the
 // NetEnforcer (fail-closed: a half-built netns is torn down on any error), then
 // starts the app container detached. A multiterminal app launches by opening its
@@ -69,13 +69,13 @@ func (svc Service) Launch(cfg schema.AppConfig, opt options.HostOptions) error {
 // (root → cfg's parent); it lets depends_on auto-start detect cycles. The public
 // Launch starts the recursion with a nil chain.
 func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain []string) error {
-	if err := validate.Validate(cfg); err != nil { // launch-time check catches drift (§3)
+	if err := validate.Validate(cfg); err != nil { // launch-time check catches drift (section 3)
 		return fmt.Errorf("%s: %w", cfg.AppNameID, err)
 	}
 	if err := checkNetwork(cfg); err != nil { // fail closed on not-yet-supported network shapes
 		return err
 	}
-	if err := svc.startDependencies(cfg, opt, chain); err != nil { // §6.6: dependencies first
+	if err := svc.startDependencies(cfg, opt, chain); err != nil { // section 6.6: dependencies first
 		return err
 	}
 	if cfg.StartConditions.Multiterminal {
@@ -122,11 +122,11 @@ func (svc Service) teardown(cfg schema.AppConfig, hadSteps bool) error {
 }
 
 // Rename changes an app's identity from oldName to newName. There is no atomic file
-// rename, because the name lives in two places — the filename and AppNameID inside
-// the YAML — so this loads the definition, rewrites AppNameID, saves it under the new
+// rename, because the name lives in two places - the filename and AppNameID inside
+// the YAML - so this loads the definition, rewrites AppNameID, saves it under the new
 // name (which re-validates the name), and removes the old definition.
 //
-// It refuses to overwrite an existing app, and to rename a running one — its
+// It refuses to overwrite an existing app, and to rename a running one - its
 // container is named after the old name and would be orphaned (the renamed definition
 // could no longer stop it); stop it first.
 func (svc Service) Rename(oldName, newName string) error {
@@ -140,7 +140,7 @@ func (svc Service) Rename(oldName, newName string) error {
 		return fmt.Errorf("rename %s: %q already exists", oldName, newName)
 	}
 	if running, err := svc.runtime.Running(); err == nil && running[oldName] {
-		return fmt.Errorf("rename %s: app is running — stop it first (its container is named %q)", oldName, oldName)
+		return fmt.Errorf("rename %s: app is running - stop it first (its container is named %q)", oldName, oldName)
 	}
 	cfg, err := svc.store.Load(oldName)
 	if err != nil {
@@ -160,8 +160,8 @@ func (svc Service) Rename(oldName, newName string) error {
 func (svc Service) Build(cfg schema.AppConfig) error { return svc.builder.Build(cfg) }
 
 // ensureImage builds the derived image when ImageMeta.Install is set and the live
-// image is missing or stale (its fingerprint label differs) — the auto-on-run trigger
-// (§9.1).
+// image is missing or stale (its fingerprint label differs) - the auto-on-run trigger
+// (section 9.1).
 func (svc Service) ensureImage(cfg schema.AppConfig) error {
 	if !derived.HasInstall(cfg) {
 		return nil
@@ -192,5 +192,5 @@ func (svc Service) Running() (map[string]bool, error)          { return svc.runt
 func (svc Service) Logs(name string, tail int) (string, error) { return svc.runtime.Logs(name, tail) }
 
 // Do runs a user-facing runtime command (restart/inspect/logs passthrough) with the
-// host's stdio — for the CLI, where streaming output is wanted.
+// host's stdio - for the CLI, where streaming output is wanted.
 func (svc Service) Do(args []string) error { return svc.runtime.Do(args) }

@@ -2,7 +2,7 @@
 // (Wayland/runtime sockets, theme bundle, terminal emulator, netfilter image) from
 // environment variables into an options.HostOptions. It is the one place env → options
 // lives, so every front-end wires the host identically and the argv-building adapters
-// stay pure (docs/architecture.md §9.1, §13).
+// stay pure (docs/architecture.md section 9.1, section 13).
 package host
 
 import (
@@ -27,7 +27,7 @@ func Options() options.HostOptions {
 
 // terminalArgv resolves the terminal emulator for terminal apps: $ZINC_TERMINAL, else
 // $TERMINAL, split on spaces so both "foot" and "xterm -e" work. Empty when neither is
-// set — launching a terminal app then fails with a clear message.
+// set - launching a terminal app then fails with a clear message.
 func terminalArgv() []string {
 	spec := os.Getenv("ZINC_TERMINAL")
 	if spec == "" {

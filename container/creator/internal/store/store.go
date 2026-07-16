@@ -2,15 +2,15 @@
 // directory (~/.config/zinc/apps) and provides the YAML decode/encode used by the
 // $EDITOR round-trip.
 //
-// It is the creator's own copy of the on-disk format — deliberately independent of the
+// It is the creator's own copy of the on-disk format - deliberately independent of the
 // runner so zcc never imports zcr (zcc authors app files; zcr runs them). Both sides
 // read/write the exact same layout: the shared schema (common) plus this identical
 // atomic-write + KnownFields codec, so a file zcc writes is one zcr loads verbatim.
 //
 // Save validates (validate.Validate) before writing, so invalid config never lands on
 // disk, and writes are atomic (temp file + rename) so a crash can't leave a
-// half-written definition. Load only decodes — zcr runs validate.Validate again at
-// launch time, which catches drift from hand edits (docs/architecture.md §3).
+// half-written definition. Load only decodes - zcr runs validate.Validate again at
+// launch time, which catches drift from hand edits (docs/architecture.md section 3).
 package store
 
 import (
@@ -30,7 +30,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 )
 
-// Load reads and decodes an app YAML from disk. It does NOT apply semantic rules —
+// Load reads and decodes an app YAML from disk. It does NOT apply semantic rules -
 // call validate.Validate on the result. Unknown keys (typos, stale fields after a hand
 // edit) are reported as an error so dead config can't silently accumulate.
 func Load(path string) (schema.AppConfig, error) {
@@ -50,7 +50,7 @@ func Load(path string) (schema.AppConfig, error) {
 	return cfg, nil
 }
 
-// Marshal encodes an app config back to YAML — used to hand a draft to $EDITOR (the
+// Marshal encodes an app config back to YAML - used to hand a draft to $EDITOR (the
 // "advanced" form action) and round-trip it back through Load.
 func Marshal(cfg schema.AppConfig) ([]byte, error) {
 	data, err := yaml.Marshal(cfg)
@@ -111,15 +111,15 @@ func (sto *Store) Exists(name string) bool {
 	return err == nil
 }
 
-// Load decodes the named app. It does NOT validate — validate.Validate runs before
+// Load decodes the named app. It does NOT validate - validate.Validate runs before
 // launching (zcr) and before saving (below), which is what catches drift from hand
-// edits (§3).
+// edits (section 3).
 func (sto *Store) Load(name string) (schema.AppConfig, error) {
 	return Load(sto.Path(name))
 }
 
 // LoadFile decodes an arbitrary .yaml path (a CLI path argument, or the editor
-// round-trip temp file) — same codec as Load, no store lookup.
+// round-trip temp file) - same codec as Load, no store lookup.
 func (sto *Store) LoadFile(path string) (schema.AppConfig, error) {
 	return Load(path)
 }

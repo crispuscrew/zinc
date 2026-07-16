@@ -1,6 +1,6 @@
 // Command zcr is Zinc's container runtime: it runs an app file
 // (~/.config/zinc/apps/<name>.yaml) via podman, applying the egress lock-down before
-// the app starts (docs/architecture.md §5.3, §9.1). It is the composition root of the
+// the app starts (docs/architecture.md section 5.3, section 9.1). It is the composition root of the
 // runner hexagon: it assembles the app.Service from wire and drives it from the CLI.
 //
 //	zcr run <app> [--exec]      print the launch plan, or launch it (--exec)
@@ -8,7 +8,7 @@
 //	zcr validate <app>          parse + validate; report problems and warnings
 //	zcr stop|restart|inspect <app>
 //	zcr logs <app> [-f]
-//	zcr term <app> [--shell]    open a terminal for a multiterminal app (§9.1)
+//	zcr term <app> [--shell]    open a terminal for a multiterminal app (section 9.1)
 //	zcr ps                      running apps, one per line
 //	zcr image search <term> | resolve <ref>
 //
@@ -165,7 +165,7 @@ func termCmd(cfg schema.AppConfig) []string {
 
 // cmdBuild (re)builds an app's derived image (FROM ImageMeta.Image + ImageMeta.Install).
 // A plain `zcr run` already rebuilds on demand when the install line or base changes;
-// this is the explicit build (§5.5, §9.1).
+// this is the explicit build (section 5.5, section 9.1).
 func cmdBuild(svc app.Service, argv []string) error {
 	if len(argv) != 1 {
 		return fmt.Errorf("usage: zcr build <app>")
@@ -178,7 +178,7 @@ func cmdBuild(svc app.Service, argv []string) error {
 		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
 	}
 	if !derived.HasInstall(cfg) {
-		return fmt.Errorf("%s: no ImageMeta.Install set — nothing to build; it runs %s directly", cfg.AppNameID, cfg.ImageMeta.Image)
+		return fmt.Errorf("%s: no ImageMeta.Install set - nothing to build; it runs %s directly", cfg.AppNameID, cfg.ImageMeta.Image)
 	}
 	fmt.Printf("# building %s (FROM %s)\n", derived.DerivedImageRef(cfg.AppNameID), cfg.ImageMeta.Image)
 	if err := svc.Build(cfg); err != nil {
@@ -199,7 +199,7 @@ func cmdValidate(svc app.Service, argv []string) error {
 	if verr := validate.Validate(cfg); verr != nil {
 		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
 	}
-	fmt.Printf("ok: %s — image=%s\n", cfg.AppNameID, cfg.ImageMeta.Image)
+	fmt.Printf("ok: %s - image=%s\n", cfg.AppNameID, cfg.ImageMeta.Image)
 	for _, warn := range validate.Warnings(cfg) {
 		fmt.Println("warning: " + warn)
 	}
@@ -266,7 +266,7 @@ func parseTermArgs(argv []string) (name string, shell bool, err error) {
 }
 
 // cmdTerm opens one more terminal for a multiterminal app: it spawns a detached waiter
-// and returns. The first terminal starts the shared holder (§9.1).
+// and returns. The first terminal starts the shared holder (section 9.1).
 func cmdTerm(svc app.Service, opt options.HostOptions, argv []string) error {
 	name, shell, err := parseTermArgs(argv)
 	if err != nil {
@@ -314,7 +314,7 @@ func cmdPs(svc app.Service) error {
 }
 
 // cmdImage helps choose an image without a browser: search registries, or resolve a tag
-// to its digest-pinned form (§5.5) ready to paste into ImageMeta.Image.
+// to its digest-pinned form (section 5.5) ready to paste into ImageMeta.Image.
 func cmdImage(svc app.Service, argv []string) error {
 	if len(argv) != 2 {
 		return fmt.Errorf("usage: zcr image search <term> | zcr image resolve <ref>")

@@ -4,8 +4,8 @@
 //
 // Save validates (validate.Validate) before writing, so invalid config never lands on
 // disk, and writes are atomic (temp file + rename) so a crash can't leave a
-// half-written definition. Load only decodes — callers run validate.Validate at launch
-// time, which catches drift from hand edits (docs/architecture.md §3).
+// half-written definition. Load only decodes - callers run validate.Validate at launch
+// time, which catches drift from hand edits (docs/architecture.md section 3).
 package fs
 
 import (
@@ -29,7 +29,7 @@ import (
 // Compile-time check that the filesystem store satisfies the Store port.
 var _ ports.Store = (*Store)(nil)
 
-// Load reads and decodes an app YAML from disk. It does NOT apply semantic rules —
+// Load reads and decodes an app YAML from disk. It does NOT apply semantic rules -
 // call validate.Validate on the result. Unknown keys (typos, stale fields after a hand
 // edit) are reported as an error so dead config can't silently accumulate.
 func Load(path string) (schema.AppConfig, error) {
@@ -49,7 +49,7 @@ func Load(path string) (schema.AppConfig, error) {
 	return cfg, nil
 }
 
-// Marshal encodes an app config back to YAML — used to hand a draft to $EDITOR (the
+// Marshal encodes an app config back to YAML - used to hand a draft to $EDITOR (the
 // "advanced" form action) and round-trip it back through Load.
 func Marshal(cfg schema.AppConfig) ([]byte, error) {
 	data, err := yaml.Marshal(cfg)
@@ -110,14 +110,14 @@ func (sto *Store) Exists(name string) bool {
 	return err == nil
 }
 
-// Load decodes the named app. It does NOT validate — call validate.Validate before
-// launching, which is what catches drift from hand edits (§3).
+// Load decodes the named app. It does NOT validate - call validate.Validate before
+// launching, which is what catches drift from hand edits (section 3).
 func (sto *Store) Load(name string) (schema.AppConfig, error) {
 	return Load(sto.Path(name))
 }
 
 // LoadFile decodes an arbitrary .yaml path (a CLI path argument, or the editor
-// round-trip temp file) — same codec as Load, no store lookup.
+// round-trip temp file) - same codec as Load, no store lookup.
 func (sto *Store) LoadFile(path string) (schema.AppConfig, error) {
 	return Load(path)
 }

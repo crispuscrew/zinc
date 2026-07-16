@@ -79,7 +79,7 @@ func newForm(base schema.AppConfig, creating bool) *formModel {
 	}
 
 	frm.name = newInput(frm.draft.AppNameID, "firefox")
-	frm.image = newInput(frm.draft.ImageMeta.Image, "docker.io/…@sha256:… (trusted images may use a tag)")
+	frm.image = newInput(frm.draft.ImageMeta.Image, "docker.io/...@sha256:... (trusted images may use a tag)")
 	frm.entrypoint = newInput(frm.draft.StartConditions.Entrypoint, "entrypoint, e.g. firefox (blank = image default)")
 	frm.install = newArea(strings.Join(frm.draft.ImageMeta.Install, "\n"), "build setup, one shell line per row, e.g. apt-get install -y firefox (blank = none)")
 	frm.desc = newInput(frm.draft.Description, "")
@@ -130,7 +130,7 @@ func (frm *formModel) buildFields() {
 	}
 	fields = append(fields,
 		formField{label: "image", kind: kindText, input: &frm.image},
-		// Quick-setup fields, grouped with the image they derive from (§9.1): the
+		// Quick-setup fields, grouped with the image they derive from (section 9.1): the
 		// entrypoint to run, and build-time install lines that produce a derived image
 		// (FROM image + RUN install).
 		formField{label: "entrypoint", kind: kindText, input: &frm.entrypoint},
@@ -215,7 +215,7 @@ func (frm *formModel) update(msg tea.Msg) (tea.Cmd, formResult) {
 
 	// In the multi-line install field the arrow keys move the cursor within the
 	// textarea (intrinsic, like the logs viewport's scrolling); tab / shift+tab still
-	// move between fields. Without this, up/down would leave the field — they are the
+	// move between fields. Without this, up/down would leave the field - they are the
 	// NextField/PrevField bindings.
 	if frm.fields[frm.idx].kind == kindMultiline && (keyStr == "up" || keyStr == "down") {
 		var cmd tea.Cmd

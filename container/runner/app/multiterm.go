@@ -1,9 +1,9 @@
 package app
 
-// Multiterminal apps (docs/architecture.md §9.1). A multiterminal app runs as a
+// Multiterminal apps (docs/architecture.md section 9.1). A multiterminal app runs as a
 // detached "holder" container (HolderCmd as PID 1) so it outlives any single
 // terminal; each terminal is a `podman exec -it` session into it, wrapped in the
-// configured emulator. The app lives until the LAST terminal closes — unless it is
+// configured emulator. The app lives until the LAST terminal closes - unless it is
 // also StopConditions.Background, which keeps the holder running.
 //
 // Coordination is by filesystem flock, with no central daemon or socket: each
@@ -31,7 +31,7 @@ import (
 )
 
 // defaultShell is what a "shell" terminal runs when it isn't re-running the app's own
-// command. /bin/sh is present in any real terminal app image (§9.1 honesty note).
+// command. /bin/sh is present in any real terminal app image (section 9.1 honesty note).
 const defaultShell = "/bin/sh"
 
 // OpenTerminal spawns one more terminal for a multiterminal app. It builds the derived
@@ -51,7 +51,7 @@ func (svc Service) OpenTerminal(cfg schema.AppConfig, opt options.HostOptions, s
 		return fmt.Errorf("%s: terminal app but no terminal emulator configured (set ZINC_TERMINAL)", cfg.AppNameID)
 	}
 	// Build the derived image (if ImageMeta.Install is set) here, in the foreground, so
-	// a build failure is reported to the caller — not lost in the detached waiter.
+	// a build failure is reported to the caller - not lost in the detached waiter.
 	if err := svc.ensureImage(cfg); err != nil {
 		return err
 	}
@@ -157,15 +157,15 @@ type waiter struct {
 }
 
 // run executes the lifecycle: register under the coordination lock (starting the
-// holder if needed), run the terminal, then deregister and — if no other terminal is
-// still live and this isn't a background app — stop the container.
+// holder if needed), run the terminal, then deregister and - if no other terminal is
+// still live and this isn't a background app - stop the container.
 func (wtr *waiter) run(app string) error {
 	appDir := filepath.Join(wtr.runRoot, app)
 	if err := os.MkdirAll(appDir, 0o700); err != nil {
 		return fmt.Errorf("multiterm: create %s: %w", appDir, err)
 	}
 
-	// Phase 1 — under the coordination lock: ensure the holder is up (exactly once
+	// Phase 1 - under the coordination lock: ensure the holder is up (exactly once
 	// across racing waiters) and claim a liveness marker before releasing.
 	coord, err := lockFile(filepath.Join(appDir, "lock"), false)
 	if err != nil {
@@ -182,10 +182,10 @@ func (wtr *waiter) run(app string) error {
 	}
 	coord.Close()
 
-	// Phase 2 — run the terminal; this blocks until the window/session closes.
+	// Phase 2 - run the terminal; this blocks until the window/session closes.
 	runErr := wtr.runTerminal()
 
-	// Phase 3 — under the coordination lock: drop our marker, then stop the container
+	// Phase 3 - under the coordination lock: drop our marker, then stop the container
 	// if we were the last live terminal (background opts out). Holding the lock makes
 	// the "last one out" decision atomic against a terminal opening at the same moment.
 	coord, err = lockFile(filepath.Join(appDir, "lock"), false)
@@ -203,7 +203,7 @@ func (wtr *waiter) run(app string) error {
 	return runErr
 }
 
-// lockFile opens path (creating it) and takes an exclusive flock — blocking by
+// lockFile opens path (creating it) and takes an exclusive flock - blocking by
 // default, non-blocking when nonblock is set. The returned file holds the lock until
 // Close. The fd is O_CLOEXEC (Go default), so a child exec'd while it is held does not
 // inherit the lock.
@@ -253,7 +253,7 @@ func claimMarker(appDir string) (*marker, error) {
 
 // anyLive reports whether any terminal other than the caller is still alive, and reaps
 // stale markers as a side effect. A marker whose flock can be taken non-blocking is
-// held by nobody (its waiter died) — stale, so it is removed. One that can't be taken
+// held by nobody (its waiter died) - stale, so it is removed. One that can't be taken
 // is held by a live waiter. Call it only while holding the coordination lock.
 func anyLive(appDir string) bool {
 	entries, err := os.ReadDir(appDir)

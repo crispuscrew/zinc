@@ -1,16 +1,16 @@
-// Package netenforce holds the NetEnforcer adapter — the swappable egress mechanism.
+// Package netenforce holds the NetEnforcer adapter - the swappable egress mechanism.
 // It implements ports.NetEnforcer: how the app container attaches to the network
 // (RunFlags), what must happen to establish and LOCK the netns before the app starts
 // (Prepare), and how to tear it down (Teardown).
 //
 // One mechanism ships today: an app's NetworkLists are enforced as an nftables
 // allow/deny ruleset on the app's own pasta netns (a pod). An app with no
-// NetworkLists gets --network none. A future mechanism — eBPF egress, a proxy
-// sidecar, an external traffic controller — is one more file here implementing the
-// same interface; nothing in app or the podman runtime changes (docs §5.3, §13).
+// NetworkLists gets --network none. A future mechanism - eBPF egress, a proxy
+// sidecar, an external traffic controller - is one more file here implementing the
+// same interface; nothing in app or the podman runtime changes (docs section 5.3, section 13).
 //
 // Scope (this build): self-scoped egress lists (Host=false, empty AppName), tier-3 LAN
-// publishing (Ingress && Host — an nft input chain plus pod `-p` forwards), and tier-2
+// publishing (Ingress && Host - an nft input chain plus pod `-p` forwards), and tier-2
 // sibling links (a private --internal bridge per producer, interface-gated per-port nft;
 // a producer's self-scoped ingress + a consumer's egress naming its AppName). checkNetwork
 // forbids mixing tier-2 with other networking, and still rejects host-scoped egress and
@@ -51,7 +51,7 @@ func PodName(app string) string { return app + "-pod" }
 func LinkNetwork(producer string) string { return "zinc-link-" + producer }
 
 // linkEntry is one bridge a tier-2 app attaches to, paired with the fixed in-container
-// interface name (zlink0, zlink1, …) used both for `--network name:interface_name=` and
+// interface name (zlink0, zlink1, ...) used both for `--network name:interface_name=` and
 // for the nft rules that gate that interface (validated: podman names it exactly that).
 type linkEntry struct {
 	network string
@@ -105,7 +105,7 @@ func filtered(cfg schema.AppConfig) bool {
 
 // RunFlags attaches the app container to the network. Filtered: join the pasta pod
 // (its infra container owns networking and the nft ruleset is already in place from
-// Prepare, so the app only joins the locked netns — no per-app --network, no net
+// Prepare, so the app only joins the locked netns - no per-app --network, no net
 // caps). Unfiltered: --network none.
 func (Enforcer) RunFlags(cfg schema.AppConfig) []string {
 	if filtered(cfg) {
@@ -114,11 +114,11 @@ func (Enforcer) RunFlags(cfg schema.AppConfig) []string {
 	return []string{"--network", "none"}
 }
 
-// Prepare returns the steps that guarantee no unfiltered window (§5.3): ensure any tier-2
+// Prepare returns the steps that guarantee no unfiltered window (section 5.3): ensure any tier-2
 // link bridges exist, create the pod (its netns), then lock the netns with nft *before
 // any app starts*. The app run itself is appended by the caller (app layer) using
 // RunFlags. An unfiltered app has nothing to prepare. Link networks are created
-// idempotently (--ignore) and left in place on teardown — a sibling may still use one.
+// idempotently (--ignore) and left in place on teardown - a sibling may still use one.
 func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.Command {
 	if !filtered(cfg) {
 		return nil
@@ -141,7 +141,7 @@ func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.C
 	)
 }
 
-// Teardown removes the pod (owns the filtered netns — app and firewall go in one
+// Teardown removes the pod (owns the filtered netns - app and firewall go in one
 // step, no stale rule-less netns left behind), or just stops the container for an
 // unfiltered app.
 func (Enforcer) Teardown(cfg schema.AppConfig) []string {
@@ -152,7 +152,7 @@ func (Enforcer) Teardown(cfg schema.AppConfig) []string {
 }
 
 // NFTRuleset renders the nftables ruleset locked into an app's netns before it starts
-// (§5.3). Pure over the validated config. A tier-2 app (private sibling links) is gated
+// (section 5.3). Pure over the validated config. A tier-2 app (private sibling links) is gated
 // per interface; every other filtered app (egress and/or tier-3 LAN publish) is gated by
 // address and port. checkNetwork forbids mixing the two, so this dispatch is total.
 func NFTRuleset(cfg schema.AppConfig) string {
@@ -165,7 +165,7 @@ func NFTRuleset(cfg schema.AppConfig) string {
 // linkRuleset gates a tier-2 app by interface: the private zlink* bridges are always
 // accepted (a consumer reaches its producer, a producer replies over the established
 // rule), and a producer's own published Ports are accepted inbound on its own link
-// interface — nothing else. Both chains default-drop, so an app with only sibling links
+// interface - nothing else. Both chains default-drop, so an app with only sibling links
 // has no other connectivity; a consumer accepts nothing new inbound.
 func linkRuleset(cfg schema.AppConfig) string {
 	var bld strings.Builder
@@ -199,18 +199,18 @@ func linkRuleset(cfg schema.AppConfig) string {
 }
 
 // standardRuleset renders the address/port ruleset for an egress and/or tier-3 app
-// (§5.3), loaded into the pod's netns by the netfilter init step before the app starts.
+// (section 5.3), loaded into the pod's netns by the netfilter init step before the app starts.
 //
 // A list's direction picks its chain: an egress list (Ingress=false) becomes an output
-// rule (where the app may connect to — daddr), an ingress list (Ingress=true) becomes
-// an input rule (who may connect in to the app's published ports — saddr). Egress lists
+// rule (where the app may connect to - daddr), an ingress list (Ingress=true) becomes
+// an input rule (who may connect in to the app's published ports - saddr). Egress lists
 // build the output chain, ingress lists the input chain; each is sized independently.
 //
 // Per-direction chain policy follows that direction's lists: a whitelist ("only these")
 // means default-drop (fail-closed); an all-blacklist direction ("all but these") means
 // default-accept. A single whitelist present flips the direction to restrictive
 // default-drop (see chainPolicy/allBlacklist), so it never silently opens. A direction
-// with no lists is default-drop — a pure publisher gets no egress, an egress-only app
+// with no lists is default-drop - a pure publisher gets no egress, an egress-only app
 // gets no input chain at all.
 //
 // Loopback and established/related traffic are always accepted (a server's reply rides
@@ -351,7 +351,7 @@ func portList(ports []int) string {
 
 // podCreateArgs builds `podman pod create` for a filtered app's netns. A tier-2 app
 // attaches to its private link bridge(s), each pinned to a fixed interface name the nft
-// rules match (no pasta, no host publish — checkNetwork forbids mixing). Otherwise the
+// rules match (no pasta, no host publish - checkNetwork forbids mixing). Otherwise the
 // pod is a pasta netns: a list naming a host interface makes pasta copy its addressing
 // (first wins), which also scopes tier-3 publishing, and tier-3 (LAN) ingress lists add
 // their ports as `-p` forwards here (pod ports live on the pod, not the container).
@@ -374,12 +374,12 @@ func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	return append(args, publishArgs(cfg)...)
 }
 
-// publishArgs maps tier-3 (LAN) ingress lists — Ingress && Host — onto pod `-p` port
+// publishArgs maps tier-3 (LAN) ingress lists - Ingress && Host - onto pod `-p` port
 // forwards so the LAN can reach the app's published ports; the nft input chain then
 // restricts who (source CIDR) actually gets through, and pasta binds the pod's interface
 // (firstInterface). Each port is forwarded for both tcp and udp to match the input
 // chain; there is no host-port remap (published port == container port). Self-scoped
-// ingress (tier 2) publishes nothing to the host and never reaches here — checkNetwork
+// ingress (tier 2) publishes nothing to the host and never reaches here - checkNetwork
 // rejects it in this build.
 func publishArgs(cfg schema.AppConfig) []string {
 	var args []string
@@ -406,8 +406,8 @@ func firstInterface(cfg schema.AppConfig) string {
 }
 
 // nftApplyArgs builds the one-shot init `podman run` that loads the ruleset into the
-// pod's netns. It carries only NET_ADMIN — namespaced to the pod's userns, so
-// harmless on the host (§5.3) — reads the ruleset from stdin, and exits.
+// pod's netns. It carries only NET_ADMIN - namespaced to the pod's userns, so
+// harmless on the host (section 5.3) - reads the ruleset from stdin, and exits.
 func nftApplyArgs(pod, image string) []string {
 	return []string{
 		"run", "--pod", pod, "--rm", "-i", "--pull", "never",

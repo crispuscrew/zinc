@@ -59,7 +59,7 @@ func TestWaiter_LastOneOutStops(t *testing.T) {
 }
 
 // A background multiterminal app keeps its holder running after every terminal
-// closes — the stop is never called.
+// closes - the stop is never called.
 func TestWaiter_BackgroundNeverStops(t *testing.T) {
 	root := t.TempDir()
 	var stops int32

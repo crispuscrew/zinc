@@ -39,7 +39,7 @@ func key(spec string) tea.KeyMsg {
 	}
 }
 
-// img is a valid digest-pinned reference for a name (§5.5).
+// img is a valid digest-pinned reference for a name (section 5.5).
 func img(name string) string {
 	return "docker.io/library/" + name + "@sha256:" + strings.Repeat("a", 64)
 }
@@ -204,7 +204,7 @@ func TestSaveInvalidStaysInForm(t *testing.T) {
 	mdl.mode = modeForm
 	mdl.form = newForm(schema.AppConfig{}, true)
 	mdl.form.name.SetValue("x")
-	mdl.form.image.SetValue("alpine:latest") // third-party, not digest-pinned (§5.5)
+	mdl.form.image.SetValue("alpine:latest") // third-party, not digest-pinned (section 5.5)
 
 	mdl = send(mdl, key("ctrl+s"))
 	if mdl.mode != modeForm {

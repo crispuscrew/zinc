@@ -2,7 +2,7 @@
 // (podman runtime/builder/resolver, the netenforce egress enforcer, the fs store)
 // into a ready-to-use app.Service. It is deliberately the ONE place that imports
 // every adapter, kept out of the domain/ports/app layers so those stay
-// adapter-agnostic — the hexagon's center never names a concrete edge.
+// adapter-agnostic - the hexagon's center never names a concrete edge.
 //
 // Front-ends call Service / DefaultService to get a fully wired facade; swapping an
 // adapter (e.g. a future non-pasta egress enforcer) is a one-line change here,

@@ -20,7 +20,7 @@ import (
 // Layout:
 //
 //	<Dir>/keys.toml            scheme = "<active-name>"
-//	<Dir>/schemes/<name>.toml  base = "default|vim|…"  + [bindings.<ctx>] overrides
+//	<Dir>/schemes/<name>.toml  base = "default|vim|..."  + [bindings.<ctx>] overrides
 type Store struct{ Dir string }
 
 // Active is the chosen scheme: its name (for display) and its merged bindings.
@@ -60,7 +60,7 @@ func (s *Store) schemesDir() string         { return filepath.Join(s.Dir, "schem
 func (s *Store) schemePath(n string) string { return filepath.Join(s.schemesDir(), n+".toml") }
 
 // Load returns the active scheme. A missing keys.toml means "default". A bad
-// active selection or custom scheme returns an error — the caller decides
+// active selection or custom scheme returns an error - the caller decides
 // whether to fall back (main does, with a warning, so the TUI always starts).
 func (s *Store) Load() (Active, error) {
 	name, err := s.activeName()
@@ -263,7 +263,7 @@ func applyOverrides(s Scheme, raw map[string]map[string][]string) error {
 
 // template is the commented starter written for a new custom scheme.
 func template(name, base string) string {
-	return fmt.Sprintf(`# zcc keybind scheme %q — see "zcc keys show %s" for every action name.
+	return fmt.Sprintf(`# zcc keybind scheme %q - see "zcc keys show %s" for every action name.
 # Inherits all bindings from %q; list only the keys you want to change.
 base = %q
 
