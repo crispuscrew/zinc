@@ -17,6 +17,8 @@ func Validate(cfg schema.AppConfig) error {
 	checkIdentity(cfg, add)
 	checkLifecycle(cfg, add)
 	checkResources(cfg.ResourcesMeta, add)
+	checkInstall(cfg.ImageMeta.Install, add)
+	checkDepends(cfg.StartConditions.DependsOn, add)
 
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		checkNetworkList(index, netList, add)
@@ -29,8 +31,58 @@ func Validate(cfg schema.AppConfig) error {
 	}
 	checkKeys(cfg.Keys, add)
 	checkCapabilities(cfg.Capabilities, add)
+	checkNetworkCapabilities(cfg, add)
 
 	return errors.Join(errs...)
+}
+
+// checkInstall screens each ImageMeta.Install step. The steps are joined into the one
+// RUN layer of the derived-image Containerfile (FROM ImageMeta.Image + RUN ...), so a
+// control character - above all a newline - would break out of that single RUN line
+// and let a crafted config inject its own Containerfile directives (e.g. a second FROM
+// that swaps the base to an unpinned image, defeating the digest pin while the YAML's
+// Image still looks pinned). A legitimate multi-step setup uses one list entry per
+// step; a single step never needs an embedded newline (section 5.5).
+func checkInstall(install []string, add addFunc) {
+	for index, step := range install {
+		if hasControl(step) {
+			add("ImageMeta.Install[%d]: must not contain control characters (a newline would inject extra Containerfile directives); put each setup step in its own list entry (section 5.5)", index)
+		}
+	}
+}
+
+// checkDepends screens each StartConditions.DependsOn name. A dependency name is used
+// verbatim to locate its app file on disk (the store joins it into a path), so it must
+// be a safe object name - the same charset as AppNameID - or a "../.." value could
+// read and launch a definition from outside the apps directory (section 6.6).
+func checkDepends(dependsOn []string, add addFunc) {
+	for index, dep := range dependsOn {
+		if strings.TrimSpace(dep) == "" {
+			add("StartConditions.DependsOn[%d]: must not be empty", index)
+			continue
+		}
+		if !nameRE.MatchString(dep) {
+			add("StartConditions.DependsOn[%d] %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", index, dep)
+		}
+	}
+}
+
+// checkNetworkCapabilities forbids network-administration capabilities on a filtered
+// app. A filtered app (one with NetworkLists) runs inside the pod whose network
+// namespace carries the nftables egress lock-down; granting CAP_NET_ADMIN (or the
+// superset CAP_SYS_ADMIN) would let the app flush that ruleset at runtime and reach an
+// unfiltered network. Enforcement and app-granted netns control are mutually exclusive
+// by design (section 5.3).
+func checkNetworkCapabilities(cfg schema.AppConfig, add addFunc) {
+	if len(cfg.NetworkMeta.NetworkLists) == 0 {
+		return // unfiltered app runs with --network none; NET_ADMIN reaches nothing
+	}
+	for index, capability := range cfg.Capabilities {
+		switch strings.TrimPrefix(strings.ToUpper(capability), "CAP_") {
+		case "NET_ADMIN", "SYS_ADMIN":
+			add("Capabilities[%d] %q: cannot be granted to an app with NetworkLists - it could flush the egress lock-down in the pod netns and escape the network filter (section 5.3)", index, capability)
+		}
+	}
 }
 
 // checkIdentity: schema version, Type, AppNameID, the digest-pinned image, user name.

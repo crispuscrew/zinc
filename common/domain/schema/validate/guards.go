@@ -40,6 +40,19 @@ func hasUnsafe(str string) bool {
 	return false
 }
 
+// hasControl reports control characters (newline, CR, tab, other C0, DEL). Unlike
+// hasUnsafe it permits ordinary spaces, so it can screen a shell line (which needs
+// spaces) for the newline that would split one derived-image RUN into extra
+// Containerfile directives, e.g. a smuggled second FROM (section 5.5).
+func hasControl(str string) bool {
+	for _, run := range str {
+		if run < 0x20 || run == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // hasDotDot reports a ".." segment (bundle escape); paths here are '/'-separated.
 func hasDotDot(rel string) bool {
 	for _, seg := range strings.Split(rel, "/") {

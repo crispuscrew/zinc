@@ -62,20 +62,28 @@ func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.
 // starts the app container detached. A multiterminal app launches by opening its
 // first terminal instead (the holder + a `podman exec`).
 func (svc Service) Launch(cfg schema.AppConfig, opt options.HostOptions) error {
-	return svc.launch(cfg, opt, nil)
+	return svc.launch(cfg, opt, nil, map[string]bool{})
 }
 
 // launch is Launch's recursive core. chain is the stack of apps already mid-launch
-// (root → cfg's parent); it lets depends_on auto-start detect cycles. The public
-// Launch starts the recursion with a nil chain.
-func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain []string) error {
+// (root → cfg's parent); it lets depends_on auto-start detect cycles. started is the
+// set of apps already brought up in THIS launch, shared across the whole recursion:
+// StartApp is detached, so a just-started app is not yet visible to runtime.Running(),
+// and without this shared set a dependency reached by two branches (a diamond) would
+// have its pod created twice - the second create failing and tearing the first down.
+// The public Launch starts the recursion with a nil chain and an empty started set.
+func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain []string, started map[string]bool) error {
+	if started[cfg.AppNameID] {
+		return nil // already brought up earlier in this launch
+	}
 	if err := validate.Validate(cfg); err != nil { // launch-time check catches drift (section 3)
 		return fmt.Errorf("%s: %w", cfg.AppNameID, err)
 	}
 	if err := checkNetwork(cfg); err != nil { // fail closed on not-yet-supported network shapes
 		return err
 	}
-	if err := svc.startDependencies(cfg, opt, chain); err != nil { // section 6.6: dependencies first
+	started[cfg.AppNameID] = true
+	if err := svc.startDependencies(cfg, opt, chain, started); err != nil { // section 6.6: dependencies first
 		return err
 	}
 	if cfg.StartConditions.Multiterminal {

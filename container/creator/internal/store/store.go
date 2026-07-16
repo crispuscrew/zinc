@@ -82,6 +82,16 @@ func (sto *Store) Path(name string) string {
 	return filepath.Join(sto.Root, name+".yaml")
 }
 
+// safeName rejects a name that is not a plain store key - one with a path separator
+// or a ".." segment - so a crafted name (a CLI delete argument, an unvalidated
+// dependency) cannot escape the apps directory when joined into Path.
+func safeName(name string) error {
+	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
+		return fmt.Errorf("store: invalid app name %q", name)
+	}
+	return nil
+}
+
 // List returns the names of all defined apps, sorted. A missing store directory is
 // treated as empty, not an error.
 func (sto *Store) List() ([]string, error) {
@@ -105,16 +115,24 @@ func (sto *Store) List() ([]string, error) {
 	return names, nil
 }
 
-// Exists reports whether an app with the given name is defined.
+// Exists reports whether an app with the given name is defined. An unsafe name is
+// treated as not-defined rather than stat'd through a traversal path.
 func (sto *Store) Exists(name string) bool {
+	if safeName(name) != nil {
+		return false
+	}
 	_, err := os.Stat(sto.Path(name))
 	return err == nil
 }
 
 // Load decodes the named app. It does NOT validate - validate.Validate runs before
 // launching (zcr) and before saving (below), which is what catches drift from hand
-// edits (section 3).
+// edits (section 3). The name must be a plain store key (safeName), so it cannot read
+// a file outside the apps directory.
 func (sto *Store) Load(name string) (schema.AppConfig, error) {
+	if err := safeName(name); err != nil {
+		return schema.AppConfig{}, err
+	}
 	return Load(sto.Path(name))
 }
 
@@ -168,8 +186,13 @@ func (sto *Store) Save(cfg schema.AppConfig) error {
 	return nil
 }
 
-// Delete removes the named app definition. A missing definition is not an error.
+// Delete removes the named app definition. A missing definition is not an error. The
+// name must be a plain store key (safeName), so it cannot remove a file outside the
+// apps directory.
 func (sto *Store) Delete(name string) error {
+	if err := safeName(name); err != nil {
+		return err
+	}
 	err := os.Remove(sto.Path(name))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("store: delete %s: %w", name, err)

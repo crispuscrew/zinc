@@ -14,10 +14,14 @@ import (
 
 // fakeRuntime records which apps were started, in order, and tracks a running set.
 // StartApp marks its app running, so Running() reflects what has come up so far -
-// enough to exercise depends_on ordering without a real podman.
+// enough to exercise depends_on ordering without a real podman. With detachedStart
+// set, StartApp does NOT mark running, modelling production's detached start (the app
+// is not yet visible to Running() when a sibling branch is processed) so the
+// diamond-dependency dedup can be exercised.
 type fakeRuntime struct {
-	running map[string]bool
-	started []string
+	running       map[string]bool
+	started       []string
+	detachedStart bool
 }
 
 func newFakeRuntime(alreadyRunning ...string) *fakeRuntime {
@@ -34,7 +38,9 @@ func (engine *fakeRuntime) AppRunArgs(cfg schema.AppConfig, opt options.HostOpti
 func (engine *fakeRuntime) Exec(ports.Command) error { return nil }
 func (engine *fakeRuntime) StartApp(cfg schema.AppConfig, opt options.HostOptions, runArgs []string, onFail func()) error {
 	engine.started = append(engine.started, cfg.AppNameID)
-	engine.running[cfg.AppNameID] = true
+	if !engine.detachedStart {
+		engine.running[cfg.AppNameID] = true
+	}
 	return nil
 }
 func (engine *fakeRuntime) OpenSession(string, []string, options.HostOptions, bool) error { return nil }
@@ -204,5 +210,64 @@ func TestCheckNetwork_IngressWithAppNameRejected(t *testing.T) {
 	err := checkNetwork(cfg)
 	if err == nil || !strings.Contains(err.Error(), "cannot target an AppName") {
 		t.Fatalf("ingress with AppName should be rejected, got: %v", err)
+	}
+}
+
+// A blacklist on a tier-2 sibling link would open the listed ports instead of gating
+// them (the ports are the allowed set), so it is rejected.
+func TestCheckNetwork_BlacklistLinkRejected(t *testing.T) {
+	cfg := depApp("db")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
+		Ingress: true, Blacklist: true, Ports: []int{5432}, // a producer link, but as a blacklist
+	}}}
+	err := checkNetwork(cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot be a blacklist") {
+		t.Fatalf("blacklist on a sibling link should be rejected, got: %v", err)
+	}
+}
+
+// A dependency shared by two branches (a diamond) is started exactly once, even when a
+// detached StartApp has not yet registered it in Running() as the second branch is
+// processed. Without the shared started-set the shared filtered dependency's pod would
+// be created twice - the second create failing and tearing the first down.
+func TestLaunch_DiamondSharedDependencyStartsOnce(t *testing.T) {
+	store := fakeStore{apps: map[string]schema.AppConfig{
+		"super": depApp("super", "web", "mail"),
+		"web":   depApp("web", "vpn"),
+		"mail":  depApp("mail", "vpn"),
+		"vpn":   depApp("vpn"),
+	}}
+	engine := &fakeRuntime{running: map[string]bool{}, detachedStart: true}
+	if err := depSvc(store, engine).Launch(store.apps["super"], baseOpts()); err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	for _, name := range engine.started {
+		if name == "vpn" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("shared dependency vpn should start exactly once, start sequence = %v", engine.started)
+	}
+	for _, name := range []string{"vpn", "web", "mail", "super"} {
+		if !slices.Contains(engine.started, name) {
+			t.Fatalf("%s did not start; sequence = %v", name, engine.started)
+		}
+	}
+}
+
+// The multiterminal term path must apply the same fail-closed network gate as launch:
+// OpenTerminal rejects a network shape this build cannot enforce (here host-scoped
+// egress) rather than proceeding to open a terminal for a mis-enforced app.
+func TestOpenTerminal_GatesUnsupportedNetwork(t *testing.T) {
+	cfg := depApp("term")
+	cfg.StartConditions.Terminal = true
+	cfg.StartConditions.Multiterminal = true
+	cfg.StartConditions.Entrypoint = "sh"
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{Host: true}}}
+	err := (Service{}).OpenTerminal(cfg, options.HostOptions{}, false)
+	if err == nil || !strings.Contains(err.Error(), "not supported in this build yet") {
+		t.Fatalf("OpenTerminal must gate an unsupported network shape via checkNetwork, got: %v", err)
 	}
 }

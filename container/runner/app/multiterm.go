@@ -44,6 +44,9 @@ func (svc Service) OpenTerminal(cfg schema.AppConfig, opt options.HostOptions, s
 	if err := validate.Validate(cfg); err != nil {
 		return fmt.Errorf("%s: %w", cfg.AppNameID, err)
 	}
+	if err := checkNetwork(cfg); err != nil { // fail closed on not-yet-supported network shapes (as launch does)
+		return err
+	}
 	if !cfg.StartConditions.Multiterminal {
 		return fmt.Errorf("%s: not a multiterminal app", cfg.AppNameID)
 	}
@@ -79,6 +82,9 @@ func (svc Service) OpenTerminal(cfg schema.AppConfig, opt options.HostOptions, s
 func (svc Service) Term(cfg schema.AppConfig, opt options.HostOptions, shell bool) error {
 	if err := validate.Validate(cfg); err != nil {
 		return fmt.Errorf("%s: %w", cfg.AppNameID, err)
+	}
+	if err := checkNetwork(cfg); err != nil { // fail closed on not-yet-supported network shapes (as launch does)
+		return err
 	}
 	if !cfg.StartConditions.Multiterminal {
 		return fmt.Errorf("%s: not a multiterminal app", cfg.AppNameID)

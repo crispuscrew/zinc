@@ -6,6 +6,9 @@
 package backend
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/crispuscrew/zinc/container/creator/internal/runner"
 	"github.com/crispuscrew/zinc/container/creator/internal/store"
 )
@@ -55,19 +58,31 @@ func (Service) Search(term string) ([]Result, error) { return runner.Search(term
 func (Service) Running() (map[string]bool, error) { return runner.Running() }
 
 // Rename moves an app definition on disk: load the old, re-key its AppNameID, save the
-// new (which re-validates), then drop the old file. A no-op rename (same name) still
-// re-saves and keeps the file.
+// new (which re-validates the name), then drop the old file. It refuses to overwrite an
+// existing app (that would silently destroy the target's definition) and to rename a
+// running app (its container is named after the old name and would be orphaned; stop it
+// first). The running check is best-effort: if zcr is unavailable it is skipped, so
+// pure authoring still works without the runtime.
 func (svc Service) Rename(from, to string) error {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	switch {
+	case to == "":
+		return fmt.Errorf("rename %s: new name must not be empty", from)
+	case to == from:
+		return fmt.Errorf("rename %s: new name is unchanged", from)
+	case svc.Exists(to):
+		return fmt.Errorf("rename %s: %q already exists", from, to)
+	}
+	if running, err := svc.Running(); err == nil && running[from] {
+		return fmt.Errorf("rename %s: app is running - stop it first (its container is named %q)", from, from)
+	}
 	cfg, err := svc.Load(from)
 	if err != nil {
 		return err
 	}
 	cfg.AppNameID = to
-	if err := svc.Save(cfg); err != nil {
+	if err := svc.Save(cfg); err != nil { // validates the new name before anything is removed
 		return err
 	}
-	if from != to {
-		return svc.Delete(from)
-	}
-	return nil
+	return svc.Delete(from)
 }
