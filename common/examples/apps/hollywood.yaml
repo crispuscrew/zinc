@@ -1,0 +1,44 @@
+# Quick-setup example (section 5.5, section 9.1): take a stock, digest-pinned distro image and
+# install the program you want instead of authoring a Containerfile. Install builds
+# a derived image (FROM Image + one RUN per entry); Entrypoint runs inside it. A run
+# rebuilds when Image/Install change, or rebuild on demand.
+SchemaVersion: 2
+Type: ZincContainer
+
+AppNameID: hollywood
+Icon: utilities-terminal
+Description: Fake hacker terminal (demo of install + entrypoint)
+
+ImageMeta:
+  Image: docker.io/library/debian@sha256:ed49f2fa955a92dd859d7e2bdd101138b6db7ca855af572212d910d4e1445cc2
+  Install:
+    - apt-get update && apt-get install -y hollywood
+
+StartConditions:
+  Entrypoint: hollywood
+  Terminal: true            # runs in a terminal window
+
+DisplayMeta:
+  DisableSecurityContext: false
+  DisableGpuAccess: true
+
+NetworkMeta:
+  NetworkLists: []
+
+InternalUserMeta:
+  UseNonRootUser: true
+  NonRootUserName: app
+  KeepUserID: false
+
+ResourcesMeta:
+  MaxCPUCores: 1
+  MaxRamMiB: 512
+  PIDsLimit: 256
+
+AudioMeta:
+  Pipewire: false
+  LegacyALSA: false
+
+HostTheme: true
+
+Capabilities: []

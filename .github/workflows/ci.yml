@@ -1,0 +1,76 @@
+name: CI
+
+# launcher/ and virtualization/creator/ are intentionally not built here yet: they still
+# import the removed `core` module and do not compile. Add them to the `check` matrix
+# once they are migrated to `common`.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  common:
+    name: common (schema + validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false # common and e2e have no external deps, so there is nothing to cache
+      - name: gofmt
+        working-directory: common
+        run: |
+          unformatted="$(gofmt -l $(find . -path ./vendor -prune -o -name '*.go' -print))"
+          if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
+      - name: vet
+        working-directory: common
+        run: GOWORK=off go vet ./...
+      - name: test
+        working-directory: common
+        run: GOWORK=off go test ./...
+
+  check:
+    name: check + build (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [container/runner, container/creator]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure podman
+        run: podman --version || { sudo apt-get update && sudo apt-get install -y podman; }
+      - name: make check
+        run: make -C ${{ matrix.module }} check
+      - name: make vendor-check
+        run: make -C ${{ matrix.module }} vendor-check
+      - name: make build
+        run: make -C ${{ matrix.module }} build
+      - name: make repro
+        run: make -C ${{ matrix.module }} repro
+
+  e2e:
+    name: end-to-end (podman)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false # common and e2e have no external deps, so there is nothing to cache
+      - name: Ensure podman
+        run: podman --version || { sudo apt-get update && sudo apt-get install -y podman; }
+      - name: make e2e
+        run: make -C container/e2e e2e
+        # A runner without rootless nftables can gate just the network scenario with:
+        #   env:
+        #     ZINC_E2E_NO_NET: "1"

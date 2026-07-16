@@ -1,0 +1,14 @@
+SchemaVersion: 2
+Type: ZincContainer
+AppNameID: producer
+Description: tier-2 scenario - publishes port 5432 to sibling apps over a private link
+ImageMeta:
+  Image: localhost/zinc/e2e-app:local
+StartConditions:
+  Entrypoint: /listen.sh
+NetworkMeta:
+  NetworkLists:
+    # Self-scoped ingress: expose this app's own port 5432 to siblings that link to it.
+    # It listens on 9999 too, but that port is not published, so the firewall drops it.
+    - Ingress: true
+      Ports: [5432]

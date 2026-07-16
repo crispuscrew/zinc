@@ -1,0 +1,8 @@
+# Minimal image for the end-to-end tests: a shell plus busybox nc, with the three
+# entrypoint scripts baked in. The runtime passes an app's Entrypoint as a single-token
+# --entrypoint, so each scenario points at exactly one script. Not a production image;
+# it is referenced as a localhost/ tag, which the validator exempts from digest pinning.
+FROM docker.io/library/alpine:3.20
+
+COPY sleeper.sh listen.sh probe.sh /
+RUN chmod +x /sleeper.sh /listen.sh /probe.sh
