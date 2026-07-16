@@ -125,8 +125,8 @@ type Volume struct {
 	Executable bool `yaml:"Executable"`
 }
 
-// Keys is a convenience layer for SSH/GPG only (section 3 [keys]): unlike [[mounts]] it
-// also wires the agent socket and enforces 0600 inside the container.
+// Keys is a convenience layer for SSH/GPG only (section 3): unlike a plain Volume it
+// mounts the key read-only into the container home (.ssh for SSH, .gnupg for GPG).
 type KeyType string
 
 const (

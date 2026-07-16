@@ -38,7 +38,7 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - The network model **rejects at launch** (fail-closed, never mis-enforced):
   host-scoped egress, gateway / multi-homing, and combining a sibling link with
   any other networking on one app.
-- Validated but not yet wired into the launch: `ResourcesMeta`,
+- Schema-defined but not yet wired into the launch: `ResourcesMeta`,
   `InternalUserMeta`, `NotificationMeta`, and bundle-relative `Configs` mounts.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.

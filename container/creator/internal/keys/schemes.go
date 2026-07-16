@@ -108,7 +108,7 @@ func IsBuiltin(name string) bool {
 }
 
 // SchemeFor returns a built-in scheme by name (a copy, safe to mutate). The
-// bool is false for an unknown name - mirrors config.DefaultsFor.
+// bool is false for an unknown name.
 func SchemeFor(name string) (Scheme, bool) {
 	s, ok := builtins[name]
 	if !ok {
