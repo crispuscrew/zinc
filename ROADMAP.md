@@ -1,138 +1,81 @@
-# HyprZinc — Roadmap
+# Zinc - Roadmap
 
-Source of truth: [`docs/architecture.md`](docs/architecture.md). Priority order
-**Stable → Secure → Beautiful**.
+Source of truth: [`docs/architecture.md`](docs/architecture.md). Release plan:
+[`RELEASES.md`](RELEASES.md). Priority order: **Stable, then Secure, then Beautiful**.
 
-**Style:** functional core / imperative shell — schema, validation, and the
-podman/VM "runspec" builders are pure functions over decoded data; I/O and process
-execution live at the edges (CLI/TUI). Every milestone ships with tests and a
-runnable exit check.
+**Style:** functional core / imperative shell. The schema, validation, and the podman
+argv/ruleset builders are pure functions over decoded data; I/O and process execution live
+at the edges (the adapters, the CLI/TUI). Every release ships with tests and a runnable
+exit check.
 
-Legend: ✅ done · 🚧 in progress · ⬜ not started
+Legend: done, in progress, planned.
 
 ---
 
-## M0 — Foundation ✅
-Repo skeleton (§13), the **app-config schema** + pure **validation**, and the pure
-**podman runspec builder** (`AppConfig → podman run` argv). Thin `hzc` CLI:
-`validate`, `run` (dry-run by default, `--exec` to launch).
+## 0.1 - Containers (zcc + zcr) - in progress
 
-Each tool is its own Go module (`…/hyprzinc/{hzc,hzl,hzv}`) with vendored deps;
-all three share one build pipeline — a repo-root `tool.mk` + a generic, digest-
-pinned `Containerfile` (`make container-build`). `hzc` is implemented; `hzl`/`hzv`
-are buildable skeletons. The pure packages live in `hzc/internal/{config,runspec}`
-— they are the functional core and **graduate to a standalone `…/hyprzinc/core`
-module when `hzl`/`hzv` need them** (§13). No second consumer yet ⇒ no multi-module
-plumbing yet.
-- **Exit:** `hzc validate examples/apps/firefox.toml` passes; `hzc run …` prints the
-  correct `podman` command; `go test ./...` green.
+The two container tools reach MVP.
 
-## M1 — hzc container lifecycle ✅
-Config store CRUD under `~/.config/hyprzinc/apps/`; presets as templates (§4);
-save- **and** launch-time validation; real `run/stop/restart/inspect/logs` via
-podman; digest-pin (third-party) vs local-tag (`trusted-*`) handling (§5.5).
-- **Exit:** define + launch firefox in a rootless container with strict defaults;
-  stop / restart / logs work.
+Delivered:
+- The v2 app-config **schema** and pure **validation** in `common/` (including the rule
+  that third-party images must be digest-pinned).
+- A YAML config store under `~/.config/zinc/apps`, with save-time and launch-time
+  validation.
+- **zcr**: real rootless-container lifecycle (`run`/`stop`/`restart`/`inspect`/`logs`/
+  `ps`), derived images (`FROM image` + the install layer), multiterminal apps, and a
+  `--version` stamped from git.
+- **zcc**: a keyboard-first Bubbletea TUI plus a scriptable CLI; it authors app files and
+  shells out to `zcr` to run them.
+- **Network lock-down**, applied in the app's own netns by an nftables init step before the
+  app starts, with no unfiltered window: isolated (localhost only), egress whitelist,
+  ingress publish to the LAN, and per-port sibling links over a private bridge.
+- Podman-only reproducible builds, an end-to-end suite against real podman, and CI.
 
-## M2 — hzc TUI (Bubbletea) ✅
-Keyboard-first create / edit / delete / launch / stop; preset picker that shows each
-field's **actual value**, not just the label (§4); logs view. (List-valued fields —
-`[[mounts]]`, `[keys]`, the pasta allowlist — stay TOML-editable, shown read-only in
-the form. "Save running state as profile" moves to M10, which owns profiles.)
-- **Exit:** manage apps end-to-end without leaving the TUI or touching a mouse.
-- *Added later:* the TUI's own keybindings are remappable via selectable schemes
-  (`default`/`vim`/custom under `~/.config/hyprzinc/hzc/`, `hzc keys` + `?` picker).
-  This is hzc UI polish — separate from the Hyprland desktop hotkeys (§12), which
-  remain M10 and depend on the Nix module (M8).
-- *Added later:* `multiterminal` apps — a terminal app can run a shared keep-alive
-  holder that many terminals attach to (`hzc term`, or the TUI run/shell actions),
-  living until the last terminal closes unless `background` (§9.1).
-- *Added later:* quick setup via `app.install` + `app.command` — a derived image
-  (`FROM image` + one `RUN install` layer) so a stock distro image can `apt`/`apk`/
-  `dnf` what it needs without a Containerfile; built on demand at run or with `hzc
-  build`/the TUI build action (§5.5, §9.1). Keyboard hints also trimmed to the
-  gestures that actually apply (no per-screen "porridge" of every key).
+Known gaps (honest, tracked): the network model still rejects (does not run) host-scoped
+egress, gateway / multi-homing, and combining a sibling link with other networking on one
+app; bundle-relative config mounts are deferred. Test coverage is partial away from the
+security path. `launcher/` and `virtualization/creator/` do not yet compile (they still
+reference the removed `core` module).
 
-## M3 — Network egress enforcement ✅
-pasta wiring; **nftables-in-netns** CIDR + port allowlist (§5.3); `block_dns`;
-modes `none` / `pasta`. Enforced with **no unfiltered-egress window**: a pasta app
-runs in a podman *pod* whose netns an nft init step locks down — the locally built
-`trusted-netfilter` helper, run with `--pull=never` and only a namespaced
-`NET_ADMIN` — *before* the app container starts; `hzc stop` tears the pod (and its
-filtered netns) down. Container-mode DNS through the in-tunnel resolver is M4.
-- **Exit:** a `pasta` app reaches only allowlisted CIDRs/ports; 53/853 blocked except
-  the designated resolver.
+## 0.2 - Launcher TUI (zlt) - planned
 
-## M4 — vpn-container 🚧
-Image: sing-box + amnezia-wg + xray + entrypoint that renders `config.json` from
-home-manager input (§6.1); socks5 backends; destination-CIDR routing; **fail-closed
-DNS** (§6.5); `network.mode = "container"` attach; `depends_on` ordering (§6.6).
-- *Done:* `network.mode = "container"` attach (the `NetEnforcer` `container` adapter)
-  and `depends_on` ordering — a launch auto-starts dependencies depth-first
-  (cycle-detected), and a container-mode app fails closed if its `network.target`
-  is neither already running nor a declared dependency (never attach to a missing
-  netns). Lives in `core/app/depends.go`, the launch-time check `domain.Validate`
-  defers to it (§6.6).
-- *Next:* the `trusted-vpn` image (entrypoint + sing-box/amnezia-wg/xray, socks5
-  backends, destination-CIDR routing) and fail-closed DNS.
-- **Exit:** app routed through vpn-container with per-destination backend selection;
-  VPN down ⇒ no resolution, no leak.
+A fast, keyboard-driven picker (TUI) over the defined apps: fuzzy search, launch through
+`zcr`, dependency auto-start.
 
-## M5 — Trusted image layering ⬜
-Containerfiles `trusted-base → trusted-go → trusted-go-dev` (+ `trusted-rust`) (§7);
-`FROM` pinned **by digest**, package versions pinned; local build flow; nvim only in
-`-dev`.
-- **Exit:** `trusted-go-dev` builds; an app references a locally-built trusted image.
+## 0.3 - 0.6 - Zinc Desktop Environment (zde-niri) - planned
 
-## M6 — Theme bundle, audio, keys, mounts ⬜
-Curated **theme bundle** RO mount + theme env vars (§5.6); pipewire socket /
-`legacy_alsa`; ssh/gpg key mounts + agent sockets + 0600 enforcement (§3 `[keys]`);
-general `[[mounts]]`.
-- **Exit:** a containerized GTK/Qt app matches the host theme; audio + ssh-agent work
-  on explicit grant only.
+The `zde-niri` variant reaches MVP (0.3), gains automatic qemu config for testing (0.4),
+then a visual helper (0.6). A GUI launcher (`zlg`) lands at 0.5.
 
-## M7 — hzl launcher + smart executor (gioui) ⬜
-`Super+G`; fuzzy search across apps / built-in commands / projects / custom commands /
-VMs (§9.2); vertical card list; icon store + 64×64 thumbnail cache (§9.2); built-in
-commands; custom-command TOML; project scan paths; `depends_on` auto-start.
-- **Exit:** launch any source by keyboard from one search line.
+## 0.7 - Virtualization (zvc + zvr) - planned
 
-## M8 — Nix home-manager module + flake ⬜
-Flake outputs `hzc/hzl/hzv` + `homeManagerModules.hyprzinc` (§9.3); module generates
-Hyprland config, binaries on PATH, terminal/shell/fonts, the **theme bundle**, and a
-**first-run seed** of TOMLs (hzc owns them thereafter); vpn backends/routes;
-`projectPaths`.
-- **Exit:** `home-manager switch` brings a fresh workstation to full state.
-  *(Blocked on this box — Nix not installed.)*
+VM apps as the container tools' sibling: a creator and a runner over rootless
+libvirt/qemu, sharing the same config library and format.
 
-## M9 — hzv VM manager (MVP) ⬜
-Bubbletea TUI; rootless `libvirt` user session + qemu; VM TOML schema (§10.3);
-**`window` display mode only** (others return a clear "not implemented"); network
-`user`/`bridge`/`none`; disposable (`destroy_on_shutdown`); user-provided base
-images; hzl integration.
-- **Exit:** define + launch a VM in `window` mode; disposable wipes on shutdown.
+---
 
-## M10 — Profiles, hotkeys, autostart ⬜
-Profile config + activation (modal-confirm stop of apps not in the profile, start with
-`depends_on`, workspace placement) (§8); Hyprland hotkeys (§12); login autostart
-(`autostart`, `autostart_workspace`).
-- **Exit:** `Super+P` profile switch reshapes the running session.
+## Beyond the version line - container hardening
+
+Container work that matures alongside the releases above, not tied to one version:
+
+- **vpn-container routing:** an app routed through a sibling VPN app with per-destination
+  backend selection and fail-closed DNS (the network model already has the directional,
+  fail-closed foundation; this extends it and lifts the "combining a link with other
+  networking" restriction).
+- **Trusted image layering:** curated, digest-pinned base images built locally, so an app
+  can reference a known-good base without a hand-written Containerfile.
+- **Theme bundle, audio, keys, mounts:** a read-only theme bundle + env for host-matching
+  GTK/Qt apps; pipewire / legacy-ALSA audio on explicit grant; ssh/gpg key mounts with
+  agent sockets and 0600 enforcement; general host mounts.
+- **Nix home-manager module + flake:** the tools on `$PATH`, a first-run seed of app files,
+  and desktop wiring, all reproducible.
+- **Profiles, hotkeys, autostart:** named session profiles, desktop hotkeys, and login
+  autostart.
 
 ---
 
 ### Cross-cutting
-- **Honesty:** where a mechanism is partial (wsc §5.2, GPU §5.4) say so in UI + docs.
-- **Every change:** `go test ./...`, `go vet ./...`, gofmt clean.
-- Known tradeoffs tracked in architecture §14.
 
-### Dependency order
-```
-M0 → M1 → M2
-        └→ M3 → M4
-M5 ┄ feeds M1, M4
-M6 ┄ after M1
-M7 ┄ after M2 (+ M9 for the VM source)
-M8 ┄ after the three tools build  (needs Nix)
-M9 ┄ parallel to M7
-M10 ┄ last
-```
+- **Honesty:** where a mechanism is partial, say so in the UI and the docs.
+- **Every change:** `make check` green (gofmt + vet + test) in every module you touched.
+- Known tradeoffs are tracked in the architecture doc.
