@@ -1,0 +1,22 @@
+# Minimal helper image carrying nft, for the pasta network lock-down init step
+# (docs/architecture.md 5.3). It runs once per launch inside the app pod's network
+# namespace (with namespaced CAP_NET_ADMIN), loads the ruleset zcr pipes in on
+# stdin, and exits - the rules persist in the pod netns for the app that starts
+# next, so the app never sees an open network.
+#
+# Local by design (section 5.5): referenced by a local tag (zinc/netfilter:local)
+# and run with --pull never, built from this vetted Containerfile whose FROM base
+# is pinned by digest. Unlike the reproducible Go-tool build, this one runs `apk
+# add` and so needs network at build time - acceptable for a locally built helper.
+# nft is pinned by version below.
+#
+# Build:  make -C container/runner netfilter-image
+FROM docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+
+# Pinned to the version in the pinned base's repo (alpine v3.22/main) for
+# reproducibility - this image runs with CAP_NET_ADMIN and writes the egress
+# ruleset. apk resolves the dep tree, so only the top-level package is pinned.
+RUN apk add --no-cache nftables=1.1.3-r0
+
+# No ENTRYPOINT: zcr invokes `nft -f -` explicitly (the netenforce adapter builds
+# the apply args).

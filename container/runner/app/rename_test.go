@@ -54,7 +54,7 @@ func TestRenameRefusesExistingTarget(t *testing.T) {
 	}
 }
 
-// A running app can't be renamed — its container is named after the old name.
+// A running app can't be renamed - its container is named after the old name.
 func TestRenameRefusesRunning(t *testing.T) {
 	svc, sto := renameSvc(t, newFakeRuntime("old"), depApp("old"))
 	err := svc.Rename("old", "new")

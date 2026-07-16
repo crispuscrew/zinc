@@ -15,7 +15,7 @@ import (
 // It is pure. The collision check is skipped for the form, which dispatches by
 // the focused field's kind: there the same key intentionally drives different
 // gestures (space cycles an enum field and toggles a bool field), and the
-// kind-independent commands take precedence — so key reuse there is by design,
+// kind-independent commands take precedence - so key reuse there is by design,
 // not a conflict.
 func Validate(s Scheme) error {
 	var errs []error

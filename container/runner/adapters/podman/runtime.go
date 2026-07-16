@@ -5,7 +5,7 @@
 //
 // What it deliberately does NOT decide: the network. AppRunArgs splices in the
 // netFlags it is handed by a NetEnforcer (adapters/netenforce), so swapping the egress
-// mechanism never touches this file (docs/architecture.md §5.3, §13).
+// mechanism never touches this file (docs/architecture.md section 5.3, section 13).
 package podman
 
 import (
@@ -40,16 +40,16 @@ var (
 	_ ports.ImageResolver = Resolver{}
 )
 
-// TerminalLaunch wraps a `podman …` argv in the configured terminal emulator so a
+// TerminalLaunch wraps a `podman ...` argv in the configured terminal emulator so a
 // CLI/TUI app (StartConditions.Terminal) appears in its own window. term is the
-// emulator argv (e.g. ["foot"] or ["xterm","-e"]); it is run as `term… podman
-// <runArgs…>`. It wraps a `run` argv (single-terminal apps) or an `exec` argv
+// emulator argv (e.g. ["foot"] or ["xterm","-e"]); it is run as `term... podman
+// <runArgs...>`. It wraps a `run` argv (single-terminal apps) or an `exec` argv
 // (multiterminal) alike.
 //
 // When hold is set the podman invocation is wrapped in the host shell so the window
-// pauses after it exits — the user can read final output/errors before the window
+// pauses after it exits - the user can read final output/errors before the window
 // closes. This is emulator-agnostic on purpose: the emulator is user-configured
-// (§9.1), so we don't rely on an emulator-specific --hold flag.
+// (section 9.1), so we don't rely on an emulator-specific --hold flag.
 func TerminalLaunch(term, runArgs []string, hold bool) []string {
 	out := append([]string{}, term...)
 	if !hold {
@@ -60,7 +60,7 @@ func TerminalLaunch(term, runArgs []string, hold bool) []string {
 	// (the install/validate layers already reject the worst metacharacters, but the
 	// shell wrapper must be safe on its own). printf's \n are interpreted by printf.
 	script := "podman " + shellJoin(runArgs) +
-		`; status=$?; printf '\n[zinc] exited (status %s) — press Enter to close\n' "$status"; read _`
+		`; status=$?; printf '\n[zinc] exited (status %s) - press Enter to close\n' "$status"; read _`
 	return append(out, "sh", "-c", script)
 }
 
@@ -87,7 +87,7 @@ func shellJoin(args []string) string {
 // tears down promptly. Needs `sleep` in the image.
 func HolderCmd() []string { return []string{"sleep", "infinity"} }
 
-// ExecArgs builds `podman exec -it <app> <cmd…>` — one interactive session into a
+// ExecArgs builds `podman exec -it <app> <cmd...>` - one interactive session into a
 // running container. Each terminal of a multiterminal app is one of these (its cmd is
 // the app's own command, or a shell), wrapped by TerminalLaunch.
 func ExecArgs(app string, cmd []string) []string {
@@ -159,20 +159,20 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		}
 	}
 	if cfg.StartConditions.Autorestart {
-		// Restart only on failure — a clean exit (or a manual stop) is intentional (§9.1).
+		// Restart only on failure - a clean exit (or a manual stop) is intentional (section 9.1).
 		args = append(args, "--restart", "on-failure")
 	}
-	// Launch is hermetic: never fetch the image at run time (§5.5). The image must
+	// Launch is hermetic: never fetch the image at run time (section 5.5). The image must
 	// already be in local storage (a derived build, or resolved/pulled at save time); a
 	// missing image fails fast instead of a surprise registry pull.
 	args = append(args, "--pull", "never")
 	args = append(args, "--name", cfg.AppNameID)
 
-	// Least-privilege baseline (§1, §5.1): drop every capability and forbid privilege
+	// Least-privilege baseline (section 1, section 5.1): drop every capability and forbid privilege
 	// escalation. Anything the app genuinely needs is re-added below from Capabilities.
 	args = append(args, "--security-opt", "no-new-privileges", "--cap-drop", "all")
 
-	// Network attachment is the enforcer's decision (§5.3) — we only splice it in.
+	// Network attachment is the enforcer's decision (section 5.3) - we only splice it in.
 	args = append(args, netFlags...)
 
 	// XDG_RUNTIME_DIR is exported once, and only when we actually mount a socket under
@@ -186,7 +186,7 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		}
 	}
 
-	// Display / Wayland (§5.2).
+	// Display / Wayland (section 5.2).
 	if opt.RuntimeDir != "" && opt.WaylandDisplay != "" {
 		socket := filepath.Join(opt.RuntimeDir, opt.WaylandDisplay)
 		args = append(args,
@@ -202,12 +202,12 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		args = append(args, "--device", "/dev/dri")
 	}
 
-	// Theme bundle — one curated read-only directory (§5.6).
+	// Theme bundle - one curated read-only directory (section 5.6).
 	if cfg.HostTheme && opt.ThemeBundleDir != "" {
 		args = append(args, "-v", opt.ThemeBundleDir+":"+ctrThemeDir+":ro")
 	}
 
-	// Audio (§3 AudioMeta).
+	// Audio (section 3 AudioMeta).
 	if cfg.AudioMeta.Pipewire && opt.RuntimeDir != "" {
 		pipewireSock := filepath.Join(opt.RuntimeDir, "pipewire-0")
 		args = append(args, "-v", pipewireSock+":"+filepath.Join(ctrXDGRuntime, "pipewire-0")+":ro")
@@ -217,7 +217,7 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		args = append(args, "--device", "/dev/snd")
 	}
 
-	// Host-mounted volumes (§3 Volumes). Anonymous/size-limited volumes and Configs
+	// Host-mounted volumes (section 3 Volumes). Anonymous/size-limited volumes and Configs
 	// (bundle-relative) are deferred; only explicit host bind mounts are wired here.
 	for _, volume := range cfg.Volumes {
 		if !volume.HostMounted || strings.TrimSpace(volume.HostMount) == "" {
@@ -235,7 +235,7 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		args = append(args, "-v", volume.HostMount+":"+volume.InnerMount+":"+mountOpts)
 	}
 
-	// SSH/GPG keys (§3 Keys) — RO file mounts into the container home.
+	// SSH/GPG keys (section 3 Keys) - RO file mounts into the container home.
 	for _, key := range cfg.Keys {
 		dir := ".ssh"
 		if key.Type == schema.GPG {
@@ -244,7 +244,7 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		args = append(args, "-v", key.Path+":"+filepath.Join(home, dir, filepath.Base(key.Path))+":ro")
 	}
 
-	// Extra capabilities (§3 Capabilities).
+	// Extra capabilities (section 3 Capabilities).
 	for _, capability := range cfg.Capabilities {
 		args = append(args, "--cap-add", capability)
 	}
@@ -267,7 +267,7 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 	return args, nil
 }
 
-// Lifecycle argv builders (§9.1). Pure functions returning the arguments to pass to
+// Lifecycle argv builders (section 9.1). Pure functions returning the arguments to pass to
 // `podman` for the container named after the app.
 func StopArgs(name string) []string    { return []string{"stop", name} }
 func RestartArgs(name string) []string { return []string{"restart", name} }

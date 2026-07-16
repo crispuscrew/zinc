@@ -17,7 +17,7 @@ var run = func(args ...string) ([]byte, error) {
 	return exec.Command("podman", args...).Output()
 }
 
-// Search queries configured registries for term — a thin wrapper over `podman
+// Search queries configured registries for term - a thin wrapper over `podman
 // search` whose output is parsed into Results.
 func (Resolver) Search(term string) ([]ports.Result, error) {
 	if strings.TrimSpace(term) == "" {
@@ -43,9 +43,9 @@ func parseSearch(out string) []ports.Result {
 }
 
 // Resolve turns a tag/name (e.g. "alpine:3.20") into a digest-pinned reference
-// ("docker.io/library/alpine@sha256:..."), satisfying §5.5. An already-pinned ref
-// is returned unchanged. Otherwise it pulls the image — podman's canonical way to
-// learn a manifest digest without skopeo — then reads RepoDigests.
+// ("docker.io/library/alpine@sha256:..."), satisfying section 5.5. An already-pinned ref
+// is returned unchanged. Otherwise it pulls the image - podman's canonical way to
+// learn a manifest digest without skopeo - then reads RepoDigests.
 func (Resolver) Resolve(ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -84,7 +84,7 @@ func pickRepoDigest(ref, repoDigestsOut string) (string, error) {
 	if first != "" {
 		return first, nil
 	}
-	return "", fmt.Errorf("image: no digest found for %q (RepoDigests empty — registry may not expose one)", ref)
+	return "", fmt.Errorf("image: no digest found for %q (RepoDigests empty - registry may not expose one)", ref)
 }
 
 // repoOf strips a :tag and @digest from a reference, leaving the repository path for

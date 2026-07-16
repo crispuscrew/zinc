@@ -6,7 +6,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-// Validates the ':'-delimited podman mount specs — Volumes, Configs, Keys — plus
+// Validates the ':'-delimited podman mount specs - Volumes, Configs, Keys - plus
 // Capabilities. host:container:opts is ':'-split, so ':'/','/whitespace in a path
 // shifts podman's fields (e.g. claim "ro" but mount "rw"); every path is screened.
 
@@ -24,7 +24,7 @@ func checkVolume(index int, volume schema.Volume, add addFunc) {
 	checkSizeLimit("Volumes", index, volume, add)
 }
 
-// checkConfig: like a Volume but bundle-relative (apps/<name>/configs/) — no absolute
+// checkConfig: like a Volume but bundle-relative (apps/<name>/configs/) - no absolute
 // path, leading '/', or '..'; HostMounted is ignored (a Config is always bundle-sourced).
 func checkConfig(index int, configMount schema.Volume, add addFunc) {
 	checkInner("Configs", index, configMount.InnerMount, add)
@@ -74,7 +74,7 @@ func checkCapabilities(capabilities []string, add addFunc) {
 	}
 }
 
-// checkInner: container-side mount path — non-empty, no ':'/','/whitespace.
+// checkInner: container-side mount path - non-empty, no ':'/','/whitespace.
 func checkInner(list string, index int, inner string, add addFunc) {
 	switch {
 	case strings.TrimSpace(inner) == "":

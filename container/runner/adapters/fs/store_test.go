@@ -10,7 +10,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 )
 
-// digestPin is a canonical sha256 digest (64 hex chars) — the form §5.5 requires for
+// digestPin is a canonical sha256 digest (64 hex chars) - the form section 5.5 requires for
 // third-party images, so saved/marshalled fixtures pass Validate.
 const digestPin = "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -88,7 +88,7 @@ func TestListExistsDelete(t *testing.T) {
 func TestSaveRejectsInvalid(t *testing.T) {
 	sto := tempStore(t)
 	bad := sampleApp("firefox")
-	bad.ImageMeta.Image = "alpine:latest" // third-party, not digest-pinned (§5.5)
+	bad.ImageMeta.Image = "alpine:latest" // third-party, not digest-pinned (section 5.5)
 
 	if err := sto.Save(bad); err == nil {
 		t.Fatal("Save should reject invalid config")
@@ -100,7 +100,7 @@ func TestSaveRejectsInvalid(t *testing.T) {
 
 func TestMarshalLoadRoundtrip(t *testing.T) {
 	// The $EDITOR flow marshals a draft, lets the user edit it, then re-reads via Load
-	// — which rejects unknown keys. So Marshal's output must round-trip cleanly.
+	// - which rejects unknown keys. So Marshal's output must round-trip cleanly.
 	cfg := sampleApp("rt")
 	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
 		IPv4CIDR: []string{"1.1.1.1/32"},

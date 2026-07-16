@@ -1,14 +1,14 @@
 // Package keys defines zcc's TUI keybindings as selectable schemes
-// (docs/architecture.md §9.1).
+// (docs/architecture.md section 9.1).
 //
-// These are zcc's OWN terminal-UI keys — how you drive the Bubbletea app
+// These are zcc's OWN terminal-UI keys - how you drive the Bubbletea app
 // (move the list, save the form, scroll logs). They are deliberately distinct
-// from the desktop hotkeys (§12), which are a separate, host-level concern
+// from the desktop hotkeys (section 12), which are a separate, host-level concern
 // owned by the Nix module (M8/M10).
 //
 // The package is split functional-core / imperative-shell like the rest of the
-// project: this file plus schemes.go and validate.go are pure (no I/O) — a
-// Scheme is just data and Resolve is a lookup — while store.go reads and writes
+// project: this file plus schemes.go and validate.go are pure (no I/O) - a
+// Scheme is just data and Resolve is a lookup - while store.go reads and writes
 // the on-disk selection under ~/.config/zinc/zcc.
 package keys
 
@@ -28,7 +28,7 @@ const (
 
 // Action is a semantic command within a context. The string value is the name
 // used in a custom scheme's TOML override table, so it is part of the on-disk
-// format — do not rename without a migration.
+// format - do not rename without a migration.
 type Action string
 
 // List-screen actions.
@@ -51,7 +51,7 @@ const (
 
 // Form-screen actions. EnumNext/EnumPrev/Toggle/Activate are gestures whose
 // effect depends on the focused field's kind (enum, bool, action); the form
-// still dispatches by kind — the scheme only decides which keys trigger them.
+// still dispatches by kind - the scheme only decides which keys trigger them.
 const (
 	Save         Action = "save"
 	Cancel       Action = "cancel"
@@ -173,7 +173,7 @@ func (s Scheme) Hint(ctx Context, act Action) string {
 }
 
 // HintPrimary renders only an action's first (canonical) key, for compact footers
-// where listing every bound key would be noise — the "not a porridge" rule (§9.1).
+// where listing every bound key would be noise - the "not a porridge" rule (section 9.1).
 // Returns "" when the action is unbound. The space key prints as "space".
 func (s Scheme) HintPrimary(ctx Context, act Action) string {
 	bound := s.KeysFor(ctx, act)

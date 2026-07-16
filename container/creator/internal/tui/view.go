@@ -43,10 +43,10 @@ func (mdl Model) View() string {
 
 func (mdl Model) listView() string {
 	var bld strings.Builder
-	bld.WriteString(titleStyle.Render("Zinc — apps") + "\n\n")
+	bld.WriteString(titleStyle.Render("Zinc - apps") + "\n\n")
 
 	if len(mdl.apps) == 0 {
-		bld.WriteString(dim.Render("no apps yet — press n to create one") + "\n")
+		bld.WriteString(dim.Render("no apps yet - press n to create one") + "\n")
 	}
 	for idx, row := range mdl.apps {
 		cursor := "  "
@@ -81,8 +81,8 @@ func (mdl Model) listView() string {
 	return bld.String()
 }
 
-// listFooter shows only the actions that apply to the current selection and its state —
-// so the help line is never a "porridge" of every key (§9.1). Global actions
+// listFooter shows only the actions that apply to the current selection and its state -
+// so the help line is never a "porridge" of every key (section 9.1). Global actions
 // (new/refresh/keys/quit) always show; edit/delete need a selection; run shows when
 // stopped (or for any multiterminal app, where it adds a terminal), stop/logs when
 // running, build when install lines are set. Each gesture shows its primary key only.
@@ -172,8 +172,8 @@ func (frm *formModel) view() string {
 }
 
 // footer shows only the gestures for the focused field's kind, plus the always-
-// available move/save/cancel — so a bool row doesn't advertise "resolve" and the help
-// line stays short (§9.1). Each gesture shows its primary key only, from the active
+// available move/save/cancel - so a bool row doesn't advertise "resolve" and the help
+// line stays short (section 9.1). Each gesture shows its primary key only, from the active
 // scheme.
 func (frm *formModel) footer() string {
 	scheme := frm.scheme
@@ -206,7 +206,7 @@ func (frm *formModel) footer() string {
 }
 
 func (mdl Model) logsView() string {
-	header := titleStyle.Render("logs — " + mdl.logsName)
+	header := titleStyle.Render("logs - " + mdl.logsName)
 	// Scrolling is the viewport's own built-in (not a scheme action), so it stays
 	// literal; only "back" is scheme-driven.
 	footer := help.Render(fmt.Sprintf("↑/↓/pgup/pgdn scroll · %s back", mdl.keys.Scheme.HintPrimary(keys.CtxLogs, keys.Back)))
@@ -233,9 +233,9 @@ func (mdl Model) renameView() string {
 // one marked, built-in vs custom labelled.
 func (mdl Model) keysView() string {
 	var bld strings.Builder
-	bld.WriteString(titleStyle.Render("Zinc — keybind schemes") + "\n\n")
+	bld.WriteString(titleStyle.Render("Zinc - keybind schemes") + "\n\n")
 	if len(mdl.keysList) == 0 {
-		bld.WriteString(dim.Render("loading…") + "\n")
+		bld.WriteString(dim.Render("loading...") + "\n")
 	}
 	for idx, name := range mdl.keysList {
 		cursor := "  "

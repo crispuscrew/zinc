@@ -649,7 +649,6 @@ zinc/
       internal/backend/               the one facade the CLI + TUI use
       internal/tui/                   the keyboard-first terminal UI
       internal/keys/                  the TUI keybind schemes (~/.config/zinc/zcc)
-      images/netfilter/               Containerfile for the nft helper image
     runner/              zcr - the runtime (the hexagon)
       domain/                         pure model: derived-image policy, launch options
       ports/                          interfaces: Store, Runtime, ImageBuilder,
@@ -660,6 +659,7 @@ zinc/
       adapters/fs/                    the YAML app store + codec
       adapters/host/                  environment -> host launch options
       wire/                           composition root (assembles adapters -> app.Service)
+      images/netfilter/               Containerfile for the nft helper image (make netfilter-image)
       main.go                         the CLI
     e2e/                 end-to-end tests: drive the real zcc/zcr against podman
   launcher/              zlg/zlt skeleton - NOT migrated to common yet, does not compile
@@ -691,7 +691,7 @@ runs with `GOWORK=off`).
 
 Two distinct container concerns live here: the repo-root `Containerfile` reproducibly builds a
 **tool binary** (pinned Go toolchain plus that module's vendored deps); the netfilter
-`Containerfile` under `container/creator/images/netfilter` builds the **runtime helper image**
+`Containerfile` under `container/runner/images/netfilter` builds the **runtime helper image**
 the network lock-down applies rules with (6.4).
 
 ---

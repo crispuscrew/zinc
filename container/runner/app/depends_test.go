@@ -13,7 +13,7 @@ import (
 )
 
 // fakeRuntime records which apps were started, in order, and tracks a running set.
-// StartApp marks its app running, so Running() reflects what has come up so far —
+// StartApp marks its app running, so Running() reflects what has come up so far -
 // enough to exercise depends_on ordering without a real podman.
 type fakeRuntime struct {
 	running map[string]bool
@@ -182,7 +182,7 @@ func TestCheckNetwork_Tier2ConsumerAllowed(t *testing.T) {
 	}
 }
 
-// A tier-2 app may not also carry other networking — coexistence is deferred, fail closed.
+// A tier-2 app may not also carry other networking - coexistence is deferred, fail closed.
 func TestCheckNetwork_Tier2MixRejected(t *testing.T) {
 	cfg := depApp("db")
 	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{

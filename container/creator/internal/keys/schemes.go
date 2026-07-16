@@ -2,9 +2,9 @@ package keys
 
 // Built-in schemes. There are two, by design:
 //
-//   - default — exactly zcc's historical bindings, so an install with no
+//   - default - exactly zcc's historical bindings, so an install with no
 //     keys.toml behaves identically to before this feature existed.
-//   - vim     — a small variant for muscle-memory: ctrl+n/ctrl+p also move
+//   - vim     - a small variant for muscle-memory: ctrl+n/ctrl+p also move
 //     between form fields, and the list "refresh" drops bare "g" (freeing it
 //     for vim-flavoured custom bindings). ctrl+n/ctrl+p are used rather than
 //     ctrl+j/ctrl+k because Ctrl+J is the newline byte and clashes with Enter.
@@ -108,7 +108,7 @@ func IsBuiltin(name string) bool {
 }
 
 // SchemeFor returns a built-in scheme by name (a copy, safe to mutate). The
-// bool is false for an unknown name — mirrors config.DefaultsFor.
+// bool is false for an unknown name - mirrors config.DefaultsFor.
 func SchemeFor(name string) (Scheme, bool) {
 	s, ok := builtins[name]
 	if !ok {

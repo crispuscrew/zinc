@@ -67,7 +67,7 @@ func TestAuthoringLifecycle(t *testing.T) {
 	}
 }
 
-// new with a non-digest-pinned third-party image is rejected by validation (§5.5).
+// new with a non-digest-pinned third-party image is rejected by validation (section 5.5).
 func TestNewRejectsUnpinnedImage(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	quiet(t)

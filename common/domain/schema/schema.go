@@ -10,7 +10,7 @@ const (
 	//ZincVirtualization	Type	= "ZincVirtualization"
 )
 
-// AppConfig is one app definition: ~/.config/hyprzinc/apps/<name>.yaml
+// AppConfig is one app definition: ~/.config/zinc/apps/<name>.yaml
 // Most parameters can be overridden at app start
 type AppConfig struct {
 	SchemaVersion int  `yaml:"SchemaVersion"`
@@ -125,7 +125,7 @@ type Volume struct {
 	Executable bool `yaml:"Executable"`
 }
 
-// Keys is a convenience layer for SSH/GPG only (§3 [keys]): unlike [[mounts]] it
+// Keys is a convenience layer for SSH/GPG only (section 3 [keys]): unlike [[mounts]] it
 // also wires the agent socket and enforces 0600 inside the container.
 type KeyType string
 

@@ -1,12 +1,12 @@
 // Package ports declares the contracts between the runner's application core (app)
 // and the outside world (adapters/*). It is the hexagon's boundary: the app layer
 // depends only on these interfaces, never on a concrete podman/nft/fs
-// implementation, so a mechanism can be swapped by writing a new adapter — the
+// implementation, so a mechanism can be swapped by writing a new adapter - the
 // motivating case being egress enforcement (NetEnforcer), where "not pasta" later is
-// one more adapter, not a cross-cutting edit (docs/architecture.md §5.3, §13).
+// one more adapter, not a cross-cutting edit (docs/architecture.md section 5.3, section 13).
 //
-// ports depends only on pure types — the shared schema (common) and the runner's own
-// HostOptions — and performs no I/O itself.
+// ports depends only on pure types - the shared schema (common) and the runner's own
+// HostOptions - and performs no I/O itself.
 package ports
 
 import (
@@ -14,7 +14,7 @@ import (
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
 )
 
-// Command is one runtime instruction — the args passed to the container runtime,
+// Command is one runtime instruction - the args passed to the container runtime,
 // with optional stdin (used to pipe the nft ruleset into the lock-down step) and a
 // short human label for dry-run output. It is the neutral unit a NetEnforcer emits
 // and a Runtime executes, so neither side hardcodes the other's CLI.
@@ -69,20 +69,20 @@ type ImageBuilder interface {
 	Fingerprint(ref string) (string, error) // read the build label; error if the image is absent
 }
 
-// ImageResolver discovers images and pins tags to digests (§5.5). Adapter:
+// ImageResolver discovers images and pins tags to digests (section 5.5). Adapter:
 // adapters/podman.
 type ImageResolver interface {
 	Search(term string) ([]Result, error)
 	Resolve(ref string) (string, error)
 }
 
-// NetEnforcer establishes and enforces an app's network egress — THE swap point.
+// NetEnforcer establishes and enforces an app's network egress - THE swap point.
 // The one adapter today (adapters/netenforce) drives NetworkLists onto the app's own
 // pasta netns via nft (or --network none when there are no lists). A future
 // mechanism is one more implementation; the app layer is agnostic. Callers gate
 // unsupported configs before invoking it (the app layer's checkNetwork).
 type NetEnforcer interface {
-	RunFlags(cfg schema.AppConfig) []string                          // app container network attach (--pod … / --network …)
+	RunFlags(cfg schema.AppConfig) []string                          // app container network attach (--pod ... / --network ...)
 	Prepare(cfg schema.AppConfig, opt options.HostOptions) []Command // steps to establish + LOCK the netns before the app starts
 	Teardown(cfg schema.AppConfig) []string                          // tear it all down (pod rm / stop)
 }

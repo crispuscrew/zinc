@@ -1,4 +1,4 @@
-// Package runner shells out to the `zcr` binary — Zinc's container runtime — so the
+// Package runner shells out to the `zcr` binary - Zinc's container runtime - so the
 // creator (zcc) can run and manage the apps it authors without importing the runner.
 // This is the whole zcc/zcr split: zcc writes app files and knows nothing about podman;
 // zcr reads those same files and runs them. They meet only at the on-disk format and at
@@ -6,7 +6,7 @@
 //
 // zcr is expected on $PATH (it is installed alongside zcc). If it is missing, every
 // runtime action here fails with an actionable message, while authoring (new/edit/
-// validate/list) keeps working — those need only the shared library, not the runtime.
+// validate/list) keeps working - those need only the shared library, not the runtime.
 package runner
 
 import (
@@ -112,7 +112,7 @@ func OpenTerminal(name string, shell bool) error {
 	return err
 }
 
-// Logs returns a snapshot of the app's logs: `zcr logs <name>` (no follow — it prints
+// Logs returns a snapshot of the app's logs: `zcr logs <name>` (no follow - it prints
 // what podman has and exits).
 func Logs(name string) (string, error) {
 	return capture("logs", name)

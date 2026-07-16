@@ -1,6 +1,6 @@
 package options
 
-// HostOptions carries the host-side values a launch needs — Wayland/runtime
+// HostOptions carries the host-side values a launch needs - Wayland/runtime
 // sockets, the theme bundle, the terminal emulator, the netfilter image, and the
 // container-side home. They are passed explicitly so the argv-building adapters
 // never read the environment themselves and stay pure/testable. Empty fields
@@ -9,8 +9,8 @@ package options
 type HostOptions struct {
 	RuntimeDir     string   // host XDG_RUNTIME_DIR (wayland/pipewire sockets)
 	WaylandDisplay string   // host WAYLAND_DISPLAY, e.g. "wayland-1"
-	ThemeBundleDir string   // host path to the generated curated theme bundle (§5.6)
-	NetfilterImage string   // image carrying nft for the pasta lock-down step (§5.3); empty → adapter default
+	ThemeBundleDir string   // host path to the generated curated theme bundle (section 5.6)
+	NetfilterImage string   // image carrying nft for the pasta lock-down step (section 5.3); empty → adapter default
 	HomeDir        string   // container-side home for key mounts (.ssh/.gnupg); empty → /root
-	Terminal       []string // terminal-emulator argv for terminal apps, e.g. ["foot"] or ["xterm","-e"] (§11)
+	Terminal       []string // terminal-emulator argv for terminal apps, e.g. ["foot"] or ["xterm","-e"] (section 11)
 }

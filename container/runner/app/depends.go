@@ -10,7 +10,7 @@ import (
 )
 
 // startDependencies brings up everything cfg needs before cfg itself launches (docs
-// §6.6: "auto-starts dependencies first"). Each name in StartConditions.DependsOn
+// section 6.6: "auto-starts dependencies first"). Each name in StartConditions.DependsOn
 // that is not already running is loaded from the store and launched first,
 // depth-first, so a dependency's own dependencies come up before it. An
 // already-running dependency is left untouched. A dependency cycle is reported as an
@@ -34,7 +34,7 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 	}
 	for _, dep := range cfg.StartConditions.DependsOn {
 		if running[dep] {
-			continue // already up — leave it as-is
+			continue // already up - leave it as-is
 		}
 		if idx := slices.Index(chain, dep); idx >= 0 {
 			return fmt.Errorf("dependency cycle: %s -> %s", strings.Join(chain[idx:], " -> "), dep)
@@ -52,9 +52,9 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 }
 
 // checkNetwork fails closed on NetworkLists this build cannot enforce yet. Supported:
-// self-scoped egress allow/deny lists (own pasta netns + nft output chain, §5.3), tier-3
-// LAN publishing (Ingress && Host — nft input chain + pod `-p`), and tier-2 sibling links
-// (a producer's self-scoped ingress, a consumer's egress naming its AppName — a private
+// self-scoped egress allow/deny lists (own pasta netns + nft output chain, section 5.3), tier-3
+// LAN publishing (Ingress && Host - nft input chain + pod `-p`), and tier-2 sibling links
+// (a producer's self-scoped ingress, a consumer's egress naming its AppName - a private
 // interface-gated bridge). Rejected so a config is stopped at launch rather than silently
 // mis-enforced: a routing gateway (multi-homing), an ingress list that targets an AppName
 // (contradictory), host-scoped egress, and mixing tier-2 links with any other networking
@@ -67,7 +67,7 @@ func checkNetwork(cfg schema.AppConfig) error {
 		case netList.GatewayV4 != "" || netList.GatewayV6 != "":
 			return fmt.Errorf("%s: NetworkLists[%d]: routing through a gateway (multi-homing) is not supported in this build yet", cfg.AppNameID, index)
 		case netList.Ingress && appName != "":
-			return fmt.Errorf("%s: NetworkLists[%d]: an ingress list cannot target an AppName — a producer publishes to any sibling that joins its link, and the consumer names the producer", cfg.AppNameID, index)
+			return fmt.Errorf("%s: NetworkLists[%d]: an ingress list cannot target an AppName - a producer publishes to any sibling that joins its link, and the consumer names the producer", cfg.AppNameID, index)
 		case netList.Host && !netList.Ingress:
 			return fmt.Errorf("%s: NetworkLists[%d]: host-scoped egress is not supported in this build yet", cfg.AppNameID, index)
 		}

@@ -1,4 +1,4 @@
-# Quick-setup example (§5.5, §9.1): take a stock, digest-pinned distro image and
+# Quick-setup example (section 5.5, section 9.1): take a stock, digest-pinned distro image and
 # install the program you want instead of authoring a Containerfile. Install builds
 # a derived image (FROM Image + one RUN per entry); Entrypoint runs inside it. A run
 # rebuilds when Image/Install change, or rebuild on demand.

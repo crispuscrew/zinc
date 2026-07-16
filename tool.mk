@@ -32,7 +32,7 @@ RUN_ARGS       ?=
 ## build: build the binary reproducibly in the pinned container (alias for container-build)
 build: container-build
 
-## run: build in the pinned container, then run the produced binary (hzc drives the host podman; override args with RUN_ARGS=...)
+## run: build in the pinned container, then run the produced binary (it drives the host podman; override args with RUN_ARGS=...)
 run: build
 	./$(BIN) $(RUN_ARGS)
 

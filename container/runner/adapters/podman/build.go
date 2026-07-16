@@ -40,7 +40,7 @@ func (Builder) Build(cfg schema.AppConfig) error {
 }
 
 // Fingerprint reads the build label off a local image, or returns an error when the
-// image does not exist — either case means the app layer should (re)build. The label
+// image does not exist - either case means the app layer should (re)build. The label
 // is empty for an image built outside Zinc, which also triggers a rebuild.
 func (Builder) Fingerprint(ref string) (string, error) {
 	out, err := exec.Command("podman", "image", "inspect", ref,

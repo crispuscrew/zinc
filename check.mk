@@ -1,17 +1,17 @@
-# Shared, containerized Go checks for every HyprZinc module — the tools (hzc/hzl/hzv)
-# AND the core library. Included by tool.mk (which adds the binary targets) and by
-# core's Makefile directly. Podman-only: there is no host Go; every command runs in
-# the digest-pinned container. Run from a module's root: `make <target>`.
+# Shared, containerized Go checks for every Zinc module - the tools (zcc, zcr) and
+# the shared library (common). Included by tool.mk (which adds the binary targets)
+# and by common's Makefile directly. Podman-only: there is no host Go; every command
+# runs in the digest-pinned container. Run from a module's root: `make <target>`.
 
 CONTAINER_TOOL ?= podman
 
-# Path from the including module's dir to the repo root — i.e. the directory holding
+# Path from the including module's dir to the repo root - i.e. the directory holding
 # this check.mk. Derived from check.mk's own include path, so it is correct at any
 # nesting depth: a module at container/<m> reaches the root via ../.., one at <m> via
-# ".." — no module needs to hardcode how deep it sits.
+# ".." - no module needs to hardcode how deep it sits.
 REPO_REL := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 
-# Pinned Go toolchain image — KEEP IN SYNC with the repo-root Containerfile's GO_IMAGE.
+# Pinned Go toolchain image - KEEP IN SYNC with the repo-root Containerfile's GO_IMAGE.
 GO_IMAGE       ?= docker.io/library/golang:1.24-alpine@sha256:757779acac4af1b349a20f357c7296097b4a0b89da4ad0e370b339060077282a
 
 # Containerized go for checks/tests against THIS module: mount the module dir and
@@ -29,7 +29,7 @@ GO_VENDOR       = ROOT="$$(cd "$(REPO_REL)" && pwd)"; \
                     -v "$$ROOT":/repo -w "/repo/$${PWD\#$$ROOT/}" \
                     -e GOTOOLCHAIN=local -e GOWORK=off $(GO_IMAGE)
 
-# gofmt recurses into directory args, so feed it the .go FILES with vendor/ pruned —
+# gofmt recurses into directory args, so feed it the .go FILES with vendor/ pruned -
 # vendored third-party code is not ours to reformat.
 GOFILES         = find . -path ./vendor -prune -o -name "*.go" -print
 
@@ -52,11 +52,11 @@ test:
 vet:
 	$(GO_RUN) go vet ./...
 
-## fmt: format our sources in place — vendor/ excluded (in the pinned container)
+## fmt: format our sources in place - vendor/ excluded (in the pinned container)
 fmt:
 	$(GO_RUN) sh -c 'gofmt -w $$($(GOFILES))'
 
-## fmt-check: fail if any of our sources need formatting — vendor/ excluded (in the pinned container)
+## fmt-check: fail if any of our sources need formatting - vendor/ excluded (in the pinned container)
 fmt-check:
 	$(GO_RUN) sh -c 'unformatted="$$(gofmt -l $$($(GOFILES)))"; \
 		if [ -n "$$unformatted" ]; then echo "needs gofmt:"; echo "$$unformatted"; exit 1; fi'
@@ -66,7 +66,7 @@ check: fmt-check vet test
 
 # --- Dependency / vendor maintenance (run by hand; these need network, the build never does) ---
 
-## vendor: refresh vendored deps to match go.mod — tidy, vendor, verify
+## vendor: refresh vendored deps to match go.mod - tidy, vendor, verify
 vendor:
 	$(GO_VENDOR) sh -c 'go mod tidy && go mod vendor && go mod verify'
 
@@ -82,7 +82,7 @@ vendor-check:
 		if [ -f go.sum ] || [ -f "$$snapshot/go.sum" ]; then diff -q "$$snapshot/go.sum" go.sum >/dev/null 2>&1 || status=1; fi; \
 		if [ -d vendor ] || [ -d "$$snapshot/vendor" ]; then diff -rq "$$snapshot/vendor" vendor >/dev/null 2>&1 || status=1; fi; \
 		rm -rf "$$snapshot"; \
-		if [ $$status -ne 0 ]; then echo "vendor out of sync — run make vendor and commit the result"; exit 1; fi; \
+		if [ $$status -ne 0 ]; then echo "vendor out of sync - run make vendor and commit the result"; exit 1; fi; \
 		echo "vendor-check: in sync"'
 
 ## verify: check module checksums against go.sum (offline; integrity only)

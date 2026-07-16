@@ -1,12 +1,12 @@
 package derived
 
-// Derived images (docs §5.5, §9.1). When an app sets ImageMeta.Install, Zinc builds
-// a small derived image — `FROM <ImageMeta.Image>` plus one `RUN <install>` layer —
+// Derived images (docs section 5.5, section 9.1). When an app sets ImageMeta.Install, Zinc builds
+// a small derived image - `FROM <ImageMeta.Image>` plus one `RUN <install>` layer -
 // and runs the app from that instead of the bare base. This is the "quick setup"
 // path: take a stock distro image and apt/apk/dnf the program you want, without
 // authoring a Containerfile by hand.
 //
-// The base FROM inherits ImageMeta.Image, which §5.5 forces to be digest-pinned (or
+// The base FROM inherits ImageMeta.Image, which section 5.5 forces to be digest-pinned (or
 // a localhost/ local ref), so the derived image is built from a known base. These
 // are pure policy functions: which image runs, what its Containerfile says, and how
 // to tell a fresh build from a stale one. The actual `podman build` is the podman
@@ -56,7 +56,7 @@ func DerivedContainerfile(cfg schema.AppConfig) string {
 	return "FROM " + cfg.ImageMeta.Image + "\nRUN " + installScript(cfg.ImageMeta.Install) + "\n"
 }
 
-// BuildFingerprint identifies a derived image's inputs — the base image and the
+// BuildFingerprint identifies a derived image's inputs - the base image and the
 // install steps. It is written as the BuildLabel value at build time; a launch
 // rebuilds only when the live image's label differs (or the image is missing), so an
 // unchanged app reuses its image and a re-pinned base or edited install takes effect
@@ -78,7 +78,7 @@ func installSteps(install []string) []string {
 }
 
 // installScript joins the install steps with " && " into the single shell command
-// the derived image's one RUN layer carries, so a multi-step setup fails fast —
+// the derived image's one RUN layer carries, so a multi-step setup fails fast -
 // exactly as the same steps on one line would.
 func installScript(install []string) string {
 	return strings.Join(installSteps(install), " && ")
@@ -86,7 +86,7 @@ func installScript(install []string) string {
 
 // InstallHint suggests the package-manager invocation for an app's base image, keyed
 // off well-known image-name families, so a form can show the right syntax (apt for
-// debian/ubuntu, apk for alpine, dnf for fedora/rhel, …). Best-effort UI sugar over
+// debian/ubuntu, apk for alpine, dnf for fedora/rhel, ...). Best-effort UI sugar over
 // the image name only; it never constrains what may go into ImageMeta.Install.
 func InstallHint(image string) string {
 	img := strings.ToLower(image)

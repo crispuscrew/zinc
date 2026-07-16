@@ -1,8 +1,8 @@
-// Package tui is zcc's keyboard-first terminal UI (docs/architecture.md §9.1, M2).
+// Package tui is zcc's keyboard-first terminal UI (docs/architecture.md section 9.1, M2).
 //
 // The Model + Update form the functional core: Update is a pure transition over
-// (Model, Msg). All I/O — store reads/writes (authoring) and the zcr shell-outs
-// (running apps) — happens in tea.Cmd closures (commands.go) that drive the creator
+// (Model, Msg). All I/O - store reads/writes (authoring) and the zcr shell-outs
+// (running apps) - happens in tea.Cmd closures (commands.go) that drive the creator
 // backend, so the decision logic is testable without a terminal and the TUI is a thin
 // driving adapter.
 //
@@ -71,7 +71,7 @@ type Model struct {
 }
 
 // New builds the initial model. svc is the creator backend and active is the resolved
-// keybind scheme — both supplied by the caller (the composition root) so this package
+// keybind scheme - both supplied by the caller (the composition root) so this package
 // stays a thin adapter. A zero keys.Active falls back to the default scheme.
 func New(svc backend.Service, active keys.Active) Model {
 	return Model{svc: svc, keys: active, mode: modeList, logs: viewport.New(80, 20)}
@@ -190,7 +190,7 @@ func (mdl Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case formEdit:
 			return mdl, writeDraft(mdl.svc, mdl.form.toConfig())
 		case formResolve:
-			mdl.status = "resolving image…"
+			mdl.status = "resolving image..."
 			return mdl, resolveImage(mdl.svc, mdl.form.image.Value())
 		}
 		return mdl, cmd
@@ -257,7 +257,7 @@ func (mdl Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case keys.Run:
 		if row, ok := mdl.selected(); ok {
-			mdl.status = "launching " + row.cfg.AppNameID + "…"
+			mdl.status = "launching " + row.cfg.AppNameID + "..."
 			return mdl, launch(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Shell:
@@ -266,16 +266,16 @@ func (mdl Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				mdl.status = row.cfg.AppNameID + ": a shell needs a multiterminal app"
 				return mdl, nil
 			}
-			mdl.status = "opening shell for " + row.cfg.AppNameID + "…"
+			mdl.status = "opening shell for " + row.cfg.AppNameID + "..."
 			return mdl, openShell(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Build:
 		if row, ok := mdl.selected(); ok {
 			if len(row.cfg.ImageMeta.Install) == 0 {
-				mdl.status = row.cfg.AppNameID + ": no install lines — nothing to build"
+				mdl.status = row.cfg.AppNameID + ": no install lines - nothing to build"
 				return mdl, nil
 			}
-			mdl.status = "building image for " + row.cfg.AppNameID + "…"
+			mdl.status = "building image for " + row.cfg.AppNameID + "..."
 			return mdl, buildImage(mdl.svc, row.cfg.AppNameID)
 		}
 	case keys.Stop:
@@ -320,7 +320,7 @@ func (mdl Model) handleKeysKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return mdl, nil
 		}
 		name := mdl.keysList[mdl.keysCursor]
-		mdl.status = "switching to " + name + "…"
+		mdl.status = "switching to " + name + "..."
 		return mdl, setScheme(name)
 	case "e":
 		if len(mdl.keysList) == 0 {
@@ -343,7 +343,7 @@ func (mdl Model) handleKeysKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleRenameKey drives the rename prompt (modeRename): a text input prefilled with
 // the current name. Enter commits the rename through the service (which loads the old
-// definition, rewrites app.name, saves it, and deletes the old — the "delete +
+// definition, rewrites app.name, saves it, and deletes the old - the "delete +
 // recreate"); esc cancels; every other key edits the field. A blank or unchanged name
 // is treated as a cancel so Enter is never a destructive no-op.
 func (mdl Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -357,7 +357,7 @@ func (mdl Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if to == "" || to == from {
 			return mdl, nil
 		}
-		mdl.status = "renaming " + from + " → " + to + "…"
+		mdl.status = "renaming " + from + " → " + to + "..."
 		return mdl, renameApp(mdl.svc, from, to)
 	}
 	var cmd tea.Cmd

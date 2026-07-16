@@ -79,7 +79,7 @@ func TestValidateDetectsCollision(t *testing.T) {
 }
 
 func TestValidateAllowsFormKeyReuse(t *testing.T) {
-	// space drives both enum-next and toggle in the form — legal, kind-gated.
+	// space drives both enum-next and toggle in the form - legal, kind-gated.
 	ok := Scheme{CtxForm: {EnumNext: {" "}, Toggle: {" "}}}
 	if err := Validate(ok); err != nil {
 		t.Fatalf("form key reuse should be allowed, got %v", err)
