@@ -9,6 +9,5 @@ use (
 	./common
 	./container/runner
 	./container/creator
-	./launcher
-	./virtualization/creator
+	./launcher/tui
 )

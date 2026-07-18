@@ -185,7 +185,7 @@ The short code is the initials.
 | `zvc` | `zinc-virtualization-creator` | define VM apps                         | planned |
 | `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app            | planned |
 | `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)                | planned |
-| `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)                | planned |
+| `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)                | 0.2     |
 
 **The split is architectural, not cosmetic.** A *creator* authors an app and writes its
 config; a *runner* actually starts that app and owns its lifecycle. `zcc` (the creator)
@@ -574,11 +574,24 @@ count), and the last waiter out stops the container. Because a holder owns PID 1
 multiterminal app needs an explicit entrypoint (the image default cannot be replayed into each
 terminal), which validation enforces.
 
-### 9.3 Planned components (roadmap)
+### 9.3 zlt - the launcher (TUI)
 
-`zvc` / `zvr` (virtualization, section 10) and `zlg` / `zlt` (launchers) are not built yet.
-They will share the same `common` schema library, so container and VM apps use one config
-format.
+**Stack:** Go + Bubbletea. `zlt` (zinc-launcher-tui) is a fast, keyboard-first fuzzy
+picker over the defined apps. It lists `~/.config/zinc/apps`, filters as you type (a small
+in-house subsequence matcher that favours matches at the start of a name and at word
+boundaries), and on **enter launches the selected app by shelling out to `zcr run <app>
+--exec`**, then quits (dmenu-style). So `zcr` still does the real work - validation,
+dependency auto-start, the derived-image build, the network lock-down - and `zlt`, like
+`zcc`, depends only on `common` and never imports the runtime. A `zlt <app>` form launches
+one app directly (for a desktop hotkey or a script), and a `●` marks apps already running
+(best-effort, from `zcr ps`). It lives at `launcher/tui`, leaving `launcher/gui` for the
+planned GUI launcher.
+
+### 9.4 Planned components (roadmap)
+
+`zvc` / `zvr` (virtualization, section 10) and `zlg` (the GUI launcher, sharing zlt's store
+and `zcr` delegation) are not built yet. They will share the same `common` schema library,
+so every tool uses one config format.
 
 ---
 
@@ -662,7 +675,7 @@ zinc/
       images/netfilter/               Containerfile for the nft helper image (make netfilter-image)
       main.go                         the CLI
     e2e/                 end-to-end tests: drive the real zcc/zcr against podman
-  launcher/              zlg/zlt skeleton - NOT migrated to common yet, does not compile
+  launcher/tui/          zlt - the launcher (fuzzy picker over the apps; shells out to zcr)
   virtualization/creator/  zvc skeleton - NOT migrated to common yet, does not compile
   docs/architecture.md   this document
 ```
