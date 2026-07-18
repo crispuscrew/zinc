@@ -1,8 +1,8 @@
 name: CI
 
-# launcher/ and virtualization/creator/ are intentionally not built here yet: they still
-# import the removed `core` module and do not compile. Add them to the `check` matrix
-# once they are migrated to `common`.
+# virtualization/creator/ is intentionally not built here yet: it still imports the
+# removed `core` module and does not compile. Add it to the `check` matrix once it is
+# migrated to `common`.
 
 on:
   push:
@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [container/runner, container/creator]
+        module: [container/runner, container/creator, launcher/tui]
     steps:
       - uses: actions/checkout@v4
       - name: Ensure podman
