@@ -19,6 +19,20 @@ import (
 // Binary is the runtime binary the launcher delegates to; it is resolved from $PATH.
 const Binary = "zcr"
 
+// safeName guards the app argument at the exec boundary, independent of how zcr parses
+// its arguments: a name that is empty or begins with '-' is rejected, so a filename- or
+// CLI-derived token can never land in `zcr run`'s slot as a flag instead of an app. It
+// deliberately allows '/', so `zlt <path>` still reaches zcr's path form.
+func safeName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty app name")
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("app name %q cannot begin with '-'", name)
+	}
+	return nil
+}
+
 // find locates the zcr binary, returning an actionable error if it is not installed.
 func find() (string, error) {
 	path, err := exec.LookPath(Binary)
@@ -55,12 +69,18 @@ func capture(args ...string) (string, error) {
 // derived image if needed, auto-starts dependencies, locks down the network, then
 // detaches). zcr returns once the app is spawned.
 func Launch(name string) error {
+	if err := safeName(name); err != nil {
+		return err
+	}
 	_, err := capture("run", name, "--exec")
 	return err
 }
 
 // Stop tears the app's pod down: `zcr stop <name>`.
 func Stop(name string) error {
+	if err := safeName(name); err != nil {
+		return err
+	}
 	_, err := capture("stop", name)
 	return err
 }

@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -22,6 +23,12 @@ import (
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
+
+// keyRE is the app-name charset the schema enforces (lowercase [a-z0-9._-], starting
+// alphanumeric). A file zcc wrote always matches it. List skips anything that does not,
+// so a hand-dropped or shared file with a flag-like name (e.g. "--net=host.yaml") never
+// becomes a picker entry that could be launched as a zcr flag rather than an app.
+var keyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Load reads and decodes an app YAML from disk. It does NOT apply semantic rules (zcr
 // validates at launch time). Unknown keys are reported as an error so a stale/typo
@@ -89,7 +96,7 @@ func (sto *Store) List() ([]string, error) {
 		if entry.IsDir() {
 			continue
 		}
-		if name, ok := strings.CutSuffix(entry.Name(), ".yaml"); ok {
+		if name, ok := strings.CutSuffix(entry.Name(), ".yaml"); ok && keyRE.MatchString(name) {
 			names = append(names, name)
 		}
 	}
