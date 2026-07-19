@@ -28,7 +28,7 @@ initials.
 | `zvc` | `zinc-virtualization-creator` | define VM apps                        | planned |
 | `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app           | planned |
 | `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)               | planned |
-| `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)               | planned |
+| `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)               | 0.2     |
 
 A **creator** defines an app and writes its config; a **runner** actually starts that app
 and owns its lifecycle; **launchers** are quick pickers over the defined apps. They share
@@ -59,13 +59,15 @@ tools are on the roadmap.
 
 ## Install
 
-Podman-only, reproducible builds. Build both binaries and put them on your `$PATH`:
+Podman-only, reproducible builds. Build the binaries and put them on your `$PATH`:
 
 ```sh
 make -C container/runner build     # produces container/runner/bin/zcr
 make -C container/creator build    # produces container/creator/bin/zcc
+make -C launcher/tui build         # produces launcher/tui/bin/zlt  (0.2)
 install -Dm755 container/runner/bin/zcr  ~/.local/bin/zcr
 install -Dm755 container/creator/bin/zcc ~/.local/bin/zcc
+install -Dm755 launcher/tui/bin/zlt      ~/.local/bin/zlt
 ```
 
 `zcc` needs `zcr` on `$PATH` to run apps (authoring works without it). To run
@@ -94,6 +96,10 @@ zcc logs firefox -f
 zcc stop firefox
 
 zcc version
+
+# launch with zlt (0.2): a keyboard-first fuzzy picker over your apps
+zlt                            # open the picker: type to filter, enter launches, esc quits
+zlt firefox                    # or launch one directly (bind this to a desktop hotkey)
 ```
 
 In the TUI (default scheme): `n` new, `e` edit, `r` run, `s` stop, `l` logs, `d` delete,

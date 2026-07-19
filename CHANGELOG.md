@@ -5,6 +5,29 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.2.0] - 2026-07-19
+
+Adds the launcher.
+
+### Added
+
+- **`zlt` (zinc-launcher-tui)** - a fast, keyboard-first fuzzy picker over the
+  defined apps. Type to filter (an in-house subsequence matcher that favours
+  matches at the start of a name and at word boundaries), up/down (or ctrl+p/n) to
+  move, enter launches the selected app through `zcr` and quits (dmenu-style), and
+  a `●` marks apps already running (from `zcr ps`). `zlt <app>` launches one
+  directly, for a desktop hotkey. Like `zcc` it depends only on `common` and
+  shells out to the `zcr` binary, so it never imports the runtime - dependency
+  auto-start, the network lock-down, and derived-image builds stay `zcr`'s job. It
+  lives at `launcher/tui`, with `launcher/gui` reserved for the planned `zlg`.
+
+### Known limitations
+
+- `zlt` lists and launches; managing an app (stop, logs, edit) stays in `zcc`. The
+  GUI launcher (`zlg`) and richer rows are on the roadmap.
+- `virtualization/creator/` is still a non-compiling skeleton (0.7), excluded from
+  the build and CI.
+
 ## [0.1.0] - 2026-07-16
 
 First release. Ships the container tools: author an app once, run it sandboxed.
@@ -43,4 +66,5 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.2.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.2.0
 [0.1.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.1.0

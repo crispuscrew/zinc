@@ -12,7 +12,7 @@ Legend: done, in progress, planned.
 
 ---
 
-## 0.1 - Containers (zcc + zcr) - in progress
+## 0.1 - Containers (zcc + zcr) - done
 
 The two container tools reach MVP.
 
@@ -37,10 +37,13 @@ app; bundle-relative config mounts are deferred. Test coverage is partial away f
 security path. `launcher/` and `virtualization/creator/` do not yet compile (they still
 reference the removed `core` module).
 
-## 0.2 - Launcher TUI (zlt) - planned
+## 0.2 - Launcher TUI (zlt) - done
 
-A fast, keyboard-driven picker (TUI) over the defined apps: fuzzy search, launch through
-`zcr`, dependency auto-start.
+A fast, keyboard-driven picker (TUI) over the defined apps: fuzzy filter as you type,
+enter launches the selected app through `zcr` (which handles dependency auto-start), a
+running indicator from `zcr ps`, and a `zlt <app>` direct-launch form for a desktop
+hotkey. Like `zcc` it depends only on `common` and shells out to the `zcr` binary, so it
+never imports the runtime. Lives at `launcher/tui`, leaving `launcher/gui` for `zlg`.
 
 ## 0.3 - 0.6 - Zinc Desktop Environment (zde-niri) - planned
 
