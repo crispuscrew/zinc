@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -132,6 +133,62 @@ func TestRunningMsg_MarksApp(t *testing.T) {
 		if app.Name == "alacritty" && app.Running {
 			t.Fatal("alacritty should not be marked running")
 		}
+	}
+}
+
+// Enter with no matches is a safe no-op: nothing launches, no out-of-range access.
+func TestEnter_NoMatchesIsNoOp(t *testing.T) {
+	fake := &fakeRunner{}
+	mdl := typeStr(New(sampleApps(), fake), "zzz")
+	if len(mdl.filtered) != 0 {
+		t.Fatalf("precondition: 'zzz' should match nothing, got %d", len(mdl.filtered))
+	}
+	updated, cmd := mdl.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mdl = updated.(Model)
+	if cmd != nil {
+		t.Fatal("enter with no matches should be a no-op (nil command)")
+	}
+	if len(fake.launched) != 0 || mdl.Launched() != "" {
+		t.Fatal("enter with no matches must not launch anything")
+	}
+}
+
+// ctrl+u clears the filter; ctrl+n/ctrl+p navigate like the arrows.
+func TestCtrlKeys(t *testing.T) {
+	mdl := typeStr(New(sampleApps(), &fakeRunner{}), "fire")
+	mdl = pressKey(mdl, tea.KeyCtrlU)
+	if mdl.query != "" || len(mdl.filtered) != 3 {
+		t.Fatalf("ctrl+u should clear the filter, got query=%q filtered=%d", mdl.query, len(mdl.filtered))
+	}
+	mdl = pressKey(mdl, tea.KeyCtrlN)
+	if mdl.cursor != 1 {
+		t.Fatalf("ctrl+n -> cursor 1, got %d", mdl.cursor)
+	}
+	mdl = pressKey(mdl, tea.KeyCtrlP)
+	if mdl.cursor != 0 {
+		t.Fatalf("ctrl+p -> cursor 0, got %d", mdl.cursor)
+	}
+}
+
+// The scroll window keeps the cursor visible and always returns in-bounds indices.
+func TestWindow_KeepsCursorVisibleInBounds(t *testing.T) {
+	apps := make([]App, 30)
+	for i := range apps {
+		apps[i] = App{Name: fmt.Sprintf("app%02d", i)}
+	}
+	mdl := New(apps, &fakeRunner{})
+	mdl.height = 10 // rows = height - 5 = 5
+	mdl.cursor = 25
+
+	start, end := mdl.window()
+	if !(start <= mdl.cursor && mdl.cursor < end) {
+		t.Fatalf("window [%d,%d) should contain cursor %d", start, end, mdl.cursor)
+	}
+	if start < 0 || end > len(mdl.filtered) {
+		t.Fatalf("window [%d,%d) out of bounds (len %d)", start, end, len(mdl.filtered))
+	}
+	if end-start > 5 {
+		t.Fatalf("window shows %d rows, want <= 5", end-start)
 	}
 }
 

@@ -78,12 +78,12 @@ func (mdl Model) renderRow(pos int) string {
 // window returns the [start,end) slice of mdl.filtered to display, scrolled to keep the
 // cursor visible within the available height.
 func (mdl Model) window() (int, int) {
-	rows := 15
-	if mdl.height > 6 {
-		rows = mdl.height - 5 // prompt + blank + footer + margin
-	}
-	if rows < 1 {
-		rows = 1
+	rows := 15 // default before the first WindowSizeMsg (height 0)
+	if mdl.height > 0 {
+		rows = mdl.height - 5 // leave room for the prompt, blank line, and footer
+		if rows < 1 {
+			rows = 1
+		}
 	}
 	if len(mdl.filtered) <= rows {
 		return 0, len(mdl.filtered)

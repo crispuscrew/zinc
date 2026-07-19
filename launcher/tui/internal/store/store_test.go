@@ -61,6 +61,47 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// List skips files whose name is not a valid app key, so a flag-like or otherwise
+// crafted filename never becomes a launchable picker entry.
+func TestList_SkipsNonKeyNames(t *testing.T) {
+	dir := t.TempDir()
+	writeApp(t, dir, "firefox", "browser")
+	for _, bad := range []string{"--net=host", "Bad-Name", "has space", ".hidden"} {
+		if err := os.WriteFile(filepath.Join(dir, bad+".yaml"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names, err := (&Store{Root: dir}).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "firefox" {
+		t.Fatalf("List = %v, want only [firefox] (non-key names skipped)", names)
+	}
+}
+
+// Load rejects a file with unknown keys (a stale/typo field) rather than ignoring them.
+func TestLoad_RejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.yaml"), []byte("Bogus: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Store{Root: dir}).Load("x"); err == nil {
+		t.Fatal("Load should reject an unknown key")
+	}
+}
+
+// An empty file is a clear error, not a zero-value config.
+func TestLoad_EmptyFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.yaml"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Store{Root: dir}).Load("x"); err == nil {
+		t.Fatal("Load should reject an empty file")
+	}
+}
+
 // A crafted name (path separator or ".." segment) cannot read a file outside the store.
 func TestLoad_RejectsUnsafeNames(t *testing.T) {
 	sto := &Store{Root: t.TempDir()}

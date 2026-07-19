@@ -15,7 +15,6 @@ import (
 type App struct {
 	Name        string
 	Description string
-	Icon        string
 	Running     bool
 }
 

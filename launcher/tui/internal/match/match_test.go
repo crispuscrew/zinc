@@ -55,6 +55,16 @@ func TestFilter_RanksAndDropsNonMatches(t *testing.T) {
 	}
 }
 
+// A non-ASCII query against an ASCII target is a clean no-match (no panic from byte
+// indexing a multi-byte rune). App names are ASCII, so this is the correct answer.
+func TestMatch_NonASCIIQuery(t *testing.T) {
+	for _, query := range []string{"é", "café", "日本", "éè"} {
+		if _, ok := Match(query, "firefox"); ok {
+			t.Errorf("Match(%q, firefox) should be a no-match", query)
+		}
+	}
+}
+
 // An empty query returns every target in the original order.
 func TestFilter_EmptyQueryKeepsOrder(t *testing.T) {
 	targets := []string{"alpha", "beta", "gamma"}

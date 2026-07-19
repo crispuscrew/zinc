@@ -81,8 +81,8 @@ func pick() error {
 	if err != nil {
 		return err
 	}
-	if launched := model.(tui.Model).Launched(); launched != "" {
-		fmt.Println("launched " + launched)
+	if mdl, ok := model.(tui.Model); ok && mdl.Launched() != "" {
+		fmt.Println("launched " + mdl.Launched())
 	}
 	return nil
 }
@@ -103,7 +103,6 @@ func loadApps() ([]tui.App, error) {
 		app := tui.App{Name: name}
 		if cfg, err := sto.Load(name); err == nil {
 			app.Description = cfg.Description
-			app.Icon = cfg.Icon
 		}
 		apps = append(apps, app)
 	}

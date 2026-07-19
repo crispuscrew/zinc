@@ -57,3 +57,41 @@ func TestRun_DirectLaunchSurfacesError(t *testing.T) {
 		t.Fatalf("want the zcr error surfaced, got %v", err)
 	}
 }
+
+// loadApps lists every app, and a file that fails to decode is still shown by name (with
+// an empty description) rather than hidden.
+func TestLoadApps_ListsUndecodableByName(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	appsDir := filepath.Join(cfg, "zinc", "apps")
+	if err := os.MkdirAll(appsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	good := "SchemaVersion: 2\nType: ZincContainer\nAppNameID: good\nDescription: fine\nImageMeta:\n  Image: localhost/x:local\n"
+	if err := os.WriteFile(filepath.Join(appsDir, "good.yaml"), []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appsDir, "broken.yaml"), []byte("Bogus: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := loadApps()
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := map[string]string{}
+	found := map[string]bool{}
+	for _, app := range apps {
+		found[app.Name] = true
+		desc[app.Name] = app.Description
+	}
+	if !found["good"] || desc["good"] != "fine" {
+		t.Fatalf("good app should be listed with its description, got desc=%q", desc["good"])
+	}
+	if !found["broken"] {
+		t.Fatal("an undecodable file should still be listed by name")
+	}
+	if desc["broken"] != "" {
+		t.Fatalf("an undecodable file should list with an empty description, got %q", desc["broken"])
+	}
+}

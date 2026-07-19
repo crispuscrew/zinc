@@ -61,6 +61,20 @@ func TestRunning(t *testing.T) {
 	}
 }
 
+// A name beginning with '-' is rejected at the exec boundary (before zcr is even
+// resolved), so a filename- or CLI-derived token cannot be parsed by zcr as a flag.
+func TestLaunch_RejectsFlagName(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no zcr: prove the guard fires first, not "not found"
+	for _, bad := range []string{"--net=host", "-x", ""} {
+		if err := Launch(bad); err == nil || strings.Contains(err.Error(), "not found") {
+			t.Errorf("Launch(%q): want a name-guard error, got %v", bad, err)
+		}
+		if err := Stop(bad); err == nil || strings.Contains(err.Error(), "not found") {
+			t.Errorf("Stop(%q): want a name-guard error, got %v", bad, err)
+		}
+	}
+}
+
 // With no zcr on $PATH, actions fail with an actionable message.
 func TestLaunch_ZcrNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // an empty dir: no zcr
