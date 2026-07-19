@@ -12,7 +12,7 @@ Legend: done, in progress, planned.
 
 ---
 
-## 0.1 - Containers (zcc + zcr) - in progress
+## 0.1 - Containers (zcc + zcr) - done
 
 The two container tools reach MVP.
 
@@ -37,7 +37,7 @@ app; bundle-relative config mounts are deferred. Test coverage is partial away f
 security path. `launcher/` and `virtualization/creator/` do not yet compile (they still
 reference the removed `core` module).
 
-## 0.2 - Launcher TUI (zlt) - in progress
+## 0.2 - Launcher TUI (zlt) - done
 
 A fast, keyboard-driven picker (TUI) over the defined apps: fuzzy filter as you type,
 enter launches the selected app through `zcr` (which handles dependency auto-start), a
