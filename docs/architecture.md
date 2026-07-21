@@ -730,9 +730,13 @@ the network lock-down applies rules with (6.4).
 `zcc` + `zcr` split with a keyboard-first TUI, real rootless-container lifecycle, and the
 fail-closed network lock-down (isolated / egress / LAN publish / sibling link).
 
-**Next (see `RELEASES.md`):** a launcher (`zlt`, then `zlg`), the ZDE desktop layer, and
-virtualization (`zvc` / `zvr`). Within the container tools, the near-term work is wiring the
-already-validated schema fields (resources, internal user) into the launch and migrating the
-launcher/virtualization skeletons off the removed `core` hexagon onto `common`.
+**0.2 ships the launcher:** `zlt`, a keyboard-first fuzzy picker over the defined apps that
+shells out to `zcr` (depends only on `common`, never imports the runtime).
+
+**Next (see `RELEASES.md`):** the GUI launcher (`zlg`, 0.3) and virtualization
+(`zvc` / `zvr`, 0.4), the latter migrating the non-compiling `virtualization/` skeleton off
+the removed `core` hexagon onto `common`. The ZDE desktop layer is a separate project in its
+own repository (section 12), not a Zinc release. Within the container tools, the near-term
+work is wiring the already-validated schema fields (resources, internal user) into the launch.
 </content>
 </invoke>

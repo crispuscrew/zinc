@@ -6,8 +6,9 @@ isolation), each walled off from the rest of the desktop through the Wayland
 security-context protocol. Zinc is compositor-agnostic and installs cleanly on any
 existing system.
 
-**ZDE** (Zinc Desktop Environment, `zde`) is the full environment built on Zinc, shipped
-in two variants - `zde-niri` and `zde-hypr` - wired together by a Nix home-manager flake.
+**ZDE** (Zinc Desktop Environment, `zde`) is a separate project built on Zinc - the full
+environment, shipped in two variants (`zde-niri` and `zde-hypr`) wired together by a Nix
+home-manager flake, and developed in its own repository.
 
 **Priority order: Stable, then Secure, then Beautiful.**
 
