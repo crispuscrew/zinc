@@ -6,7 +6,7 @@
 package tui
 
 import (
-	"github.com/crispuscrew/zinc/launcher/tui/internal/match"
+	"github.com/crispuscrew/zinc/launcher/common/match"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
