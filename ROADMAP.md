@@ -45,15 +45,20 @@ running indicator from `zcr ps`, and a `zlt <app>` direct-launch form for a desk
 hotkey. Like `zcc` it depends only on `common` and shells out to the `zcr` binary, so it
 never imports the runtime. Lives at `launcher/tui`, leaving `launcher/gui` for `zlg`.
 
-## 0.3 - 0.6 - Zinc Desktop Environment (zde-niri) - planned
+## 0.3 - Launcher GUI (zlg) - planned
 
-The `zde-niri` variant reaches MVP (0.3), gains automatic qemu config for testing (0.4),
-then a visual helper (0.6). A GUI launcher (`zlg`) lands at 0.5.
+A graphical sibling to `zlt`: the same quick picker over the defined apps, for a
+point-and-click launch. Like the other tools it depends only on `common` and shells out to
+the `zcr` binary, so it never imports the runtime. Lands at `launcher/gui`.
 
-## 0.7 - Virtualization (zvc + zvr) - planned
+## 0.4 - Virtualization (zvc + zvr) - planned
 
 VM apps as the container tools' sibling: a creator and a runner over rootless
 libvirt/qemu, sharing the same config library and format.
+
+**ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project in
+its own repository, layered on these tools; its milestones are tracked there, not in this
+plan. This repo ships only the Zinc core and its tools.
 
 ---
 
