@@ -1,0 +1,18 @@
+# github.com/crispuscrew/zinc/common v0.0.0 => ../../common
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/common/domain/schema
+# github.com/crispuscrew/zinc/launcher/common v0.0.0 => ../common
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/launcher/common/match
+github.com/crispuscrew/zinc/launcher/common/runner
+github.com/crispuscrew/zinc/launcher/common/store
+# golang.org/x/image v0.18.0
+## explicit; go 1.18
+golang.org/x/image/font
+golang.org/x/image/font/basicfont
+golang.org/x/image/math/fixed
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3
+# github.com/crispuscrew/zinc/launcher/common => ../common
+# github.com/crispuscrew/zinc/common => ../../common
