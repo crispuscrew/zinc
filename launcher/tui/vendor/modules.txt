@@ -32,6 +32,11 @@ github.com/clipperhouse/uax29/v2/graphemes
 # github.com/crispuscrew/zinc/common v0.0.0 => ../../common
 ## explicit; go 1.24.2
 github.com/crispuscrew/zinc/common/domain/schema
+# github.com/crispuscrew/zinc/launcher/common v0.0.0 => ../common
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/launcher/common/match
+github.com/crispuscrew/zinc/launcher/common/runner
+github.com/crispuscrew/zinc/launcher/common/store
 # github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f
 ## explicit; go 1.16
 github.com/erikgeiser/coninput
@@ -74,3 +79,4 @@ golang.org/x/text/transform
 ## explicit
 gopkg.in/yaml.v3
 # github.com/crispuscrew/zinc/common => ../../common
+# github.com/crispuscrew/zinc/launcher/common => ../common

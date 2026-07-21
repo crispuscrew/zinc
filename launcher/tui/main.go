@@ -18,8 +18,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/crispuscrew/zinc/launcher/tui/internal/runner"
-	"github.com/crispuscrew/zinc/launcher/tui/internal/store"
+	"github.com/crispuscrew/zinc/launcher/common/runner"
+	"github.com/crispuscrew/zinc/launcher/common/store"
 	"github.com/crispuscrew/zinc/launcher/tui/internal/tui"
 )
 
