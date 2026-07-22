@@ -3,7 +3,9 @@
 // the app starts (docs/architecture.md section 5.3, section 9.1). It is the composition root of the
 // runner hexagon: it assembles the app.Service from wire and drives it from the CLI.
 //
-//	zcr run <app> [--exec]      print the launch plan, or launch it (--exec)
+//	zcr run <app> [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
+//	                            print the launch plan, or launch it (--exec); -v/--volume
+//	                            adds a runtime-only bind mount (repeatable)
 //	zcr build <app>             (re)build the app's derived image (ImageMeta.Install)
 //	zcr validate <app>          parse + validate; report problems and warnings
 //	zcr stop|restart|inspect <app>
@@ -37,7 +39,10 @@ import (
 
 const usage = `usage: zcr <command> [args]
 
-  run <app> [--exec]        print the launch plan, or launch it (--exec)
+  run <app> [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
+                            print the launch plan, or launch it (--exec)
+                            -v/--volume adds a runtime-only bind mount (repeatable;
+                            OPTIONS default ro,noexec - use rw and/or exec)
   build <app>               (re)build the derived image (ImageMeta.Install)
   validate <app>            parse + validate; report problems and warnings
   stop|restart|inspect <app>
@@ -114,20 +119,27 @@ func run(argv []string) error {
 }
 
 func cmdRun(svc app.Service, opt options.HostOptions, argv []string) error {
-	if len(argv) < 1 {
-		return fmt.Errorf("usage: zcr run <app> [--exec]")
-	}
-	cfg, err := loadApp(svc, argv[0])
+	name, execute, runtimeVolumes, err := parseRunArgs(argv)
 	if err != nil {
 		return err
 	}
-	if contains(argv[1:], "--exec") {
+	cfg, err := loadApp(svc, name)
+	if err != nil {
+		return err
+	}
+	// Runtime-only volumes (-v/--volume): appended to the loaded config in memory and
+	// never written back to the app YAML. Both branches below validate the whole config
+	// before composing any podman arg, so these runtime mounts are screened by the same
+	// checkVolume field-shift/injection guards as configured Volumes, and the existing
+	// arg-builder mounts them (docs/architecture.md section 3).
+	cfg.Volumes = append(cfg.Volumes, runtimeVolumes...)
+	if execute {
 		// Launch through the service: validate -> build derived image -> lock down -> detach.
 		return svc.Launch(cfg, opt)
 	}
 	// Dry-run: validate and print the exact podman command(s) without running them.
 	if verr := validate.Validate(cfg); verr != nil {
-		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
+		return fmt.Errorf("invalid config %s:\n%w", name, verr)
 	}
 	if derived.HasInstall(cfg) {
 		// The app runs a derived image (FROM ImageMeta.Image + the install layer); a real
@@ -151,6 +163,95 @@ func cmdRun(svc app.Service, opt options.HostOptions, argv []string) error {
 		fmt.Println("podman " + strings.Join(quoteForDisplay(podman.ExecArgs(cfg.AppNameID, termCmd(cfg))), " "))
 	}
 	return nil
+}
+
+// runUsage is the usage line for `zcr run`, shared by its argument errors.
+const runUsage = "usage: zcr run <app> [--exec] [-v HOST:CONTAINER[:OPTIONS]]..."
+
+// parseRunArgs splits `zcr run`'s arguments into the app name, the --exec flag, and any
+// repeated -v/--volume runtime mounts. Flags may appear before or after the app name.
+// Each volume value is HOST:CONTAINER[:OPTIONS] and is turned into an in-memory Volume
+// by parseVolumeSpec; cmdRun appends these to the loaded config (validated there before
+// use). The separated (-v VALUE) and attached (-v=VALUE, --volume=VALUE) forms are both
+// accepted.
+func parseRunArgs(argv []string) (name string, execute bool, volumes []schema.Volume, err error) {
+	for idx := 0; idx < len(argv); idx++ {
+		arg := argv[idx]
+		switch {
+		case arg == "--exec":
+			execute = true
+		case arg == "-v" || arg == "--volume":
+			idx++
+			if idx >= len(argv) {
+				return "", false, nil, fmt.Errorf("%s: missing value (want HOST:CONTAINER[:OPTIONS])", arg)
+			}
+			vol, verr := parseVolumeSpec(argv[idx])
+			if verr != nil {
+				return "", false, nil, verr
+			}
+			volumes = append(volumes, vol)
+		case strings.HasPrefix(arg, "-v="):
+			vol, verr := parseVolumeSpec(strings.TrimPrefix(arg, "-v="))
+			if verr != nil {
+				return "", false, nil, verr
+			}
+			volumes = append(volumes, vol)
+		case strings.HasPrefix(arg, "--volume="):
+			vol, verr := parseVolumeSpec(strings.TrimPrefix(arg, "--volume="))
+			if verr != nil {
+				return "", false, nil, verr
+			}
+			volumes = append(volumes, vol)
+		case strings.HasPrefix(arg, "-"):
+			return "", false, nil, fmt.Errorf("unknown flag %q\n%s", arg, runUsage)
+		case name == "":
+			name = arg
+		default:
+			return "", false, nil, fmt.Errorf("unexpected argument %q\n%s", arg, runUsage)
+		}
+	}
+	if name == "" {
+		return "", false, nil, fmt.Errorf("%s", runUsage)
+	}
+	return name, execute, volumes, nil
+}
+
+// parseVolumeSpec parses one runtime -v/--volume value HOST:CONTAINER[:OPTIONS] into an
+// in-memory host-mounted Volume. OPTIONS is a comma list with the same meaning as a
+// configured volume's flags: the default is read-only and non-executable; "rw" makes it
+// writable and "exec" executable ("ro"/"noexec" restate the defaults). HOST and
+// CONTAINER must be non-empty; any ':'/','/whitespace they carry (a podman field-shift)
+// is rejected by the config validation cmdRun runs before this Volume reaches podman.
+func parseVolumeSpec(spec string) (schema.Volume, error) {
+	fields := strings.Split(spec, ":")
+	if len(fields) < 2 || len(fields) > 3 {
+		return schema.Volume{}, fmt.Errorf("--volume %q: want HOST:CONTAINER[:OPTIONS]", spec)
+	}
+	host, inner := fields[0], fields[1]
+	if strings.TrimSpace(host) == "" {
+		return schema.Volume{}, fmt.Errorf("--volume %q: empty HOST path", spec)
+	}
+	if strings.TrimSpace(inner) == "" {
+		return schema.Volume{}, fmt.Errorf("--volume %q: empty CONTAINER path", spec)
+	}
+	vol := schema.Volume{HostMounted: true, HostMount: host, InnerMount: inner}
+	if len(fields) == 3 {
+		for _, mountOpt := range strings.Split(fields[2], ",") {
+			switch strings.TrimSpace(mountOpt) {
+			case "rw":
+				vol.Writable = true
+			case "ro":
+				vol.Writable = false
+			case "exec":
+				vol.Executable = true
+			case "noexec":
+				vol.Executable = false
+			default:
+				return schema.Volume{}, fmt.Errorf("--volume %q: unknown option %q (want rw, ro, exec, noexec)", spec, mountOpt)
+			}
+		}
+	}
+	return vol, nil
 }
 
 // termCmd is the argv each terminal of a multiterminal app runs: its
@@ -369,15 +470,6 @@ func loadApp(svc app.Service, arg string) (schema.AppConfig, error) {
 		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zcc list)", arg)
 	}
 	return svc.Load(arg)
-}
-
-func contains(list []string, want string) bool {
-	for _, str := range list {
-		if str == want {
-			return true
-		}
-	}
-	return false
 }
 
 // quoteForDisplay lightly quotes args with whitespace, for readable printing only.
