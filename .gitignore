@@ -11,3 +11,6 @@ coverage.*
 
 # OS
 .DS_Store
+
+# Agent worktrees (isolated per-agent checkouts; the work lands on their own branches)
+.claude/worktrees/
