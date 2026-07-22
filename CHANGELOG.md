@@ -5,6 +5,21 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.2.1] - 2026-07-22
+
+Adds a runtime volume flag to `zcr`.
+
+### Added
+
+- **`zcr run --volume` / `-v`** - mount an extra host directory or file into an app
+  for one run only, without editing its config:
+  `zcr run <app> -v HOST:CONTAINER[:OPTIONS]` (repeatable). `OPTIONS` defaults to
+  `ro,noexec`; `rw` makes it writable and `exec` executable. The runtime mount is
+  appended to the loaded config in memory (never written back to the YAML) and passes
+  through the same field-shift / injection validation and the same arg-builder as a
+  configured `Volumes` entry. This delivers the "can also be added temporarily at
+  runtime" behavior the `Volumes` schema field always described.
+
 ## [0.2.0] - 2026-07-19
 
 Adds the launcher.
@@ -66,5 +81,6 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.2.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.2.1
 [0.2.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.2.0
 [0.1.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.1.0
