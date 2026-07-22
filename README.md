@@ -28,7 +28,7 @@ initials.
 | `zcr` | `zinc-container-runner`       | launch + supervise a container app    | 0.1     |
 | `zvc` | `zinc-virtualization-creator` | define VM apps                        | planned |
 | `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app           | planned |
-| `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)               | planned |
+| `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)               | 0.3     |
 | `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)               | 0.2     |
 
 A **creator** defines an app and writes its config; a **runner** actually starts that app
@@ -39,7 +39,8 @@ use the same config format.
 The creator carries no runtime: `zcc` authors app files and shells out to the `zcr` binary
 to run them, so the two meet only at the on-disk YAML format and never share code.
 
-Layout: `common/`, `container/{creator,runner}`, plus `container/e2e` (end-to-end tests).
+Layout: `common/`, `container/{creator,runner}`, `container/e2e` (end-to-end tests), and
+`launcher/{common,tui,gui}` (the shared launcher library and the TUI/GUI pickers).
 
 ## Status
 
@@ -66,9 +67,11 @@ Podman-only, reproducible builds. Build the binaries and put them on your `$PATH
 make -C container/runner build     # produces container/runner/bin/zcr
 make -C container/creator build    # produces container/creator/bin/zcc
 make -C launcher/tui build         # produces launcher/tui/bin/zlt  (0.2)
+make -C launcher/gui build         # produces launcher/gui/bin/zlg  (0.3)
 install -Dm755 container/runner/bin/zcr  ~/.local/bin/zcr
 install -Dm755 container/creator/bin/zcc ~/.local/bin/zcc
 install -Dm755 launcher/tui/bin/zlt      ~/.local/bin/zlt
+install -Dm755 launcher/gui/bin/zlg      ~/.local/bin/zlg
 ```
 
 `zcc` needs `zcr` on `$PATH` to run apps (authoring works without it). To run
@@ -101,6 +104,10 @@ zcc version
 # launch with zlt (0.2): a keyboard-first fuzzy picker over your apps
 zlt                            # open the picker: type to filter, enter launches, esc quits
 zlt firefox                    # or launch one directly (bind this to a desktop hotkey)
+
+# launch with zlg (0.3): the same picker as a graphical window (pure-Go Wayland)
+zlg                            # open the picker window: type to filter, enter launches
+zlg firefox                    # or launch one directly (bind this to a desktop hotkey)
 ```
 
 In the TUI (default scheme): `n` new, `e` edit, `r` run, `s` stop, `l` logs, `d` delete,

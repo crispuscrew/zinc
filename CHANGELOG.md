@@ -5,6 +5,34 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.3.0] - unreleased
+
+Adds the GUI launcher.
+
+### Added
+
+- **`zlg` (zinc-launcher-gui)** - the graphical sibling of `zlt`: the same quick
+  picker over the defined apps, as a Wayland window. Type to filter, up/down (or
+  ctrl+p/n) to move, enter launches the selected app through `zcr` and quits, and a
+  dot marks apps already running. `zlg <app>` launches one directly, for a desktop
+  hotkey. It renders in **pure Go** - it speaks the Wayland wire protocol directly and
+  software-renders the picker into a shared-memory buffer with a bundled bitmap font -
+  so it stays a **static, `CGO_ENABLED=0`, runs-anywhere, byte-reproducible** binary
+  built from the same minimal image as the other tools, with no cgo and no graphics
+  libraries. Like `zcc` and `zlt` it shells out to the `zcr` binary and never imports
+  the runtime.
+- **`launcher/common`** - a shared library holding the read-side app store, the `zcr`
+  delegate, and the fuzzy matcher, so `zlt` and `zlg` share one copy of the
+  list / launch / match logic (and its security guards).
+
+### Known limitations
+
+- `zlg`'s keymap is US-QWERTY; full keyboard-layout (xkb) support is future work.
+- `zlg` is a normal Wayland window, not a dmenu-style overlay (the pure-Go Wayland
+  library carries no `wlr-layer-shell` yet).
+- Like `zlt`, `zlg` lists and launches; managing an app (stop, logs, edit) stays in
+  `zcc`.
+
 ## [0.2.0] - 2026-07-19
 
 Adds the launcher.
@@ -66,5 +94,6 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.3.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.0
 [0.2.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.2.0
 [0.1.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.1.0
