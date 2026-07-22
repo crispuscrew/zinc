@@ -25,8 +25,11 @@ require (
 	golang.org/x/image v0.18.0
 )
 
+require github.com/rajveermalviya/go-wayland/wayland v0.0.0-20230130181619-0ad78d1310b2
+
 require (
 	github.com/crispuscrew/zinc/common v0.0.0 // indirect
+	golang.org/x/sys v0.0.0-20211117180635-dee7805ff2e1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
