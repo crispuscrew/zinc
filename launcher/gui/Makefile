@@ -10,3 +10,14 @@
 TOOL := zlg
 
 include ../../tool.mk
+
+## demo: build, then open the picker against the bundled example apps in a throwaway config dir (your real config is untouched)
+DEMO_HOME := $(BIN_DIR)/demo-home
+demo: build
+	@rm -rf "$(DEMO_HOME)/zinc/apps"
+	@mkdir -p "$(DEMO_HOME)/zinc/apps"
+	@cp $(REPO_REL)/launcher/demo/apps/*.yaml "$(DEMO_HOME)/zinc/apps/"
+	@echo "launching $(TOOL) against the demo apps (your real ~/.config/zinc is untouched)"
+	@XDG_CONFIG_HOME="$(CURDIR)/$(DEMO_HOME)" ./$(BIN)
+
+.PHONY: demo

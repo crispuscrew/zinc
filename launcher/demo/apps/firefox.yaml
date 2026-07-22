@@ -1,0 +1,13 @@
+# Zinc demo app (schema v2). See launcher/demo/README.md. Try the picker with:
+#   make -C launcher/gui demo      (GUI)   or   make -C launcher/tui demo   (TUI)
+SchemaVersion: 2
+Type: ZincContainer
+AppNameID: firefox
+Icon: firefox
+Description: Web browser
+ImageMeta:
+  Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+  Install:
+    - apk add --no-cache firefox font-dejavu
+StartConditions:
+  Entrypoint: firefox
