@@ -31,7 +31,7 @@ type AppConfig struct {
 	NotificationMeta NotificationMeta `yaml:"NotificationMeta"`
 
 	Configs      []Volume  `yaml:"Configs"` // Use host local path from app_name/configs/ folder
-	Volumes      []Volume  `yaml:"Volumes"` // Also can be added temporary at runtime
+	Volumes      []Volume  `yaml:"Volumes"` // extra host bind mounts can also be added for one run via `zcr run -v` (not persisted here)
 	Keys         []Key     `yaml:"Keys"`
 	HostTheme    bool      `yaml:"HostTheme"`
 	AudioMeta    AudioMeta `yaml:"AudioMeta"`
