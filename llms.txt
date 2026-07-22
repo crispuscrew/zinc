@@ -21,7 +21,8 @@ podman-only: all Go for the tools runs in a digest-pinned container via `make`.
 
 - [zcc README](container/creator/README.md): the creator - author/manage app files, the command surface, the zcc/zcr split.
 - [zcr README](container/runner/README.md): the runner - run an app file, the fail-closed network model.
-- [zlt README](launcher/tui/README.md): the launcher (0.2) - fuzzy-pick an app and launch it via zcr.
+- [zlt README](launcher/tui/README.md): the launcher TUI (0.2) - fuzzy-pick an app and launch it via zcr.
+- [zlg README](launcher/gui/README.md): the launcher GUI (0.3) - the same picker as a pure-Go Wayland window.
 
 ## Agent guidance
 
