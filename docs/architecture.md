@@ -143,6 +143,13 @@ only **explicit host bind mounts** today (`HostMounted: true` with a `HostMount`
 maps `HostMount:InnerMount` with `ro`/`rw` from `Writable` and `noexec`/`exec` from
 `Executable`. Anonymous and `SizeLimited` volumes are schema-defined but not wired yet.
 
+A bind mount can also be added for a single run without editing the app file, via a
+repeatable `-v`/`--volume` flag on `zcr run`:
+`zcr run <app> -v HOST:CONTAINER[:OPTIONS]`, where `OPTIONS` is a comma list (`rw`, `ro`,
+`exec`, `noexec`; default `ro,noexec`). Such a mount is appended to the loaded config in
+memory - never written back to the YAML - and passes through the same validation and
+arg-builder as a configured `Volume`, so it is screened by the same field-shift guards.
+
 ```yaml
 Volumes:
   - HostMounted: true
