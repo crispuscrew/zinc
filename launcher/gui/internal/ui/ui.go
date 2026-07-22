@@ -100,6 +100,12 @@ func (application *app) connect() error {
 	}
 	application.display = display
 	application.ctx = display.Context()
+	// Surface a compositor-reported protocol error with its message, rather than only the
+	// follow-on socket EOF.
+	display.SetErrorHandler(func(event client.DisplayErrorEvent) {
+		application.runErr = fmt.Errorf("wayland protocol error (code %d): %s", event.Code, event.Message)
+		application.closed = true
+	})
 
 	registry, err := display.GetRegistry()
 	if err != nil {
@@ -405,6 +411,10 @@ func (application *app) releaseBuffer() {
 
 // redraw renders the model and blits it into the shm buffer as ARGB8888 (byte order
 // B,G,R,A little-endian), then commits the surface.
+//
+// It reuses one buffer and does not wait for wl_buffer.release, so a burst of redraws can
+// briefly tear - a cosmetic torn read (both sides map the same live file), never a crash.
+// Double-buffering is a future refinement; for a redraw-on-keystroke launcher this is fine.
 func (application *app) redraw() {
 	if application.buffer == nil || application.mmap == nil {
 		return
@@ -423,7 +433,10 @@ func (application *app) redraw() {
 		dst[index+3] = src[index+3] // A
 	}
 	application.surface.Attach(application.buffer, 0, 0)
-	application.surface.DamageBuffer(0, 0, int32(application.bufWidth), int32(application.bufHeight))
+	// Damage (surface-local, wl_surface v1) rather than DamageBuffer (v4), so we never
+	// depend on binding wl_compositor at v4+. We redraw the whole surface, so full-surface
+	// damage is exactly right.
+	application.surface.Damage(0, 0, int32(application.bufWidth), int32(application.bufHeight))
 	application.surface.Commit()
 }
 

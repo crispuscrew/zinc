@@ -1,8 +1,9 @@
 // Package picker is zlg's toolkit-neutral view-model: the state of the app picker (the
 // filtered list, the query, the cursor, the running set) and the transitions a UI drives
-// (type, backspace, clear, move, select). It holds no gio types and does no I/O, so the
-// launch/filter logic is unit-testable without a display - the gio layer (internal/ui) is
-// a thin renderer over this, exactly as zlt's Bubbletea model is over the same primitives.
+// (type, backspace, clear, move, select). It holds no toolkit types and does no I/O, so the
+// launch/filter logic is unit-testable without a display - the Wayland layer (internal/ui)
+// is a thin renderer over this, exactly as zlt's Bubbletea model is over the same
+// primitives.
 //
 // The behaviour mirrors zlt so the two launchers feel identical: fuzzy filter as you type
 // (best match first), the cursor clamps to the visible range and resets to the top on a

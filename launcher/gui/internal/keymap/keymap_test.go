@@ -60,3 +60,16 @@ func TestDecode_ShiftOnSpace(t *testing.T) {
 		t.Fatalf("shift+space = %q, want space", got.Rune)
 	}
 }
+
+// Every printable entry decodes to its unshifted and shifted rune, guarding the whole
+// table against a typo (not just the two codes spot-checked above).
+func TestDecode_AllPrintablePairs(t *testing.T) {
+	for code, pair := range printable {
+		if got := Decode(code, false); got.Rune != pair[0] || !got.Printable() {
+			t.Errorf("code %d unshifted = %q, want %q", code, got.Rune, pair[0])
+		}
+		if got := Decode(code, true); got.Rune != pair[1] || !got.Printable() {
+			t.Errorf("code %d shifted = %q, want %q", code, got.Rune, pair[1])
+		}
+	}
+}
