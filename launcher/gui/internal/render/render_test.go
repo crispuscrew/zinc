@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"testing"
@@ -56,6 +57,38 @@ func TestFrame_EmptyAndTinyAreSafe(t *testing.T) {
 	_ = Frame(picker.New(nil), 200, 120)
 	// a size too small for even one row must clamp, not divide-by-zero or panic
 	_ = Frame(sample(), 50, 10)
+}
+
+// scrollStart keeps the cursor visible and the window in-bounds for every cursor position
+// when the list is longer than the window - the scroll-active path the size tests skip.
+func TestScrollStart_KeepsCursorVisibleInBounds(t *testing.T) {
+	const total, rows = 30, 5
+	for cursor := 0; cursor < total; cursor++ {
+		start := scrollStart(cursor, total, rows)
+		if start < 0 || start+rows > total {
+			t.Fatalf("cursor %d: window [%d,%d) out of [0,%d]", cursor, start, start+rows, total)
+		}
+		if cursor < start || cursor >= start+rows {
+			t.Fatalf("cursor %d not visible in window [%d,%d)", cursor, start, start+rows)
+		}
+	}
+}
+
+// A frame whose cursor scrolled past the first page still draws the selected row's
+// highlight band, so the selection stays on screen rather than scrolling off.
+func TestFrame_ScrolledCursorStaysHighlighted(t *testing.T) {
+	apps := make([]picker.App, 30)
+	for index := range apps {
+		apps[index] = picker.App{Name: fmt.Sprintf("app%02d", index)}
+	}
+	mdl := picker.New(apps)
+	for count := 0; count < 29; count++ {
+		mdl.MoveCursor(1) // drive the cursor to the last row
+	}
+	img := Frame(mdl, 400, 140) // rows ~= (140-26)/18 = 6, so 30 rows must scroll
+	if !hasColor(img, colorSelBG) {
+		t.Fatal("the scrolled-to selected row should still show the highlight band")
+	}
 }
 
 func hasColor(img *image.RGBA, want color.Color) bool {

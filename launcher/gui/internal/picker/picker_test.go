@@ -132,6 +132,30 @@ func TestEmptyPicker(t *testing.T) {
 	}
 }
 
+// MoveCursor clamps within the NARROWED list, not just the full one.
+func TestMoveCursor_ClampsWithinNarrowedList(t *testing.T) {
+	mdl := New(sampleApps())
+	mdl.Type("t") // alacritty and syncthing contain a 't'; firefox does not
+	visible := len(mdl.Visible())
+	if visible == 0 || visible == len(sampleApps()) {
+		t.Fatalf("precondition: 't' should narrow but not empty, got %d", visible)
+	}
+	mdl.MoveCursor(1000)
+	if mdl.Cursor() != visible-1 {
+		t.Fatalf("cursor should clamp to the last narrowed row %d, got %d", visible-1, mdl.Cursor())
+	}
+}
+
+// Selected tracks a non-zero cursor to the right app.
+func TestSelected_TracksNonZeroCursor(t *testing.T) {
+	mdl := New(sampleApps()) // caller order: alacritty, firefox, syncthing
+	mdl.MoveCursor(2)
+	app, ok := mdl.Selected()
+	if !ok || app.Name != "syncthing" {
+		t.Fatalf("cursor 2 should select syncthing, got %q ok=%v", app.Name, ok)
+	}
+}
+
 func names(apps []App) []string {
 	out := make([]string, len(apps))
 	for index, app := range apps {
