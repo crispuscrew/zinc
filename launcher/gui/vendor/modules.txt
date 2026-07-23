@@ -3,9 +3,16 @@
 github.com/crispuscrew/zinc/common/domain/schema
 # github.com/crispuscrew/zinc/launcher/common v0.0.0 => ../common
 ## explicit; go 1.24.2
-github.com/crispuscrew/zinc/launcher/common/match
 github.com/crispuscrew/zinc/launcher/common/runner
 github.com/crispuscrew/zinc/launcher/common/store
+# github.com/crispuscrew/zinc/menu v0.0.0 => ../../menu
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/menu
+github.com/crispuscrew/zinc/menu/internal/keymap
+github.com/crispuscrew/zinc/menu/internal/match
+github.com/crispuscrew/zinc/menu/internal/picker
+github.com/crispuscrew/zinc/menu/internal/render
+github.com/crispuscrew/zinc/menu/internal/theme
 # github.com/godbus/dbus/v5 v5.2.2
 ## explicit; go 1.20
 github.com/godbus/dbus/v5
@@ -34,5 +41,6 @@ golang.org/x/text/transform
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
+# github.com/crispuscrew/zinc/menu => ../../menu
 # github.com/crispuscrew/zinc/launcher/common => ../common
 # github.com/crispuscrew/zinc/common => ../../common

@@ -7,9 +7,11 @@
 //	zlg            open the picker window (type to filter, enter launches, esc quits)
 //	zlg <app>      launch a defined app directly (for a desktop hotkey or a script)
 //
-// zlg renders in pure Go (the Wayland wire protocol plus a software-drawn buffer), so it
-// stays a static, dependency-light binary like the other tools. Dependency auto-start, the
-// network lock-down, and derived-image builds are all zcr's job.
+// The picker window itself is the reusable `menu` module (a pure-Go Wayland layer-shell
+// overlay); zlg is a thin consumer that supplies the app list and an activate callback. So
+// zlg stays a static, dependency-light binary, and other programs can build their own menus
+// over the same core. Dependency auto-start, the network lock-down, and derived-image builds
+// are all zcr's job.
 package main
 
 import (
@@ -17,11 +19,11 @@ import (
 	"os"
 	"runtime/debug"
 	"sort"
+	"strconv"
 
 	"github.com/crispuscrew/zinc/launcher/common/runner"
 	"github.com/crispuscrew/zinc/launcher/common/store"
-	"github.com/crispuscrew/zinc/launcher/gui/internal/picker"
-	"github.com/crispuscrew/zinc/launcher/gui/internal/ui"
+	"github.com/crispuscrew/zinc/menu"
 )
 
 // version is the release, stamped at build time via -ldflags "-X main.version=...".
@@ -56,12 +58,6 @@ const usage = "usage:\n" +
 	"  zlg <app>      launch a defined app directly\n" +
 	"  zlg --version"
 
-// zcrDelegate adapts the runner package to the ui.Runner interface.
-type zcrDelegate struct{}
-
-func (zcrDelegate) Launch(name string) error          { return runner.Launch(name) }
-func (zcrDelegate) Running() (map[string]bool, error) { return runner.Running() }
-
 // launchDirect runs a named app straight through zcr, with no UI - for a hotkey binding.
 func launchDirect(name string) error {
 	if err := runner.Launch(name); err != nil {
@@ -71,26 +67,34 @@ func launchDirect(name string) error {
 	return nil
 }
 
-// pick loads the defined apps and opens the picker window; on selection it has already
-// launched through zcr, so we just report what came up.
+// pick loads the defined apps and opens the menu overlay. The activate callback launches the
+// chosen app through zcr from inside the overlay, so a launch error is shown in the window
+// (the overlay stays open) rather than tearing it down.
 func pick() error {
-	apps, err := loadApps()
+	items, err := loadItems()
 	if err != nil {
 		return err
 	}
-	launched, err := ui.Run(apps, zcrDelegate{})
+	activate := func(item menu.Item) error {
+		if err := runner.Launch(item.Label); err != nil {
+			return fmt.Errorf("cannot launch %s - %w", item.Label, err)
+		}
+		return nil
+	}
+	index, err := menu.Run(items, activate, menuOptions())
 	if err != nil {
 		return err
 	}
-	if launched != "" {
-		fmt.Println("launched " + launched)
+	if index >= 0 {
+		fmt.Println("launched " + items[index].Label)
 	}
 	return nil
 }
 
-// loadApps reads every defined app for display. A file that fails to decode is still
-// listed by name (launching it will surface zcr's validation error) rather than hidden.
-func loadApps() ([]picker.App, error) {
+// loadItems reads every defined app as a menu item, marking the ones zcr reports running. A
+// file that fails to decode is still listed by name (launching it will surface zcr's
+// validation error) rather than hidden.
+func loadItems() ([]menu.Item, error) {
 	sto, err := store.Default()
 	if err != nil {
 		return nil, err
@@ -99,16 +103,35 @@ func loadApps() ([]picker.App, error) {
 	if err != nil {
 		return nil, err
 	}
-	apps := make([]picker.App, 0, len(names))
+	running, _ := runner.Running() // best-effort; the picker still works without zcr
+	items := make([]menu.Item, 0, len(names))
 	for _, name := range names {
-		app := picker.App{Name: name}
+		item := menu.Item{Label: name, Marked: running[name]}
 		if cfg, err := sto.Load(name); err == nil {
-			app.Description = cfg.Description
+			item.Description = cfg.Description
 		}
-		apps = append(apps, app)
+		items = append(items, item)
 	}
-	sort.Slice(apps, func(left, right int) bool { return apps[left].Name < apps[right].Name })
-	return apps, nil
+	sort.Slice(items, func(left, right int) bool { return items[left].Label < items[right].Label })
+	return items, nil
+}
+
+// menuOptions maps zlg's env knobs onto the menu Options: ZLG_OPACITY (a 0..100 percentage),
+// ZLG_NO_ANIM (disable the fade-in), and ZLG_DEBUG (trace the Wayland handshake). The app-id
+// lets tiling compositors match window rules against zlg.
+func menuOptions() menu.Options {
+	opts := menu.Options{
+		Prompt: "> ",
+		AppID:  "zinc.launcher",
+		NoAnim: os.Getenv("ZLG_NO_ANIM") != "",
+		Debug:  os.Getenv("ZLG_DEBUG") != "",
+	}
+	if raw := os.Getenv("ZLG_OPACITY"); raw != "" {
+		if percent, err := strconv.Atoi(raw); err == nil && percent >= 0 && percent <= 100 {
+			opts.Opacity = float64(percent) / 100
+		}
+	}
+	return opts
 }
 
 // versionString returns the ldflags-stamped version, falling back to the module version

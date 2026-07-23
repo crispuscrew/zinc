@@ -58,9 +58,9 @@ func TestRun_DirectLaunchSurfacesError(t *testing.T) {
 	}
 }
 
-// loadApps lists every app, and a file that fails to decode is still shown by name (with
+// loadItems lists every app, and a file that fails to decode is still shown by name (with
 // an empty description) rather than hidden.
-func TestLoadApps_ListsUndecodableByName(t *testing.T) {
+func TestLoadItems_ListsUndecodableByName(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	appsDir := filepath.Join(cfg, "zinc", "apps")
@@ -75,15 +75,15 @@ func TestLoadApps_ListsUndecodableByName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	apps, err := loadApps()
+	items, err := loadItems()
 	if err != nil {
 		t.Fatal(err)
 	}
 	desc := map[string]string{}
 	found := map[string]bool{}
-	for _, app := range apps {
-		found[app.Name] = true
-		desc[app.Name] = app.Description
+	for _, item := range items {
+		found[item.Label] = true
+		desc[item.Label] = item.Description
 	}
 	if !found["good"] || desc["good"] != "fine" {
 		t.Fatalf("good app should be listed with its description, got desc=%q", desc["good"])
