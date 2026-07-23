@@ -86,11 +86,8 @@ type app struct {
 	xdgSurface *xdg.Surface
 	toplevel   *xdg.Toplevel
 
-	shmFile             *os.File
-	mmap                []byte
-	buffer              *client.Buffer
-	stride              int
-	bufWidth, bufHeight int
+	current *shmBuffer   // the buffer currently attached to the surface
+	retired []*shmBuffer // resized-away buffers, kept alive until the compositor releases them
 
 	width, height               int
 	pendingWidth, pendingHeight int
@@ -440,7 +437,37 @@ func (application *app) handleSurfaceConfigure(event xdg.SurfaceConfigureEvent) 
 	application.redraw()
 }
 
-// ensureBuffer (re)creates the shared-memory buffer when the size changes or on first use.
+// shmBuffer is one wl_buffer plus the shared memory backing it. The mapping and the wl_buffer
+// must stay alive - and the wl_buffer stays registered with go-wayland - until the compositor
+// sends its release. Destroying a buffer the compositor still holds means a later release
+// event lands on an unregistered object, which go-wayland's dispatch treats as fatal
+// ("unable find sender"). So a resize retires the old buffer rather than destroying it.
+type shmBuffer struct {
+	buffer        *client.Buffer
+	file          *os.File
+	mmap          []byte
+	width, height int
+}
+
+// destroy frees the buffer, mapping, and shm file. Only call it once the compositor is done
+// with the buffer (on release, or at cleanup when the connection is closing anyway).
+func (buf *shmBuffer) destroy() {
+	if buf.buffer != nil {
+		buf.buffer.Destroy()
+		buf.buffer = nil
+	}
+	if buf.mmap != nil {
+		syscall.Munmap(buf.mmap)
+		buf.mmap = nil
+	}
+	if buf.file != nil {
+		buf.file.Close()
+		buf.file = nil
+	}
+}
+
+// ensureBuffer makes application.current a buffer of the wanted size, retiring the old one
+// (if the size changed) instead of destroying it while the compositor may still hold it.
 func (application *app) ensureBuffer() error {
 	width, height := application.width, application.height
 	if width <= 0 {
@@ -449,11 +476,23 @@ func (application *app) ensureBuffer() error {
 	if height <= 0 {
 		height = defaultHeight
 	}
-	if application.buffer != nil && application.bufWidth == width && application.bufHeight == height {
+	if application.current != nil && application.current.width == width && application.current.height == height {
 		return nil
 	}
-	application.releaseBuffer()
+	if application.current != nil {
+		application.retire(application.current)
+		application.current = nil
+	}
+	buf, err := application.newBuffer(width, height)
+	if err != nil {
+		return err
+	}
+	application.current = buf
+	return nil
+}
 
+// newBuffer allocates an unlinked shm file, maps it, and wraps it in a wl_buffer.
+func (application *app) newBuffer(width, height int) (*shmBuffer, error) {
 	stride := width * 4
 	size := stride * height
 	dir := os.Getenv("XDG_RUNTIME_DIR")
@@ -462,54 +501,54 @@ func (application *app) ensureBuffer() error {
 	}
 	file, err := os.CreateTemp(dir, "zlg-shm-*")
 	if err != nil {
-		return fmt.Errorf("create shm file: %w", err)
+		return nil, fmt.Errorf("create shm file: %w", err)
 	}
 	// Unlink now; the open fd (and the mapping) keep the memory alive.
 	os.Remove(file.Name())
 	if err := file.Truncate(int64(size)); err != nil {
 		file.Close()
-		return err
+		return nil, err
 	}
 	data, err := syscall.Mmap(int(file.Fd()), 0, size, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
 		file.Close()
-		return fmt.Errorf("mmap shm: %w", err)
+		return nil, fmt.Errorf("mmap shm: %w", err)
 	}
 	pool, err := application.shm.CreatePool(int(file.Fd()), int32(size))
 	if err != nil {
 		syscall.Munmap(data)
 		file.Close()
-		return err
+		return nil, err
 	}
 	buffer, err := pool.CreateBuffer(0, int32(width), int32(height), int32(stride), uint32(client.ShmFormatArgb8888))
 	pool.Destroy()
 	if err != nil {
 		syscall.Munmap(data)
 		file.Close()
-		return err
+		return nil, err
 	}
-
-	application.shmFile = file
-	application.mmap = data
-	application.buffer = buffer
-	application.stride = stride
-	application.bufWidth, application.bufHeight = width, height
-	return nil
+	return &shmBuffer{buffer: buffer, file: file, mmap: data, width: width, height: height}, nil
 }
 
-// releaseBuffer frees the current buffer, mapping, and shm file (if any).
-func (application *app) releaseBuffer() {
-	if application.buffer != nil {
-		application.buffer.Destroy()
-		application.buffer = nil
-	}
-	if application.mmap != nil {
-		syscall.Munmap(application.mmap)
-		application.mmap = nil
-	}
-	if application.shmFile != nil {
-		application.shmFile.Close()
-		application.shmFile = nil
+// retire holds a resized-away buffer until the compositor releases it, then frees it. A
+// buffer the compositor already released while it was current simply never fires this
+// handler and is reclaimed at cleanup instead.
+func (application *app) retire(buf *shmBuffer) {
+	application.retired = append(application.retired, buf)
+	buf.buffer.SetReleaseHandler(func(client.BufferReleaseEvent) {
+		trace("compositor released a retired buffer (%dx%d)", buf.width, buf.height)
+		application.freeRetired(buf)
+	})
+}
+
+// freeRetired drops buf from the retired list and frees it.
+func (application *app) freeRetired(buf *shmBuffer) {
+	for index, candidate := range application.retired {
+		if candidate == buf {
+			application.retired = append(application.retired[:index], application.retired[index+1:]...)
+			buf.destroy()
+			return
+		}
 	}
 }
 
@@ -520,12 +559,13 @@ func (application *app) releaseBuffer() {
 // briefly tear - a cosmetic torn read (both sides map the same live file), never a crash.
 // Double-buffering is a future refinement; for a redraw-on-keystroke launcher this is fine.
 func (application *app) redraw() {
-	if application.buffer == nil || application.mmap == nil {
+	buf := application.current
+	if buf == nil || buf.mmap == nil {
 		return
 	}
-	frame := render.Frame(application.model, application.bufWidth, application.bufHeight)
+	frame := render.Frame(application.model, buf.width, buf.height)
 	src := frame.Pix
-	dst := application.mmap
+	dst := buf.mmap
 	count := len(dst)
 	if len(src) < count {
 		count = len(src)
@@ -536,17 +576,24 @@ func (application *app) redraw() {
 		dst[index+2] = src[index+0] // R
 		dst[index+3] = src[index+3] // A
 	}
-	application.surface.Attach(application.buffer, 0, 0)
+	application.surface.Attach(buf.buffer, 0, 0)
 	// Damage (surface-local, wl_surface v1) rather than DamageBuffer (v4), so we never
 	// depend on binding wl_compositor at v4+. We redraw the whole surface, so full-surface
 	// damage is exactly right.
-	application.surface.Damage(0, 0, int32(application.bufWidth), int32(application.bufHeight))
+	application.surface.Damage(0, 0, int32(buf.width), int32(buf.height))
 	application.surface.Commit()
 }
 
-// cleanup releases the buffer and closes the connection.
+// cleanup frees every buffer (current and any awaiting release) and closes the connection.
 func (application *app) cleanup() {
-	application.releaseBuffer()
+	if application.current != nil {
+		application.current.destroy()
+		application.current = nil
+	}
+	for _, buf := range application.retired {
+		buf.destroy()
+	}
+	application.retired = nil
 	if application.ctx != nil {
 		application.ctx.Close()
 	}
