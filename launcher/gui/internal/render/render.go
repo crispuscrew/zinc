@@ -17,6 +17,8 @@ import (
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/gofont/gomono"
+	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
 	"github.com/crispuscrew/zinc/launcher/gui/internal/picker"
@@ -38,7 +40,42 @@ const (
 	descColMax   = 18 // cap on the name-column width used to line descriptions up
 )
 
-var face = basicfont.Face7x13
+// fontSizePx is the pixel size of the rendered text (DPI is fixed at 72, so points == px).
+const fontSizePx = 13
+
+// The renderer uses one monospace face; its metrics (all in whole pixels) drive the layout.
+var (
+	face        font.Face
+	faceAscent  int
+	faceHeight  int
+	faceAdvance int // one cell width - the font is monospace, so every glyph shares it
+)
+
+func init() {
+	face = loadFace()
+	metrics := face.Metrics()
+	faceAscent = metrics.Ascent.Round()
+	faceHeight = metrics.Height.Round()
+	if advance, ok := face.GlyphAdvance('M'); ok {
+		faceAdvance = advance.Round()
+	} else {
+		faceAdvance = fontSizePx * 6 / 10
+	}
+}
+
+// loadFace builds the antialiased Go Mono face, falling back to the bundled bitmap font only
+// if the embedded TTF ever fails to parse (it should not, so the fallback is just insurance).
+func loadFace() font.Face {
+	parsed, err := opentype.Parse(gomono.TTF)
+	if err != nil {
+		return basicfont.Face7x13
+	}
+	built, err := opentype.NewFace(parsed, &opentype.FaceOptions{Size: fontSizePx, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		return basicfont.Face7x13
+	}
+	return built
+}
 
 // View is the transient, per-frame state the renderer needs beyond the model: the entrance
 // fade (0..1), the steady-state background opacity (0..1), and an optional launch error to
@@ -56,12 +93,12 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 	fill(img, img.Bounds(), pal.BG)
 
 	// Prompt line: an accent "> ", the query, then a block cursor.
-	promptBaseline := marginY + face.Ascent
+	promptBaseline := marginY + faceAscent
 	drawText(img, marginX, promptBaseline, pal.Accent, ">")
-	queryX := marginX + 2*face.Advance
+	queryX := marginX + 2*faceAdvance
 	drawText(img, queryX, promptBaseline, pal.FG, mdl.Query())
-	cursorX := queryX + runeLen(mdl.Query())*face.Advance
-	fill(img, image.Rect(cursorX, marginY, cursorX+face.Advance, marginY+face.Height), pal.Accent)
+	cursorX := queryX + runeLen(mdl.Query())*faceAdvance
+	fill(img, image.Rect(cursorX, marginY, cursorX+faceAdvance, marginY+faceHeight), pal.Accent)
 	// Separator under the prompt (a subtle, theme-matched divider).
 	fill(img, image.Rect(marginX, headerH-1, width-marginX, headerH), pal.SelBG)
 
@@ -80,7 +117,7 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 	}
 
 	if len(visible) == 0 {
-		drawText(img, marginX, listTop+face.Ascent, pal.Dim, "no matches")
+		drawText(img, marginX, listTop+faceAscent, pal.Dim, "no matches")
 	} else {
 		descCol := descColumn(visible)
 		start := scrollStart(mdl.Cursor(), len(visible), rows)
@@ -127,14 +164,14 @@ func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App,
 		dotTop := top + (rowH-dotSize)/2
 		fill(img, image.Rect(marginX, dotTop, marginX+dotSize, dotTop+dotSize), pal.Running)
 	}
-	baseline := top + (rowH-face.Height)/2 + face.Ascent
+	baseline := top + (rowH-faceHeight)/2 + faceAscent
 	drawText(img, nameX, baseline, nameColor, app.Name)
 	if app.Description != "" {
 		column := descCol
 		if n := runeLen(app.Name); n > column {
 			column = n // a name past the column pushes its own description along
 		}
-		descX := nameX + (column+descGap)*face.Advance
+		descX := nameX + (column+descGap)*faceAdvance
 		drawText(img, descX, baseline, pal.Dim, app.Description)
 	}
 }
@@ -145,8 +182,8 @@ func drawError(img *image.RGBA, pal theme.Palette, width, height int, message st
 	top := height - footerH - errorH
 	fill(img, image.Rect(0, top, width, top+errorH), pal.SelBG)
 	fill(img, image.Rect(0, top, barW, top+errorH), pal.Error)
-	baseline := top + (errorH-face.Height)/2 + face.Ascent
-	maxChars := (width - nameX - marginX) / face.Advance
+	baseline := top + (errorH-faceHeight)/2 + faceAscent
+	maxChars := (width - nameX - marginX) / faceAdvance
 	drawText(img, nameX, baseline, pal.Error, truncate(message, maxChars))
 }
 
@@ -154,10 +191,10 @@ func drawError(img *image.RGBA, pal theme.Palette, width, height int, message st
 func drawFooter(img *image.RGBA, pal theme.Palette, width, height, count int) {
 	top := height - footerH
 	fill(img, image.Rect(marginX, top, width-marginX, top+1), pal.SelBG)
-	baseline := top + (footerH-face.Height)/2 + face.Ascent
+	baseline := top + (footerH-faceHeight)/2 + faceAscent
 	drawText(img, marginX, baseline, pal.Dim, "up/down move   enter launch   esc quit")
 	countText := fmt.Sprintf("%d shown", count)
-	countX := width - marginX - runeLen(countText)*face.Advance
+	countX := width - marginX - runeLen(countText)*faceAdvance
 	drawText(img, countX, baseline, pal.Dim, countText)
 }
 

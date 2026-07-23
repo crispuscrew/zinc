@@ -33,12 +33,40 @@ func TestFrame_Size(t *testing.T) {
 // Something is drawn: at least one pixel differs from the background fill.
 func TestFrame_DrawsContent(t *testing.T) {
 	img := Frame(sample(), pal, fullView, 400, 300)
-	if !hasColor(img, pal.SelFG) {
-		t.Fatal("the selected row's foreground text should appear")
-	}
+	// The running dot is a solid fill, so it lands on an exact palette color.
 	if !hasColor(img, pal.Running) {
 		t.Fatal("firefox is running, so a running dot should be drawn")
 	}
+	// Antialiased text does not sit on exact palette colors, so assert glyphs were drawn by
+	// finding pixels in the first row that are none of the background or its solid fills.
+	if !hasGlyphPixels(img, headerH+4, headerH+4+rowH) {
+		t.Fatal("the first row's name text should draw glyph pixels")
+	}
+}
+
+// hasGlyphPixels reports whether the horizontal band [y0,y1) holds any opaque pixel that is
+// not the background, the selection band, or the accent bar - i.e. antialiased text.
+func hasGlyphPixels(img *image.RGBA, y0, y1 int) bool {
+	solids := []color.RGBA{pal.BG, pal.SelBG, pal.Accent}
+	for y := y0; y < y1; y++ {
+		for x := nameX; x < img.Bounds().Dx()-marginX; x++ {
+			got := img.RGBAAt(x, y)
+			if got.A == 0 {
+				continue
+			}
+			isSolid := false
+			for _, solid := range solids {
+				if got == solid {
+					isSolid = true
+					break
+				}
+			}
+			if !isSolid {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // The selected row (cursor 0 by default) sits on the highlight band.
