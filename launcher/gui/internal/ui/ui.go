@@ -17,9 +17,9 @@ import (
 	"github.com/crispuscrew/zinc/launcher/gui/internal/keymap"
 	"github.com/crispuscrew/zinc/launcher/gui/internal/picker"
 	"github.com/crispuscrew/zinc/launcher/gui/internal/render"
+	"github.com/crispuscrew/zinc/launcher/gui/internal/theme"
 
 	"github.com/rajveermalviya/go-wayland/wayland/client"
-	xdg "github.com/rajveermalviya/go-wayland/wayland/stable/xdg-shell"
 )
 
 // Runner is the slice of the zcr delegate the UI drives: launch the chosen app and read
@@ -31,8 +31,10 @@ type Runner interface {
 }
 
 const (
-	defaultWidth  = 680
-	defaultHeight = 420
+	// The overlay is a fixed-size, centered floating panel (like fuzzel/wofi), not a tiled
+	// window, so it keeps this size on any compositor.
+	overlayWidth  = 720
+	overlayHeight = 440
 	pageStep      = 10
 	edgeStep      = 1 << 20 // Home/End: jump far enough to clamp to the first/last row
 )
@@ -51,10 +53,11 @@ func trace(format string, args ...any) {
 // the launched app's name (empty if the user cancelled).
 func Run(apps []picker.App, runner Runner) (string, error) {
 	application := &app{
-		model:  picker.New(apps),
-		runner: runner,
-		width:  defaultWidth,
-		height: defaultHeight,
+		model:   picker.New(apps),
+		runner:  runner,
+		palette: theme.Detect(),
+		width:   overlayWidth,
+		height:  overlayHeight,
 	}
 	if running, err := runner.Running(); err == nil {
 		application.model.SetRunning(running)
@@ -74,23 +77,23 @@ type app struct {
 	model  *picker.Model
 	runner Runner
 
-	display    *client.Display
-	ctx        *client.Context
-	registry   *client.Registry
-	compositor *client.Compositor
-	shm        *client.Shm
-	seat       *client.Seat
-	keyboard   *client.Keyboard
-	wmBase     *xdg.WmBase
-	surface    *client.Surface
-	xdgSurface *xdg.Surface
-	toplevel   *xdg.Toplevel
+	palette theme.Palette
+
+	display      *client.Display
+	ctx          *client.Context
+	registry     *client.Registry
+	compositor   *client.Compositor
+	shm          *client.Shm
+	seat         *client.Seat
+	keyboard     *client.Keyboard
+	layerShell   *layerShell
+	surface      *client.Surface
+	layerSurface *layerSurface
 
 	current *shmBuffer   // the buffer currently attached to the surface
 	retired []*shmBuffer // resized-away buffers, kept alive until the compositor releases them
 
-	width, height               int
-	pendingWidth, pendingHeight int
+	width, height int
 
 	shift, ctrl bool
 
@@ -127,15 +130,16 @@ func (application *app) connect() error {
 	if err := application.roundtrip(); err != nil {
 		return application.fail(err)
 	}
-	if application.compositor == nil || application.shm == nil || application.wmBase == nil {
+	if application.compositor == nil || application.shm == nil || application.layerShell == nil {
 		return fmt.Errorf("the compositor is missing a required Wayland global "+
-			"(have wl_compositor=%t wl_shm=%t xdg_wm_base=%t); run again with ZLG_DEBUG=1 to list what it advertised",
-			application.compositor != nil, application.shm != nil, application.wmBase != nil)
+			"(have wl_compositor=%t wl_shm=%t zwlr_layer_shell_v1=%t); zlg needs wlr-layer-shell "+
+			"(niri, hyprland, sway all have it). Run again with ZLG_DEBUG=1 to list what it advertised",
+			application.compositor != nil, application.shm != nil, application.layerShell != nil)
 	}
 	if err := application.roundtrip(); err != nil {
 		return application.fail(err)
 	}
-	trace("globals bound; creating the window")
+	trace("globals bound; creating the overlay")
 
 	surface, err := application.compositor.CreateSurface()
 	if err != nil {
@@ -143,36 +147,29 @@ func (application *app) connect() error {
 	}
 	application.surface = surface
 
-	xdgSurface, err := application.wmBase.GetXdgSurface(surface)
-	if err != nil {
+	// A layer surface on the overlay layer, with no anchors (so the compositor centers it)
+	// and a fixed size, floats above tiled windows instead of being tiled. Exclusive keyboard
+	// interactivity routes typing to the picker.
+	layer := application.layerShell.getLayerSurface(surface, nil, layerOverlay, "launcher")
+	application.layerSurface = layer
+	layer.configureHandler = application.handleLayerConfigure
+	layer.closedHandler = func() { application.closed = true }
+	if err := layer.setSize(overlayWidth, overlayHeight); err != nil {
 		return application.fail(err)
 	}
-	application.xdgSurface = xdgSurface
-	xdgSurface.SetConfigureHandler(application.handleSurfaceConfigure)
-
-	toplevel, err := xdgSurface.GetToplevel()
-	if err != nil {
+	if err := layer.setAnchor(0); err != nil {
 		return application.fail(err)
 	}
-	application.toplevel = toplevel
-	// set_title / set_app_id via sendStringRequest, not toplevel.SetTitle/SetAppId, whose
-	// go-wayland encoders mis-declare the string length (see sendStringRequest). app_id is
-	// what tiling compositors (niri, hyprland) match window rules against, so keep it set.
-	if err := sendStringRequest(toplevel, toplevelSetTitleOpcode, "Zinc launcher"); err != nil {
+	if err := layer.setKeyboardInteractivity(keyboardInteractivityExclusive); err != nil {
 		return application.fail(err)
 	}
-	if err := sendStringRequest(toplevel, toplevelSetAppIdOpcode, "zinc.launcher"); err != nil {
-		return application.fail(err)
-	}
-	toplevel.SetConfigureHandler(application.handleToplevelConfigure)
-	toplevel.SetCloseHandler(func(xdg.ToplevelCloseEvent) { application.closed = true })
 
 	// The first surface commit (with no buffer) asks the compositor for the initial
 	// configure; the buffer is attached in the configure handler.
 	if err := surface.Commit(); err != nil {
 		return application.fail(err)
 	}
-	trace("window committed; draining the first configure")
+	trace("overlay committed; draining the first configure")
 	// Read one round of events, so a protocol error in the setup above surfaces with its
 	// message (via the error handler) rather than as a later broken pipe on the next write.
 	if err := application.roundtrip(); err != nil {
@@ -251,31 +248,6 @@ func bindGlobal(registry *client.Registry, name uint32, iface string, version ui
 	return registry.Context().WriteMsg(buf, nil)
 }
 
-// sendStringRequest sends a single-string request (like xdg_toplevel.set_title) with a
-// correctly length-prefixed string, working around the same go-wayland PutString bug that
-// bindGlobal does: the generated encoders declare the string's length as its PADDED length,
-// leaving NUL padding inside the declared bytes, which modern libwayland rejects as an
-// "embedded nul". This encodes the request by hand with the true length (len+1).
-func sendStringRequest(proxy client.Proxy, opcode uint32, value string) error {
-	padded := client.PaddedLen(len(value) + 1)
-	total := 8 + (4 + padded)
-	buf := make([]byte, total)
-	pos := 0
-	client.PutUint32(buf[pos:pos+4], proxy.ID())
-	pos += 4
-	client.PutUint32(buf[pos:pos+4], uint32(total)<<16|opcode&0x0000ffff)
-	pos += 4
-	client.PutString(buf[pos:pos+(4+padded)], value, len(value)+1) // true length, not padded
-	return proxy.Context().WriteMsg(buf, nil)
-}
-
-// xdg_toplevel request opcodes (from the xdg-shell protocol), used by sendStringRequest to
-// bypass go-wayland's buggy string encoders.
-const (
-	toplevelSetTitleOpcode = 2
-	toplevelSetAppIdOpcode = 3
-)
-
 // handleGlobal binds the globals zlg needs, at the version the compositor advertises (only
 // v1 requests are used, so any advertised version is safe).
 func (application *app) handleGlobal(event client.RegistryGlobalEvent) {
@@ -300,12 +272,11 @@ func (application *app) handleGlobal(event client.RegistryGlobalEvent) {
 			seat.SetCapabilitiesHandler(application.handleSeatCapabilities)
 			trace("bound wl_seat v%d", event.Version)
 		}
-	case "xdg_wm_base":
-		wmBase := xdg.NewWmBase(application.ctx)
-		if bindGlobal(application.registry, event.Name, event.Interface, event.Version, wmBase) == nil {
-			application.wmBase = wmBase
-			wmBase.SetPingHandler(func(ping xdg.WmBasePingEvent) { wmBase.Pong(ping.Serial) })
-			trace("bound xdg_wm_base v%d", event.Version)
+	case "zwlr_layer_shell_v1":
+		shell := newLayerShell(application.ctx)
+		if bindGlobal(application.registry, event.Name, event.Interface, event.Version, shell) == nil {
+			application.layerShell = shell
+			trace("bound zwlr_layer_shell_v1 v%d", event.Version)
 		}
 	}
 }
@@ -413,21 +384,15 @@ func (application *app) launchSelected() {
 	application.closed = true
 }
 
-// handleToplevelConfigure stashes the size the compositor suggests; it is applied on the
-// paired xdg_surface configure.
-func (application *app) handleToplevelConfigure(event xdg.ToplevelConfigureEvent) {
-	application.pendingWidth = int(event.Width)
-	application.pendingHeight = int(event.Height)
-}
-
-// handleSurfaceConfigure acknowledges the configure, applies any new size, and draws.
-func (application *app) handleSurfaceConfigure(event xdg.SurfaceConfigureEvent) {
-	application.xdgSurface.AckConfigure(event.Serial)
-	if application.pendingWidth > 0 {
-		application.width = application.pendingWidth
+// handleLayerConfigure acknowledges the layer-surface configure, adopts the size the
+// compositor grants (it echoes our requested size), and draws.
+func (application *app) handleLayerConfigure(serial, width, height uint32) {
+	application.layerSurface.ackConfigure(serial)
+	if width > 0 {
+		application.width = int(width)
 	}
-	if application.pendingHeight > 0 {
-		application.height = application.pendingHeight
+	if height > 0 {
+		application.height = int(height)
 	}
 	if err := application.ensureBuffer(); err != nil {
 		application.runErr = err
@@ -471,10 +436,10 @@ func (buf *shmBuffer) destroy() {
 func (application *app) ensureBuffer() error {
 	width, height := application.width, application.height
 	if width <= 0 {
-		width = defaultWidth
+		width = overlayWidth
 	}
 	if height <= 0 {
-		height = defaultHeight
+		height = overlayHeight
 	}
 	if application.current != nil && application.current.width == width && application.current.height == height {
 		return nil
@@ -563,7 +528,7 @@ func (application *app) redraw() {
 	if buf == nil || buf.mmap == nil {
 		return
 	}
-	frame := render.Frame(application.model, buf.width, buf.height)
+	frame := render.Frame(application.model, application.palette, buf.width, buf.height)
 	src := frame.Pix
 	dst := buf.mmap
 	count := len(dst)
@@ -594,6 +559,10 @@ func (application *app) cleanup() {
 		buf.destroy()
 	}
 	application.retired = nil
+	if application.layerSurface != nil {
+		application.layerSurface.destroy()
+		application.layerSurface = nil
+	}
 	if application.ctx != nil {
 		application.ctx.Close()
 	}

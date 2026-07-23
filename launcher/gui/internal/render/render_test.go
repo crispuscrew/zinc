@@ -7,7 +7,10 @@ import (
 	"testing"
 
 	"github.com/crispuscrew/zinc/launcher/gui/internal/picker"
+	"github.com/crispuscrew/zinc/launcher/gui/internal/theme"
 )
+
+var pal = theme.Dark()
 
 func sample() *picker.Model {
 	return picker.New([]picker.App{
@@ -18,7 +21,7 @@ func sample() *picker.Model {
 }
 
 func TestFrame_Size(t *testing.T) {
-	img := Frame(sample(), 400, 300)
+	img := Frame(sample(), pal, 400, 300)
 	if got := img.Bounds(); got.Dx() != 400 || got.Dy() != 300 {
 		t.Fatalf("frame is %dx%d, want 400x300", got.Dx(), got.Dy())
 	}
@@ -26,19 +29,19 @@ func TestFrame_Size(t *testing.T) {
 
 // Something is drawn: at least one pixel differs from the background fill.
 func TestFrame_DrawsContent(t *testing.T) {
-	img := Frame(sample(), 400, 300)
-	if !hasColor(img, colorSelFG) {
+	img := Frame(sample(), pal, 400, 300)
+	if !hasColor(img, pal.SelFG) {
 		t.Fatal("the selected row's foreground text should appear")
 	}
-	if !hasColor(img, colorRunning) {
+	if !hasColor(img, pal.Running) {
 		t.Fatal("firefox is running, so a running dot should be drawn")
 	}
 }
 
 // The selected row (cursor 0 by default) sits on the highlight band.
 func TestFrame_SelectionBand(t *testing.T) {
-	img := Frame(sample(), 400, 300)
-	if !hasColor(img, colorSelBG) {
+	img := Frame(sample(), pal, 400, 300)
+	if !hasColor(img, pal.SelBG) {
 		t.Fatal("the selected row should have the highlight background")
 	}
 }
@@ -46,7 +49,7 @@ func TestFrame_SelectionBand(t *testing.T) {
 func TestFrame_NoMatchesDoesNotPanic(t *testing.T) {
 	mdl := sample()
 	mdl.Type("zzzzz") // matches nothing
-	img := Frame(mdl, 400, 300)
+	img := Frame(mdl, pal, 400, 300)
 	if img.Bounds().Dx() != 400 {
 		t.Fatal("frame should still render at full size with no matches")
 	}
@@ -54,9 +57,9 @@ func TestFrame_NoMatchesDoesNotPanic(t *testing.T) {
 
 func TestFrame_EmptyAndTinyAreSafe(t *testing.T) {
 	// no apps
-	_ = Frame(picker.New(nil), 200, 120)
+	_ = Frame(picker.New(nil), pal, 200, 120)
 	// a size too small for even one row must clamp, not divide-by-zero or panic
-	_ = Frame(sample(), 50, 10)
+	_ = Frame(sample(), pal, 50, 10)
 }
 
 // scrollStart keeps the cursor visible and the window in-bounds for every cursor position
@@ -85,8 +88,8 @@ func TestFrame_ScrolledCursorStaysHighlighted(t *testing.T) {
 	for count := 0; count < 29; count++ {
 		mdl.MoveCursor(1) // drive the cursor to the last row
 	}
-	img := Frame(mdl, 400, 140) // rows ~= (140-26)/18 = 6, so 30 rows must scroll
-	if !hasColor(img, colorSelBG) {
+	img := Frame(mdl, pal, 400, 200) // a short window so the 30 rows must scroll
+	if !hasColor(img, pal.SelBG) {
 		t.Fatal("the scrolled-to selected row should still show the highlight band")
 	}
 }
