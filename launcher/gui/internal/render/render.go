@@ -1,8 +1,11 @@
 // Package render draws the picker into an in-memory RGBA image with a bundled bitmap font
-// (pure Go, no cgo). Frame is a pure function of the model, the palette, and the pixel size,
-// so the whole look is unit-testable without a display: zlg's Wayland layer only has to blit
-// the pixels Frame returns into a shared-memory buffer. Software rendering is ample for a
-// small, redraw-on-keystroke launcher window.
+// (pure Go, no cgo). Frame is a pure function of the model, the palette, the per-frame view
+// state, and the pixel size, so the whole look is unit-testable without a display: zlg's
+// Wayland layer only has to blit the pixels Frame returns into a shared-memory buffer.
+// Software rendering is ample for a small, redraw-on-keystroke launcher window.
+//
+// Frame returns PREMULTIPLIED-alpha pixels (what Wayland surfaces expect), so translucency,
+// the rounded corners, and the fade-in composite correctly over the desktop.
 package render
 
 import (
@@ -10,6 +13,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"math"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -20,21 +24,34 @@ import (
 )
 
 const (
-	marginX = 16 // left/right inset
-	marginY = 14 // top inset for the prompt
-	headerH = 44 // prompt line plus the separator beneath it
-	rowH    = 22
-	footerH = 30
-	barW    = 3 // accent bar down the left of the selected row
-	dotSize = 6 // running-app indicator
-	nameX   = marginX + dotSize + 8
+	marginX      = 18 // left/right inset
+	marginY      = 16 // top inset for the prompt
+	headerH      = 46 // prompt line plus the separator beneath it
+	rowH         = 22
+	footerH      = 30
+	errorH       = 24 // launch-error banner, shown above the footer when present
+	barW         = 3  // accent bar down the left of the selected/error row
+	dotSize      = 6  // running-app indicator
+	nameX        = marginX + dotSize + 8
+	cornerRadius = 12
+	descGap      = 2  // spaces between the name column and the description
+	descColMax   = 18 // cap on the name-column width used to line descriptions up
 )
 
 var face = basicfont.Face7x13
 
-// Frame renders the picker at width x height pixels into a fresh, fully opaque RGBA image
-// using pal. It never panics on an empty model or a tiny size (it clamps to at least one row).
-func Frame(mdl *picker.Model, pal theme.Palette, width, height int) *image.RGBA {
+// View is the transient, per-frame state the renderer needs beyond the model: the entrance
+// fade (0..1), the steady-state background opacity (0..1), and an optional launch error to
+// surface in a banner.
+type View struct {
+	Fade    float64
+	Opacity float64
+	Error   string
+}
+
+// Frame renders the picker at width x height pixels into a fresh RGBA image using pal and
+// view. It never panics on an empty model or a tiny size (it clamps to at least one row).
+func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	fill(img, img.Bounds(), pal.BG)
 
@@ -51,6 +68,9 @@ func Frame(mdl *picker.Model, pal theme.Palette, width, height int) *image.RGBA 
 	visible := mdl.Visible()
 	listTop := headerH + 4
 	listBottom := height - footerH
+	if view.Error != "" {
+		listBottom -= errorH
+	}
 	if listBottom < listTop+rowH {
 		listBottom = listTop + rowH
 	}
@@ -62,20 +82,41 @@ func Frame(mdl *picker.Model, pal theme.Palette, width, height int) *image.RGBA 
 	if len(visible) == 0 {
 		drawText(img, marginX, listTop+face.Ascent, pal.Dim, "no matches")
 	} else {
+		descCol := descColumn(visible)
 		start := scrollStart(mdl.Cursor(), len(visible), rows)
 		for offset := 0; offset < rows && start+offset < len(visible); offset++ {
 			index := start + offset
-			drawRow(img, pal, width, listTop+offset*rowH, visible[index], index == mdl.Cursor())
+			drawRow(img, pal, width, listTop+offset*rowH, visible[index], descCol, index == mdl.Cursor())
 		}
 	}
 
+	if view.Error != "" {
+		drawError(img, pal, width, height, view.Error)
+	}
 	drawFooter(img, pal, width, height, len(visible))
+
+	finish(img, view.Opacity, view.Fade)
 	return img
 }
 
+// descColumn returns the column (in characters) at which descriptions line up: the longest
+// visible name, capped, so short names share a tidy column and long names just push past it.
+func descColumn(visible []picker.App) int {
+	longest := 0
+	for _, app := range visible {
+		if n := runeLen(app.Name); n > longest {
+			longest = n
+		}
+	}
+	if longest > descColMax {
+		longest = descColMax
+	}
+	return longest
+}
+
 // drawRow renders one app row at pixel row-top y: a highlight band and accent bar when
-// selected, an optional running dot, the name, and a dim description.
-func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App, selected bool) {
+// selected, an optional running dot, the name, and a dim description aligned to descCol.
+func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App, descCol int, selected bool) {
 	nameColor := pal.FG
 	if selected {
 		fill(img, image.Rect(0, top, width, top+rowH), pal.SelBG)
@@ -89,9 +130,24 @@ func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App,
 	baseline := top + (rowH-face.Height)/2 + face.Ascent
 	drawText(img, nameX, baseline, nameColor, app.Name)
 	if app.Description != "" {
-		descX := nameX + (runeLen(app.Name)+2)*face.Advance
+		column := descCol
+		if n := runeLen(app.Name); n > column {
+			column = n // a name past the column pushes its own description along
+		}
+		descX := nameX + (column+descGap)*face.Advance
 		drawText(img, descX, baseline, pal.Dim, app.Description)
 	}
+}
+
+// drawError draws a banner just above the footer: an error-colored bar and message, so a
+// failed launch is reported in the window instead of on the terminal.
+func drawError(img *image.RGBA, pal theme.Palette, width, height int, message string) {
+	top := height - footerH - errorH
+	fill(img, image.Rect(0, top, width, top+errorH), pal.SelBG)
+	fill(img, image.Rect(0, top, barW, top+errorH), pal.Error)
+	baseline := top + (errorH-face.Height)/2 + face.Ascent
+	maxChars := (width - nameX - marginX) / face.Advance
+	drawText(img, nameX, baseline, pal.Error, truncate(message, maxChars))
 }
 
 // drawFooter draws a divider and a hint line, with the match count right-aligned.
@@ -103,6 +159,65 @@ func drawFooter(img *image.RGBA, pal theme.Palette, width, height, count int) {
 	countText := fmt.Sprintf("%d shown", count)
 	countX := width - marginX - runeLen(countText)*face.Advance
 	drawText(img, countX, baseline, pal.Dim, countText)
+}
+
+// finish turns the opaque drawing into the final surface: it rounds the corners and applies
+// the steady-state opacity and the entrance fade, writing premultiplied alpha so the result
+// composites correctly over whatever is behind the overlay.
+func finish(img *image.RGBA, opacity, fade float64) {
+	global := clamp01(opacity) * clamp01(fade)
+	width, height := img.Bounds().Dx(), img.Bounds().Dy()
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			alpha := global * cornerCoverage(x, y, width, height, cornerRadius)
+			offset := img.PixOffset(x, y)
+			img.Pix[offset+0] = scale(img.Pix[offset+0], alpha)
+			img.Pix[offset+1] = scale(img.Pix[offset+1], alpha)
+			img.Pix[offset+2] = scale(img.Pix[offset+2], alpha)
+			img.Pix[offset+3] = scale(0xff, alpha)
+		}
+	}
+}
+
+// cornerCoverage returns how much of the pixel lies inside the rounded rectangle: 1 in the
+// body, 0 outside a corner, and a fractional value on a corner's antialiased edge.
+func cornerCoverage(x, y, width, height, radius int) float64 {
+	if radius <= 0 {
+		return 1
+	}
+	var centerX, centerY float64
+	switch {
+	case x < radius && y < radius:
+		centerX, centerY = float64(radius), float64(radius)
+	case x >= width-radius && y < radius:
+		centerX, centerY = float64(width-radius), float64(radius)
+	case x < radius && y >= height-radius:
+		centerX, centerY = float64(radius), float64(height-radius)
+	case x >= width-radius && y >= height-radius:
+		centerX, centerY = float64(width-radius), float64(height-radius)
+	default:
+		return 1
+	}
+	deltaX := float64(x) + 0.5 - centerX
+	deltaY := float64(y) + 0.5 - centerY
+	coverage := float64(radius) - math.Sqrt(deltaX*deltaX+deltaY*deltaY) + 0.5
+	return clamp01(coverage)
+}
+
+// scale multiplies an 8-bit channel by an alpha fraction (used to premultiply).
+func scale(channel uint8, alpha float64) uint8 {
+	return uint8(float64(channel)*alpha + 0.5)
+}
+
+func clamp01(value float64) float64 {
+	switch {
+	case value < 0:
+		return 0
+	case value > 1:
+		return 1
+	default:
+		return value
+	}
 }
 
 // scrollStart returns the first visible row so the cursor stays on screen (it scrolls only
@@ -122,6 +237,20 @@ func scrollStart(cursor, total, rows int) int {
 		start = 0
 	}
 	return start
+}
+
+func truncate(text string, maxChars int) string {
+	runes := []rune(text)
+	if maxChars < 0 {
+		maxChars = 0
+	}
+	if len(runes) <= maxChars {
+		return text
+	}
+	if maxChars <= 3 {
+		return string(runes[:maxChars])
+	}
+	return string(runes[:maxChars-3]) + "..."
 }
 
 func drawText(img *image.RGBA, x, baseline int, col color.Color, text string) {

@@ -22,6 +22,7 @@ type Palette struct {
 	SelBG   color.RGBA // selected-row background band
 	SelFG   color.RGBA // selected-row text
 	Running color.RGBA // running-app indicator dot
+	Error   color.RGBA // a launch-error banner
 }
 
 // Dark is the built-in dark palette (Catppuccin Mocha).
@@ -34,6 +35,7 @@ func Dark() Palette {
 		SelBG:   rgb(0x31, 0x32, 0x44),
 		SelFG:   rgb(0xf5, 0xe0, 0xdc),
 		Running: rgb(0xa6, 0xe3, 0xa1),
+		Error:   rgb(0xf3, 0x8b, 0xa8),
 	}
 }
 
@@ -47,6 +49,7 @@ func Light() Palette {
 		SelBG:   rgb(0xdc, 0xe0, 0xe8),
 		SelFG:   rgb(0x4c, 0x4f, 0x69),
 		Running: rgb(0x40, 0xa0, 0x2b),
+		Error:   rgb(0xd2, 0x0f, 0x39),
 	}
 }
 
