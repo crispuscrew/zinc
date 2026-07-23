@@ -12,6 +12,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"syscall"
 
 	"github.com/crispuscrew/zinc/launcher/gui/internal/keymap"
@@ -49,6 +50,29 @@ func trace(format string, args ...any) {
 	}
 }
 
+// fadeDurationMs is how long the entrance fade-in takes.
+const fadeDurationMs = 160
+
+// resolveOpacity reads ZLG_OPACITY (a percentage, 0..100) for the overlay's steady-state
+// background opacity. Unset or invalid means fully opaque.
+func resolveOpacity() float64 {
+	raw := os.Getenv("ZLG_OPACITY")
+	if raw == "" {
+		return 1
+	}
+	percent, err := strconv.Atoi(raw)
+	if err != nil || percent < 0 {
+		return 1
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return float64(percent) / 100
+}
+
+// animationsEnabled reports whether the entrance fade should run (off if ZLG_NO_ANIM is set).
+func animationsEnabled() bool { return os.Getenv("ZLG_NO_ANIM") == "" }
+
 // Run opens the picker window over apps, launching the selection through runner. It returns
 // the launched app's name (empty if the user cancelled).
 func Run(apps []picker.App, runner Runner) (string, error) {
@@ -58,6 +82,13 @@ func Run(apps []picker.App, runner Runner) (string, error) {
 		palette: theme.Detect(),
 		width:   overlayWidth,
 		height:  overlayHeight,
+		opacity: resolveOpacity(),
+		fade:    1,
+	}
+	// Fade the overlay in unless animation is disabled, in which case it starts fully shown.
+	if animationsEnabled() {
+		application.fade = 0
+		application.animating = true
 	}
 	if running, err := runner.Running(); err == nil {
 		application.model.SetRunning(running)
@@ -95,11 +126,19 @@ type app struct {
 
 	width, height int
 
+	opacity      float64 // steady-state background opacity (ZLG_OPACITY), 1 = opaque
+	fade         float64 // entrance-animation progress, 0..1
+	animating    bool
+	animStarted  bool
+	animStartMs  uint32
+	framePending bool
+
 	shift, ctrl bool
 
-	launched string
-	runErr   error
-	closed   bool
+	launched  string
+	launchErr string // a launch failure shown in the window, dismissed on the next keypress
+	runErr    error
+	closed    bool
 }
 
 // connect opens the display, binds the globals, and creates the window.
@@ -315,6 +354,7 @@ func (application *app) handleKey(event client.KeyboardKeyEvent) {
 	if event.State != uint32(client.KeyboardKeyStatePressed) {
 		return
 	}
+	application.launchErr = "" // any keypress dismisses a shown launch error
 	key := keymap.Decode(event.Key, application.shift)
 
 	if application.ctrl {
@@ -377,10 +417,13 @@ func (application *app) launchSelected() {
 		return
 	}
 	if err := application.runner.Launch(selected.Name); err != nil {
-		application.runErr = fmt.Errorf("launch %s: %w", selected.Name, err)
-	} else {
-		application.launched = selected.Name
+		// Report the failure in the window and stay open, so a missing zcr (or a bad app)
+		// does not tear the picker down; the next keypress dismisses it.
+		application.launchErr = fmt.Sprintf("cannot launch %s - %v", selected.Name, err)
+		application.redraw()
+		return
 	}
+	application.launched = selected.Name
 	application.closed = true
 }
 
@@ -528,7 +571,8 @@ func (application *app) redraw() {
 	if buf == nil || buf.mmap == nil {
 		return
 	}
-	frame := render.Frame(application.model, application.palette, buf.width, buf.height)
+	view := render.View{Fade: application.fade, Opacity: application.opacity, Error: application.launchErr}
+	frame := render.Frame(application.model, application.palette, view, buf.width, buf.height)
 	src := frame.Pix
 	dst := buf.mmap
 	count := len(dst)
@@ -546,7 +590,54 @@ func (application *app) redraw() {
 	// depend on binding wl_compositor at v4+. We redraw the whole surface, so full-surface
 	// damage is exactly right.
 	application.surface.Damage(0, 0, int32(buf.width), int32(buf.height))
+	// While the entrance fade runs, ask for a frame callback so the next step is drawn.
+	if application.animating {
+		application.requestFrame()
+	}
 	application.surface.Commit()
+}
+
+// requestFrame asks the compositor for a frame callback (paced to the display), so the
+// entrance animation advances one step per refresh. It no-ops if one is already pending.
+func (application *app) requestFrame() {
+	if application.framePending || application.surface == nil {
+		return
+	}
+	callback, err := application.surface.Frame()
+	if err != nil {
+		return
+	}
+	callback.SetDoneHandler(application.onFrame)
+	application.framePending = true
+}
+
+// onFrame advances the fade using the callback's timestamp and redraws, until the fade is
+// complete (redraw stops requesting frames once animating is false).
+func (application *app) onFrame(event client.CallbackDoneEvent) {
+	application.framePending = false
+	if !application.animating {
+		return
+	}
+	application.advanceFade(event.CallbackData)
+	application.redraw()
+}
+
+// advanceFade sets the current fade from the elapsed time (ease-out cubic) and ends the
+// animation once the duration is reached.
+func (application *app) advanceFade(nowMs uint32) {
+	if !application.animStarted {
+		application.animStarted = true
+		application.animStartMs = nowMs
+	}
+	elapsed := nowMs - application.animStartMs
+	if elapsed >= fadeDurationMs {
+		application.fade = 1
+		application.animating = false
+		trace("entrance fade done")
+		return
+	}
+	remaining := 1 - float64(elapsed)/fadeDurationMs
+	application.fade = 1 - remaining*remaining*remaining
 }
 
 // cleanup frees every buffer (current and any awaiting release) and closes the connection.
