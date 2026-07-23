@@ -37,6 +37,16 @@ const (
 	edgeStep      = 1 << 20 // Home/End: jump far enough to clamp to the first/last row
 )
 
+// debugOn traces the Wayland handshake to stderr when ZLG_DEBUG is set, for diagnosing a
+// compositor that rejects the connection.
+var debugOn = os.Getenv("ZLG_DEBUG") != ""
+
+func trace(format string, args ...any) {
+	if debugOn {
+		fmt.Fprintf(os.Stderr, "zlg: "+format+"\n", args...)
+	}
+}
+
 // Run opens the picker window over apps, launching the selection through runner. It returns
 // the launched app's name (empty if the user cancelled).
 func Run(apps []picker.App, runner Runner) (string, error) {
@@ -113,44 +123,81 @@ func (application *app) connect() error {
 	}
 	application.registry = registry
 	registry.SetGlobalHandler(application.handleGlobal)
+	trace("connected; getting globals")
 
 	// First roundtrip binds the advertised globals; the second lets the seat report its
 	// capabilities (so the keyboard is set up before the window appears).
 	if err := application.roundtrip(); err != nil {
-		return err
+		return application.fail(err)
 	}
 	if application.compositor == nil || application.shm == nil || application.wmBase == nil {
-		return fmt.Errorf("the compositor is missing a required Wayland global (wl_compositor / wl_shm / xdg_wm_base)")
+		return fmt.Errorf("the compositor is missing a required Wayland global "+
+			"(have wl_compositor=%t wl_shm=%t xdg_wm_base=%t); run again with ZLG_DEBUG=1 to list what it advertised",
+			application.compositor != nil, application.shm != nil, application.wmBase != nil)
 	}
 	if err := application.roundtrip(); err != nil {
-		return err
+		return application.fail(err)
 	}
+	trace("globals bound; creating the window")
 
 	surface, err := application.compositor.CreateSurface()
 	if err != nil {
-		return err
+		return application.fail(err)
 	}
 	application.surface = surface
 
 	xdgSurface, err := application.wmBase.GetXdgSurface(surface)
 	if err != nil {
-		return err
+		return application.fail(err)
 	}
 	application.xdgSurface = xdgSurface
 	xdgSurface.SetConfigureHandler(application.handleSurfaceConfigure)
 
 	toplevel, err := xdgSurface.GetToplevel()
 	if err != nil {
-		return err
+		return application.fail(err)
 	}
 	application.toplevel = toplevel
-	toplevel.SetTitle("Zinc launcher")
+	// set_title / set_app_id via sendStringRequest, not toplevel.SetTitle/SetAppId, whose
+	// go-wayland encoders mis-declare the string length (see sendStringRequest). app_id is
+	// what tiling compositors (niri, hyprland) match window rules against, so keep it set.
+	if err := sendStringRequest(toplevel, toplevelSetTitleOpcode, "Zinc launcher"); err != nil {
+		return application.fail(err)
+	}
+	if err := sendStringRequest(toplevel, toplevelSetAppIdOpcode, "zinc.launcher"); err != nil {
+		return application.fail(err)
+	}
 	toplevel.SetConfigureHandler(application.handleToplevelConfigure)
 	toplevel.SetCloseHandler(func(xdg.ToplevelCloseEvent) { application.closed = true })
 
 	// The first surface commit (with no buffer) asks the compositor for the initial
 	// configure; the buffer is attached in the configure handler.
-	return surface.Commit()
+	if err := surface.Commit(); err != nil {
+		return application.fail(err)
+	}
+	trace("window committed; draining the first configure")
+	// Read one round of events, so a protocol error in the setup above surfaces with its
+	// message (via the error handler) rather than as a later broken pipe on the next write.
+	if err := application.roundtrip(); err != nil {
+		return application.fail(err)
+	}
+	if application.runErr != nil {
+		return application.runErr
+	}
+	return nil
+}
+
+// fail surfaces a compositor protocol error if one is pending. A broken pipe on a write
+// usually means the compositor already sent wl_display.error and closed, so read one more
+// message to capture that message and prefer it over the raw socket error.
+func (application *app) fail(cause error) error {
+	if application.runErr == nil {
+		_ = application.ctx.Dispatch() // may read a buffered wl_display.error
+	}
+	if application.runErr != nil {
+		return application.runErr
+	}
+	return cause
 }
 
 // roundtrip dispatches events until a sync callback fires, i.e. until the compositor has
@@ -181,30 +228,87 @@ func (application *app) loop() error {
 	return application.runErr
 }
 
-// handleGlobal binds the globals zlg needs, at a version it understands.
+// bindGlobal binds a registry global with a correctly length-prefixed interface string.
+// go-wayland v0.0.0-20230130's Registry.Bind writes the interface string's length field as
+// the PADDED length, which leaves NUL padding inside the declared string; modern libwayland
+// rejects that ("string has embedded nul") and closes the connection. This encodes the same
+// wl_registry.bind request but with the true string length (len+1), padding the buffer
+// separately, using go-wayland's exported wire primitives.
+func bindGlobal(registry *client.Registry, name uint32, iface string, version uint32, proxy client.Proxy) error {
+	const opcode = 0
+	padded := client.PaddedLen(len(iface) + 1)
+	total := 8 + 4 + (4 + padded) + 4 + 4
+	buf := make([]byte, total)
+	pos := 0
+	client.PutUint32(buf[pos:pos+4], registry.ID())
+	pos += 4
+	client.PutUint32(buf[pos:pos+4], uint32(total<<16|opcode&0x0000ffff))
+	pos += 4
+	client.PutUint32(buf[pos:pos+4], name)
+	pos += 4
+	client.PutString(buf[pos:pos+(4+padded)], iface, len(iface)+1) // true length, not padded
+	pos += 4 + padded
+	client.PutUint32(buf[pos:pos+4], version)
+	pos += 4
+	client.PutUint32(buf[pos:pos+4], proxy.ID())
+	return registry.Context().WriteMsg(buf, nil)
+}
+
+// sendStringRequest sends a single-string request (like xdg_toplevel.set_title) with a
+// correctly length-prefixed string, working around the same go-wayland PutString bug that
+// bindGlobal does: the generated encoders declare the string's length as its PADDED length,
+// leaving NUL padding inside the declared bytes, which modern libwayland rejects as an
+// "embedded nul". This encodes the request by hand with the true length (len+1).
+func sendStringRequest(proxy client.Proxy, opcode uint32, value string) error {
+	padded := client.PaddedLen(len(value) + 1)
+	total := 8 + (4 + padded)
+	buf := make([]byte, total)
+	pos := 0
+	client.PutUint32(buf[pos:pos+4], proxy.ID())
+	pos += 4
+	client.PutUint32(buf[pos:pos+4], uint32(total)<<16|opcode&0x0000ffff)
+	pos += 4
+	client.PutString(buf[pos:pos+(4+padded)], value, len(value)+1) // true length, not padded
+	return proxy.Context().WriteMsg(buf, nil)
+}
+
+// xdg_toplevel request opcodes (from the xdg-shell protocol), used by sendStringRequest to
+// bypass go-wayland's buggy string encoders.
+const (
+	toplevelSetTitleOpcode = 2
+	toplevelSetAppIdOpcode = 3
+)
+
+// handleGlobal binds the globals zlg needs, at the version the compositor advertises (only
+// v1 requests are used, so any advertised version is safe).
 func (application *app) handleGlobal(event client.RegistryGlobalEvent) {
+	trace("global advertised: %s v%d (name %d)", event.Interface, event.Version, event.Name)
 	switch event.Interface {
 	case "wl_compositor":
 		compositor := client.NewCompositor(application.ctx)
-		if application.registry.Bind(event.Name, event.Interface, pickVersion(event.Version, 4), compositor) == nil {
+		if bindGlobal(application.registry, event.Name, event.Interface, event.Version, compositor) == nil {
 			application.compositor = compositor
+			trace("bound wl_compositor v%d", event.Version)
 		}
 	case "wl_shm":
 		shm := client.NewShm(application.ctx)
-		if application.registry.Bind(event.Name, event.Interface, pickVersion(event.Version, 1), shm) == nil {
+		if bindGlobal(application.registry, event.Name, event.Interface, event.Version, shm) == nil {
 			application.shm = shm
+			trace("bound wl_shm v%d", event.Version)
 		}
 	case "wl_seat":
 		seat := client.NewSeat(application.ctx)
-		if application.registry.Bind(event.Name, event.Interface, pickVersion(event.Version, 5), seat) == nil {
+		if bindGlobal(application.registry, event.Name, event.Interface, event.Version, seat) == nil {
 			application.seat = seat
 			seat.SetCapabilitiesHandler(application.handleSeatCapabilities)
+			trace("bound wl_seat v%d", event.Version)
 		}
 	case "xdg_wm_base":
 		wmBase := xdg.NewWmBase(application.ctx)
-		if application.registry.Bind(event.Name, event.Interface, pickVersion(event.Version, 2), wmBase) == nil {
+		if bindGlobal(application.registry, event.Name, event.Interface, event.Version, wmBase) == nil {
 			application.wmBase = wmBase
 			wmBase.SetPingHandler(func(ping xdg.WmBasePingEvent) { wmBase.Pong(ping.Serial) })
+			trace("bound xdg_wm_base v%d", event.Version)
 		}
 	}
 }
@@ -446,12 +550,4 @@ func (application *app) cleanup() {
 	if application.ctx != nil {
 		application.ctx.Close()
 	}
-}
-
-// pickVersion returns the lower of the advertised and the maximum version zlg supports.
-func pickVersion(advertised, supported uint32) uint32 {
-	if advertised < supported {
-		return advertised
-	}
-	return supported
 }
