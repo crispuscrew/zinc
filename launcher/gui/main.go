@@ -109,10 +109,25 @@ func loadItems() ([]menu.Item, error) {
 		item := menu.Item{Label: name, Marked: running[name]}
 		if cfg, err := sto.Load(name); err == nil {
 			item.Description = cfg.Description
+			item.Group = cfg.Group
 		}
 		items = append(items, item)
 	}
-	sort.Slice(items, func(left, right int) bool { return items[left].Label < items[right].Label })
+	// Order by group then name (ungrouped last), so the menu draws one header per group and
+	// the ungrouped apps fall under a trailing "Other" section.
+	sort.Slice(items, func(left, right int) bool {
+		leftGroup, rightGroup := items[left].Group, items[right].Group
+		if leftGroup != rightGroup {
+			if leftGroup == "" {
+				return false
+			}
+			if rightGroup == "" {
+				return true
+			}
+			return leftGroup < rightGroup
+		}
+		return items[left].Label < items[right].Label
+	})
 	return items, nil
 }
 
