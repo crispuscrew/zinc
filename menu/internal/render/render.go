@@ -125,11 +125,19 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 	if len(visible) == 0 {
 		drawText(img, marginX, listTop+faceAscent, pal.Dim, "no matches")
 	} else {
+		// Group into sections only when idle; typing flattens to the ranked list.
+		grouping := mdl.Query() == "" && anyGroup(visible)
+		display := buildRows(visible, grouping)
 		descCol := descColumn(visible)
-		start := scrollStart(mdl.Cursor(), len(visible), rows)
-		for offset := 0; offset < rows && start+offset < len(visible); offset++ {
-			index := start + offset
-			drawRow(img, pal, width, listTop+offset*rowH, visible[index], descCol, index == mdl.Cursor())
+		start := scrollStart(rowForItem(display, mdl.Cursor()), len(display), rows)
+		for offset := 0; offset < rows && start+offset < len(display); offset++ {
+			row := display[start+offset]
+			y := listTop + offset*rowH
+			if row.isHeader {
+				drawHeader(img, pal, y, row.header)
+			} else {
+				drawRow(img, pal, width, y, visible[row.item], descCol, row.item == mdl.Cursor())
+			}
 		}
 	}
 
@@ -180,6 +188,68 @@ func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App,
 		descX := nameX + (column+descGap)*faceAdvance
 		drawText(img, descX, baseline, pal.Dim, app.Description)
 	}
+}
+
+// displayRow is one row in the rendered list: either a section header or an item (an index
+// into the visible slice).
+type displayRow struct {
+	header   string
+	item     int
+	isHeader bool
+}
+
+// buildRows expands the visible items into rendered rows, inserting a section header before
+// each new group when grouping is on. Items sharing a group should be adjacent in visible (the
+// caller orders them) so a group's header renders once.
+func buildRows(visible []picker.App, grouping bool) []displayRow {
+	if !grouping {
+		rows := make([]displayRow, len(visible))
+		for index := range visible {
+			rows[index] = displayRow{item: index}
+		}
+		return rows
+	}
+	var rows []displayRow
+	current := "\x00" // a sentinel no real group equals, so the first item always opens a header
+	for index, app := range visible {
+		if app.Group != current {
+			current = app.Group
+			name := app.Group
+			if name == "" {
+				name = "Other"
+			}
+			rows = append(rows, displayRow{header: name, isHeader: true})
+		}
+		rows = append(rows, displayRow{item: index})
+	}
+	return rows
+}
+
+// rowForItem returns the display-row index of a visible item, so scrolling can keep the
+// selected item on screen.
+func rowForItem(rows []displayRow, item int) int {
+	for index, row := range rows {
+		if !row.isHeader && row.item == item {
+			return index
+		}
+	}
+	return 0
+}
+
+// anyGroup reports whether any visible item carries a group.
+func anyGroup(visible []picker.App) bool {
+	for _, app := range visible {
+		if app.Group != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// drawHeader draws a section-header row: the group name in the accent color.
+func drawHeader(img *image.RGBA, pal theme.Palette, top int, name string) {
+	baseline := top + (rowH-faceHeight)/2 + faceAscent
+	drawText(img, marginX, baseline, pal.Accent, name)
 }
 
 // drawError draws a banner just above the footer: an error-colored bar and message, so a

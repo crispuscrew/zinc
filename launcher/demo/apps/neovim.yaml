@@ -4,6 +4,7 @@ Type: ZincContainer
 AppNameID: neovim
 Icon: nvim
 Description: Modal terminal text editor
+Group: Dev
 ImageMeta:
   Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
   Install:

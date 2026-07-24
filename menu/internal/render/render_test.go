@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"reflect"
 	"testing"
 
 	"github.com/crispuscrew/zinc/menu/internal/picker"
@@ -151,6 +152,62 @@ func TestFrame_ScrolledCursorStaysHighlighted(t *testing.T) {
 	if !hasColor(img, pal.SelBG) {
 		t.Fatal("the scrolled-to selected row should still show the highlight band")
 	}
+}
+
+// buildRows inserts a header before each new group (empty group becomes "Other"), keeps every
+// item, and rowForItem maps each item to its own non-header row.
+func TestBuildRows_GroupsInsertHeaders(t *testing.T) {
+	visible := []picker.App{
+		{Name: "firefox", Group: "Web"},
+		{Name: "chromium", Group: "Web"},
+		{Name: "htop", Group: "Dev"},
+		{Name: "misc", Group: ""},
+	}
+	rows := buildRows(visible, true)
+	var headers []string
+	items := 0
+	for _, row := range rows {
+		if row.isHeader {
+			headers = append(headers, row.header)
+		} else {
+			items++
+		}
+	}
+	if items != len(visible) {
+		t.Fatalf("item rows = %d, want %d", items, len(visible))
+	}
+	if want := []string{"Web", "Dev", "Other"}; !reflect.DeepEqual(headers, want) {
+		t.Fatalf("headers = %v, want %v", headers, want)
+	}
+	for index := range visible {
+		at := rowForItem(rows, index)
+		if rows[at].isHeader || rows[at].item != index {
+			t.Fatalf("rowForItem(%d) landed on header=%v item=%d", index, rows[at].isHeader, rows[at].item)
+		}
+	}
+}
+
+// Without grouping the rows are the plain items, one per index, no headers.
+func TestBuildRows_FlatWhenNotGrouping(t *testing.T) {
+	visible := []picker.App{{Name: "a", Group: "X"}, {Name: "b", Group: "Y"}}
+	rows := buildRows(visible, false)
+	if len(rows) != len(visible) {
+		t.Fatalf("flat rows = %d, want %d", len(rows), len(visible))
+	}
+	for index, row := range rows {
+		if row.isHeader || row.item != index {
+			t.Fatalf("row %d should be a plain item", index)
+		}
+	}
+}
+
+// An idle model with groups renders the header path without panicking.
+func TestFrame_GroupedHeadersDoNotPanic(t *testing.T) {
+	mdl := picker.New([]picker.App{
+		{Name: "firefox", Group: "Web"},
+		{Name: "htop", Group: "Dev"},
+	})
+	_ = Frame(mdl, pal, fullView, 400, 300)
 }
 
 func hasColor(img *image.RGBA, want color.Color) bool {

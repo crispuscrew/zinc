@@ -31,6 +31,9 @@ Adds the GUI launcher.
   system light/dark theme from the XDG portal, and it depends on **no** Zinc sibling
   module (Go `replace` directives are not transitive), so `zde` and a future wofi-like
   picker can import it too. The fuzzy matcher is copied in as `menu/internal/match`.
+- **App grouping** - a new optional `Group` field on the app config (schema v2, additive)
+  files apps into sections. The launcher shows a section header per group when idle and
+  flattens to a plain ranked list as soon as you type. The demo apps ship with groups.
 
 ### Known limitations
 

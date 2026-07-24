@@ -13,10 +13,11 @@ import (
 	"github.com/crispuscrew/zinc/menu/internal/match"
 )
 
-// App is one launchable entry as the picker shows it.
+// App is one entry as the picker shows it.
 type App struct {
 	Name        string
 	Description string
+	Group       string
 	Running     bool
 }
 

@@ -27,6 +27,7 @@ import (
 type Item struct {
 	Label       string // the primary text, and what the fuzzy filter matches against
 	Description string // secondary text, shown dimmed after the label
+	Group       string // optional section header; keep items of one group adjacent (shown only when idle)
 	Marked      bool   // draws an indicator dot; the caller decides what it means (e.g. running)
 }
 
@@ -108,7 +109,7 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 func toApps(items []Item) []picker.App {
 	apps := make([]picker.App, len(items))
 	for index, item := range items {
-		apps[index] = picker.App{Name: item.Label, Description: item.Description, Running: item.Marked}
+		apps[index] = picker.App{Name: item.Label, Description: item.Description, Group: item.Group, Running: item.Marked}
 	}
 	return apps
 }
