@@ -137,11 +137,12 @@ func loadItems() ([]menu.Item, error) {
 // lets tiling compositors match window rules against zlg.
 func menuOptions() menu.Options {
 	opts := menu.Options{
-		Prompt: "> ",
-		Footer: "up/down move   enter launch   esc quit",
-		AppID:  "zinc.launcher",
-		NoAnim: os.Getenv("ZLG_NO_ANIM") != "",
-		Debug:  os.Getenv("ZLG_DEBUG") != "",
+		Prompt:   "> ",
+		Footer:   "up/down move   enter launch   esc quit",
+		AppID:    "zinc.launcher",
+		FontPath: os.Getenv("ZLG_FONT"), // pin a specific font; empty auto-detects a system Nerd Font
+		NoAnim:   os.Getenv("ZLG_NO_ANIM") != "",
+		Debug:    os.Getenv("ZLG_DEBUG") != "",
 	}
 	if raw := os.Getenv("ZLG_OPACITY"); raw != "" {
 		if percent, err := strconv.Atoi(raw); err == nil && percent >= 0 && percent <= 100 {
