@@ -100,7 +100,7 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 			row := display[start+offset]
 			y := listTop + offset*rowH
 			if row.isHeader {
-				drawHeader(img, pal, y, row.header)
+				drawHeader(img, pal, width, y, row.header)
 			} else {
 				drawRow(img, pal, width, y, visible[row.item], descCol, iconCol, row.item == mdl.Cursor())
 			}
@@ -121,8 +121,8 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 func descColumn(visible []picker.App) int {
 	longest := 0
 	for _, app := range visible {
-		if n := runeLen(app.Name); n > longest {
-			longest = n
+		if nameLen := runeLen(app.Name); nameLen > longest {
+			longest = nameLen
 		}
 	}
 	if longest > descColMax {
@@ -145,30 +145,38 @@ func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App,
 	textX := nameX
 	if iconCol {
 		textX = marginX + IconSize + iconGap
-		if app.Icon != nil {
+		switch {
+		case app.Icon != nil:
 			iconTop := top + (rowH-IconSize)/2
 			draw.Draw(img, image.Rect(marginX, iconTop, marginX+IconSize, iconTop+IconSize), app.Icon, image.Point{}, draw.Over)
-		}
-		if app.Running {
-			// a small badge on the icon cell's bottom-right corner
-			dotX := marginX + IconSize - dotSize
-			dotY := top + (rowH+IconSize)/2 - dotSize
-			fill(img, image.Rect(dotX, dotY, dotX+dotSize, dotY+dotSize), pal.Running)
+			if app.Running {
+				dotX := marginX + IconSize - dotSize // a small badge on the icon's bottom-right corner
+				dotY := top + (rowH+IconSize)/2 - dotSize
+				fill(img, image.Rect(dotX, dotY, dotX+dotSize, dotY+dotSize), pal.Running)
+			}
+		case app.Running:
+			drawDot(img, pal, marginX, top) // no icon in this row: center the dot in the cell
 		}
 	} else if app.Running {
-		dotTop := top + (rowH-dotSize)/2
-		fill(img, image.Rect(marginX, dotTop, marginX+dotSize, dotTop+dotSize), pal.Running)
+		drawDot(img, pal, marginX, top)
 	}
 	baseline := top + (rowH-faceHeight)/2 + faceAscent
 	drawText(img, textX, baseline, nameColor, app.Name)
 	if app.Description != "" {
 		column := descCol
-		if n := runeLen(app.Name); n > column {
-			column = n // a name past the column pushes its own description along
+		if nameLen := runeLen(app.Name); nameLen > column {
+			column = nameLen // a name past the column pushes its own description along
 		}
 		descX := textX + (column+descGap)*faceAdvance
-		drawText(img, descX, baseline, pal.Dim, app.Description)
+		maxChars := (width - descX - marginX) / faceAdvance
+		drawText(img, descX, baseline, pal.Dim, truncate(app.Description, maxChars))
 	}
+}
+
+// drawDot draws the running-indicator dot centered in the leftmost column at left,top.
+func drawDot(img *image.RGBA, pal theme.Palette, left, top int) {
+	dotTop := top + (rowH-dotSize)/2
+	fill(img, image.Rect(left, dotTop, left+dotSize, dotTop+dotSize), pal.Running)
 }
 
 // anyIcon reports whether any visible item has a resolved icon (so the icon column shows).
@@ -237,10 +245,11 @@ func anyGroup(visible []picker.App) bool {
 	return false
 }
 
-// drawHeader draws a section-header row: the group name in the accent color.
-func drawHeader(img *image.RGBA, pal theme.Palette, top int, name string) {
+// drawHeader draws a section-header row: the group name in the accent color, clipped to width.
+func drawHeader(img *image.RGBA, pal theme.Palette, width, top int, name string) {
 	baseline := top + (rowH-faceHeight)/2 + faceAscent
-	drawText(img, marginX, baseline, pal.Accent, name)
+	maxChars := (width - marginX - marginX) / faceAdvance
+	drawText(img, marginX, baseline, pal.Accent, truncate(name, maxChars))
 }
 
 // drawError draws a banner just above the footer: an error-colored bar and message, so a

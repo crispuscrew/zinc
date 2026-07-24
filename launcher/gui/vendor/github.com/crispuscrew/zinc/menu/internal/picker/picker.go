@@ -121,14 +121,6 @@ func (mdl *Model) SelectedIndex() (int, bool) {
 	return mdl.filtered[mdl.cursor].Index, true
 }
 
-// SetRunning marks each named app running (and every other app not running), from the set
-// zcr reports. Names not present are left un-running.
-func (mdl *Model) SetRunning(running map[string]bool) {
-	for index := range mdl.apps {
-		mdl.apps[index].Running = running[mdl.apps[index].Name]
-	}
-}
-
 // refilter recomputes the visible list for the current query and resets the selection to
 // the top (the best match).
 func (mdl *Model) refilter() {

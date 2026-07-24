@@ -94,26 +94,26 @@ func TestSelected(t *testing.T) {
 	}
 }
 
-// SetRunning marks the named apps running and clears the rest.
-func TestSetRunning_MarksAndClears(t *testing.T) {
-	mdl := New(sampleApps())
-	mdl.SetRunning(map[string]bool{"firefox": true})
-	byName := map[string]bool{}
-	for _, app := range mdl.Visible() {
-		byName[app.Name] = app.Running
+// SelectedIndex (the method the menu uses to map a pick back to the caller's items) returns
+// the index into the ORIGINAL apps slice, tracking the filter and the cursor, and reports
+// ok=false when nothing matches.
+func TestSelectedIndex(t *testing.T) {
+	apps := sampleApps() // caller order: alacritty, firefox, syncthing
+	mdl := New(apps)
+	mdl.Type("fire")
+	index, ok := mdl.SelectedIndex()
+	if !ok || apps[index].Name != "firefox" {
+		t.Fatalf("cursor should select firefox at its original index, got index=%d ok=%v", index, ok)
 	}
-	if !byName["firefox"] {
-		t.Fatal("firefox should be marked running")
+	mdl.ClearQuery()
+	mdl.MoveCursor(2)
+	index, ok = mdl.SelectedIndex()
+	if !ok || apps[index].Name != "syncthing" {
+		t.Fatalf("cursor 2 should map to syncthing's original index, got index=%d ok=%v", index, ok)
 	}
-	if byName["alacritty"] || byName["syncthing"] {
-		t.Fatal("apps not in the running set must not be marked running")
-	}
-	// a later, empty set clears the indicator
-	mdl.SetRunning(map[string]bool{})
-	for _, app := range mdl.Visible() {
-		if app.Running {
-			t.Fatalf("%s should no longer be running after an empty set", app.Name)
-		}
+	mdl.Type("zzz") // matches nothing
+	if _, ok := mdl.SelectedIndex(); ok {
+		t.Fatal("SelectedIndex must report ok=false when nothing matches")
 	}
 }
 

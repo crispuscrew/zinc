@@ -1,4 +1,4 @@
-// Package match is a small, dependency-free fuzzy matcher for the launcher's picker: a
+// Package match is a small, dependency-free fuzzy matcher for the menu's picker: a
 // case-insensitive subsequence test with a score that favours matches at the start of a
 // name, at word boundaries (after - _ . / or space), and in contiguous runs, so the
 // tightest, most obvious matches rank first. It is greedy (first-occurrence) rather than

@@ -36,6 +36,7 @@ type Item struct {
 // ActivateFunc is called when the user picks an item (Enter). Returning an error keeps the
 // menu open and shows the error in a banner; returning nil closes the menu with that item
 // selected. This lets the caller act while the menu is up - launch a program, print a line.
+// It may be nil, in which case Enter simply closes the menu and Run returns the chosen index.
 type ActivateFunc func(item Item) error
 
 // Options tunes one Run. The zero value is usable: a default-size, opaque, animated overlay
@@ -44,7 +45,7 @@ type Options struct {
 	Prompt   string  // drawn before the query (default "> ")
 	Footer   string  // hint line at the bottom (default "up/down move   enter select   esc quit")
 	AppID    string  // layer-surface namespace / app-id for compositor window rules (default "menu")
-	FontPath string  // .ttf/.otf to render with; empty auto-detects a system Nerd Font, else Go Mono
+	FontPath string  // .ttf/.otf to render with; empty keeps the process default (a system Nerd Font found at startup, else Go Mono)
 	Width    int     // overlay width in px (default 720)
 	Height   int     // overlay height in px (default 440)
 	Opacity  float64 // background opacity 0..1; <= 0 means opaque
@@ -398,6 +399,12 @@ func (application *app) handleKey(event client.KeyboardKeyEvent) {
 		return
 	}
 	application.launchErr = "" // any keypress dismisses a shown launch error
+	if application.animating {
+		// Any keypress completes the entrance fade. This also recovers the (rare) case of a
+		// compositor that withholds frame callbacks, which would otherwise leave the overlay
+		// stuck transparent while holding the keyboard.
+		application.fade, application.animating = 1, false
+	}
 	key := keymap.Decode(event.Key, application.shift)
 
 	if application.ctrl {

@@ -80,7 +80,7 @@ func TestFrame_SelectionBand(t *testing.T) {
 
 // A launch error is shown in the window (in the error color), not swallowed.
 func TestFrame_ErrorBanner(t *testing.T) {
-	view := View{Fade: 1, Opacity: 1, Error: "launch neovim: zcr not found"}
+	view := View{Fade: 1, Opacity: 1, Error: "cannot open item: not available"}
 	img := Frame(sample(), pal, view, 400, 300)
 	if !hasColor(img, pal.Error) {
 		t.Fatal("a launch error should draw the error banner in the error color")
@@ -227,6 +227,36 @@ func TestFrame_GroupedHeadersDoNotPanic(t *testing.T) {
 		{Name: "htop", Group: "Dev"},
 	})
 	_ = Frame(mdl, pal, fullView, 400, 300)
+}
+
+// When the list is grouped (headers interleaved) and longer than the window, scrolling still
+// keeps the selected item on screen.
+func TestFrame_GroupedScrollKeepsSelectionVisible(t *testing.T) {
+	apps := make([]picker.App, 30)
+	for index := range apps {
+		group := "A"
+		if index >= 15 {
+			group = "B"
+		}
+		apps[index] = picker.App{Name: fmt.Sprintf("app%02d", index), Group: group}
+	}
+	mdl := picker.New(apps) // idle + groups -> section headers take rows too
+	for count := 0; count < 29; count++ {
+		mdl.MoveCursor(1) // drive the cursor to the last item, well past one screen
+	}
+	img := Frame(mdl, pal, fullView, 400, 200) // short window forces scrolling
+	if !hasColor(img, pal.SelBG) {
+		t.Fatal("the selected item should stay visible (highlight band drawn) when grouped and scrolled")
+	}
+}
+
+// A partial opacity yields partial (premultiplied) alpha in the body, not fully opaque or
+// fully transparent.
+func TestFrame_PartialOpacity(t *testing.T) {
+	img := Frame(sample(), pal, View{Fade: 1, Opacity: 0.5}, 400, 300)
+	if got := img.RGBAAt(200, 150).A; got == 0 || got == 0xff {
+		t.Fatalf("center alpha = %d at opacity 0.5, want a partial value (0 < a < 255)", got)
+	}
 }
 
 func hasColor(img *image.RGBA, want color.Color) bool {

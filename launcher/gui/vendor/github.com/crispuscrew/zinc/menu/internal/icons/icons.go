@@ -7,15 +7,26 @@
 package icons
 
 import (
+	"bytes"
 	"image"
 	_ "image/gif"  // register decoders for image.Decode
 	_ "image/jpeg" // register decoders for image.Decode
 	_ "image/png"  // register decoders for image.Decode
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	xdraw "golang.org/x/image/draw"
+)
+
+const (
+	// maxIconBytes caps how much of an icon file is read; icons are tiny, and this stops a
+	// partly-untrusted config pointing Icon at a huge file.
+	maxIconBytes = 8 << 20
+	// maxIconPixels rejects an image whose declared dimensions would allocate too much; a
+	// crafted small file can declare enormous width x height and OOM the decoder otherwise.
+	maxIconPixels = 4 << 20
 )
 
 // searchSizes are the icon-theme size buckets tried, best first (larger scales down cleanly).
@@ -51,9 +62,13 @@ func Resolve(spec string, size int) *image.RGBA {
 func lookup(name string) string {
 	for _, base := range iconBaseDirs() {
 		for _, theme := range searchThemes {
+			themeDir := filepath.Join(base, theme)
+			if !isDir(themeDir) {
+				continue // skip the theme's whole size x category grid when it is not installed
+			}
 			for _, size := range searchSizes {
 				for _, category := range []string{"apps", "categories"} {
-					candidate := filepath.Join(base, theme, size, category, name+".png")
+					candidate := filepath.Join(themeDir, size, category, name+".png")
 					if isFile(candidate) {
 						return candidate
 					}
@@ -117,17 +132,45 @@ func isFile(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func decode(path string) image.Image {
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// decode reads and decodes an icon file, bounded because the path comes from partly-untrusted
+// app config: it requires a REGULAR file (so a FIFO cannot block the open, and dirs/devices
+// are rejected), caps the bytes read, rejects images whose declared dimensions exceed the
+// pixel budget (a small file can claim huge dimensions and OOM the decoder), and recovers from
+// a decoder panic. Any of these returns nil, which the caller renders as no icon.
+func decode(path string) (result image.Image) {
+	defer func() {
+		if recover() != nil {
+			result = nil
+		}
+	}()
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer file.Close()
-	img, _, err := image.Decode(file)
+	data, err := io.ReadAll(io.LimitReader(file, maxIconBytes))
 	if err != nil {
 		return nil
 	}
-	return img
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 ||
+		int64(config.Width)*int64(config.Height) > maxIconPixels {
+		return nil
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	return decoded
 }
 
 // scaleTo returns source resized to size x size as a premultiplied RGBA (what the renderer

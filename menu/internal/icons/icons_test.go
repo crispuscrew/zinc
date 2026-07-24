@@ -53,3 +53,19 @@ func TestResolve_MissingAndEmptyReturnNil(t *testing.T) {
 		t.Fatal("a missing absolute path should resolve to nil")
 	}
 }
+
+// A non-regular file (a directory) and a non-image file both resolve to nil rather than
+// panicking or blocking - the icon path is partly-untrusted config.
+func TestResolve_RejectsNonRegularAndGarbage(t *testing.T) {
+	dir := t.TempDir()
+	if got := Resolve(dir, 16); got != nil {
+		t.Fatal("a directory path should resolve to nil")
+	}
+	garbage := filepath.Join(dir, "x.png")
+	if err := os.WriteFile(garbage, []byte("this is not a real image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := Resolve(garbage, 16); got != nil {
+		t.Fatal("a non-image file should resolve to nil")
+	}
+}

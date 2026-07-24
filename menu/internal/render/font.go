@@ -63,6 +63,9 @@ func applyFace(newFace font.Face, description string) {
 	} else {
 		faceAdvance = fontSizePx * 6 / 10
 	}
+	if faceAdvance < 1 {
+		faceAdvance = 1 // never let a degenerate face divide-by-zero the layout math
+	}
 }
 
 func faceFromFile(path string) font.Face {
@@ -116,9 +119,12 @@ func findNerdFont() string {
 			if score > bestScore {
 				bestScore, best = score, path
 			}
+			if bestScore >= 6 { // a preferred family's Mono variant - good enough, stop walking
+				return fs.SkipAll
+			}
 			return nil
 		})
-		if bestScore >= 6 { // a preferred family's Mono variant - good enough, stop walking
+		if bestScore >= 6 {
 			break
 		}
 	}
@@ -134,7 +140,9 @@ func scoreFont(name string) int {
 	if !strings.HasSuffix(name, ".ttf") && !strings.HasSuffix(name, ".otf") {
 		return 0
 	}
-	for _, bad := range []string{"italic", "oblique", "bold", "light", "thin", "medium", "semibold", "extrabold", "black", "propo"} {
+	// "symbols" excludes the standalone Symbols Nerd Font, which carries only the patched
+	// glyph ranges and NO Latin letters - picking it as the UI text face renders blank tofu.
+	for _, bad := range []string{"symbols", "italic", "oblique", "bold", "light", "thin", "medium", "semibold", "extrabold", "black", "propo"} {
 		if strings.Contains(name, bad) {
 			return 0
 		}

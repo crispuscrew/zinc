@@ -135,9 +135,9 @@ func (surf *layerSurface) destroy() error {
 // Dispatch decodes the two events the menu handles: configure(serial, width, height) and closed.
 func (surf *layerSurface) Dispatch(opcode uint32, fd int, data []byte) {
 	switch opcode {
-	case 0: // configure
-		if surf.configureHandler == nil {
-			return
+	case 0: // configure(serial, width, height)
+		if surf.configureHandler == nil || len(data) < 12 {
+			return // ignore a short/malformed event rather than slicing out of bounds
 		}
 		serial := client.Uint32(data[0:4])
 		width := client.Uint32(data[4:8])
