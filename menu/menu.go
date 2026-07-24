@@ -15,6 +15,7 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/crispuscrew/zinc/menu/internal/icons"
 	"github.com/crispuscrew/zinc/menu/internal/keymap"
 	"github.com/crispuscrew/zinc/menu/internal/picker"
 	"github.com/crispuscrew/zinc/menu/internal/render"
@@ -28,6 +29,7 @@ type Item struct {
 	Label       string // the primary text, and what the fuzzy filter matches against
 	Description string // secondary text, shown dimmed after the label
 	Group       string // optional section header; keep items of one group adjacent (shown only when idle)
+	Icon        string // optional icon: a freedesktop icon name or an absolute image path
 	Marked      bool   // draws an indicator dot; the caller decides what it means (e.g. running)
 }
 
@@ -105,11 +107,18 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 	return application.selected, nil
 }
 
-// toApps maps the public items to the internal picker rows.
+// toApps maps the public items to the internal picker rows, resolving each icon spec to a
+// decoded raster once (a missing or SVG-only icon resolves to nil and simply draws nothing).
 func toApps(items []Item) []picker.App {
 	apps := make([]picker.App, len(items))
 	for index, item := range items {
-		apps[index] = picker.App{Name: item.Label, Description: item.Description, Group: item.Group, Running: item.Marked}
+		apps[index] = picker.App{
+			Name:        item.Label,
+			Description: item.Description,
+			Group:       item.Group,
+			Icon:        icons.Resolve(item.Icon, render.IconSize),
+			Running:     item.Marked,
+		}
 	}
 	return apps
 }

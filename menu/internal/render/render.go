@@ -38,7 +38,11 @@ const (
 	cornerRadius = 12
 	descGap      = 2  // spaces between the name column and the description
 	descColMax   = 18 // cap on the name-column width used to line descriptions up
+	iconGap      = 8  // space between the icon column and the name
 )
+
+// IconSize is the pixel size icons are scaled to and drawn at; the caller pre-scales to this.
+const IconSize = 16
 
 // fontSizePx is the pixel size of the rendered text (DPI is fixed at 72, so points == px).
 const fontSizePx = 13
@@ -129,6 +133,7 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 		grouping := mdl.Query() == "" && anyGroup(visible)
 		display := buildRows(visible, grouping)
 		descCol := descColumn(visible)
+		iconCol := anyIcon(visible)
 		start := scrollStart(rowForItem(display, mdl.Cursor()), len(display), rows)
 		for offset := 0; offset < rows && start+offset < len(display); offset++ {
 			row := display[start+offset]
@@ -136,7 +141,7 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 			if row.isHeader {
 				drawHeader(img, pal, y, row.header)
 			} else {
-				drawRow(img, pal, width, y, visible[row.item], descCol, row.item == mdl.Cursor())
+				drawRow(img, pal, width, y, visible[row.item], descCol, iconCol, row.item == mdl.Cursor())
 			}
 		}
 	}
@@ -166,28 +171,53 @@ func descColumn(visible []picker.App) int {
 }
 
 // drawRow renders one app row at pixel row-top y: a highlight band and accent bar when
-// selected, an optional running dot, the name, and a dim description aligned to descCol.
-func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App, descCol int, selected bool) {
+// selected, an icon (when the column is active) or a running dot, the name, and a dim
+// description aligned to descCol. iconCol keeps the name column aligned across rows even for
+// rows whose own icon is missing.
+func drawRow(img *image.RGBA, pal theme.Palette, width, top int, app picker.App, descCol int, iconCol, selected bool) {
 	nameColor := pal.FG
 	if selected {
 		fill(img, image.Rect(0, top, width, top+rowH), pal.SelBG)
 		fill(img, image.Rect(0, top, barW, top+rowH), pal.Accent)
 		nameColor = pal.SelFG
 	}
-	if app.Running {
+	textX := nameX
+	if iconCol {
+		textX = marginX + IconSize + iconGap
+		if app.Icon != nil {
+			iconTop := top + (rowH-IconSize)/2
+			draw.Draw(img, image.Rect(marginX, iconTop, marginX+IconSize, iconTop+IconSize), app.Icon, image.Point{}, draw.Over)
+		}
+		if app.Running {
+			// a small badge on the icon cell's bottom-right corner
+			dotX := marginX + IconSize - dotSize
+			dotY := top + (rowH+IconSize)/2 - dotSize
+			fill(img, image.Rect(dotX, dotY, dotX+dotSize, dotY+dotSize), pal.Running)
+		}
+	} else if app.Running {
 		dotTop := top + (rowH-dotSize)/2
 		fill(img, image.Rect(marginX, dotTop, marginX+dotSize, dotTop+dotSize), pal.Running)
 	}
 	baseline := top + (rowH-faceHeight)/2 + faceAscent
-	drawText(img, nameX, baseline, nameColor, app.Name)
+	drawText(img, textX, baseline, nameColor, app.Name)
 	if app.Description != "" {
 		column := descCol
 		if n := runeLen(app.Name); n > column {
 			column = n // a name past the column pushes its own description along
 		}
-		descX := nameX + (column+descGap)*faceAdvance
+		descX := textX + (column+descGap)*faceAdvance
 		drawText(img, descX, baseline, pal.Dim, app.Description)
 	}
+}
+
+// anyIcon reports whether any visible item has a resolved icon (so the icon column shows).
+func anyIcon(visible []picker.App) bool {
+	for _, app := range visible {
+		if app.Icon != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // displayRow is one row in the rendered list: either a section header or an item (an index
