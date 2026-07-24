@@ -34,6 +34,10 @@ Adds the GUI launcher.
 - **App grouping** - a new optional `Group` field on the app config (schema v2, additive)
   files apps into sections. The launcher shows a section header per group when idle and
   flattens to a plain ranked list as soon as you type. The demo apps ship with groups.
+- **App icons** - the launcher now draws each app's icon in a left column. It resolves the
+  existing `Icon` field (a freedesktop icon name or an absolute image path) by looking the
+  name up in the icon-theme directories, decoding and scaling in pure Go. It is raster-only
+  (PNG/JPEG/GIF); an SVG-only or missing icon just leaves that row's slot blank.
 
 ### Known limitations
 

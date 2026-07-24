@@ -8,6 +8,7 @@ github.com/crispuscrew/zinc/launcher/common/store
 # github.com/crispuscrew/zinc/menu v0.0.0 => ../../menu
 ## explicit; go 1.24.2
 github.com/crispuscrew/zinc/menu
+github.com/crispuscrew/zinc/menu/internal/icons
 github.com/crispuscrew/zinc/menu/internal/keymap
 github.com/crispuscrew/zinc/menu/internal/match
 github.com/crispuscrew/zinc/menu/internal/picker
@@ -21,11 +22,13 @@ github.com/godbus/dbus/v5
 github.com/rajveermalviya/go-wayland/wayland/client
 # golang.org/x/image v0.18.0
 ## explicit; go 1.18
+golang.org/x/image/draw
 golang.org/x/image/font
 golang.org/x/image/font/basicfont
 golang.org/x/image/font/gofont/gomono
 golang.org/x/image/font/opentype
 golang.org/x/image/font/sfnt
+golang.org/x/image/math/f64
 golang.org/x/image/math/fixed
 golang.org/x/image/vector
 # golang.org/x/sys v0.27.0

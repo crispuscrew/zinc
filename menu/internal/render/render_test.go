@@ -201,6 +201,25 @@ func TestBuildRows_FlatWhenNotGrouping(t *testing.T) {
 	}
 }
 
+// An item with a resolved icon draws it into the icon column.
+func TestFrame_IconColumnDrawsIcon(t *testing.T) {
+	icon := image.NewRGBA(image.Rect(0, 0, IconSize, IconSize))
+	solid := color.RGBA{0x12, 0x34, 0x56, 0xff}
+	for x := 0; x < IconSize; x++ {
+		for y := 0; y < IconSize; y++ {
+			icon.Set(x, y, solid)
+		}
+	}
+	mdl := picker.New([]picker.App{
+		{Name: "firefox", Description: "browser", Icon: icon},
+		{Name: "htop", Description: "monitor"},
+	})
+	img := Frame(mdl, pal, fullView, 400, 300)
+	if !hasColor(img, solid) {
+		t.Fatal("an item's icon should be drawn into the icon column")
+	}
+}
+
 // An idle model with groups renders the header path without panicking.
 func TestFrame_GroupedHeadersDoNotPanic(t *testing.T) {
 	mdl := picker.New([]picker.App{

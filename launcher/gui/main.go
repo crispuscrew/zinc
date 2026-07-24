@@ -110,6 +110,7 @@ func loadItems() ([]menu.Item, error) {
 		if cfg, err := sto.Load(name); err == nil {
 			item.Description = cfg.Description
 			item.Group = cfg.Group
+			item.Icon = cfg.Icon
 		}
 		items = append(items, item)
 	}

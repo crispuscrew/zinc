@@ -10,6 +10,8 @@
 package picker
 
 import (
+	"image"
+
 	"github.com/crispuscrew/zinc/menu/internal/match"
 )
 
@@ -18,6 +20,7 @@ type App struct {
 	Name        string
 	Description string
 	Group       string
+	Icon        *image.RGBA // decoded, pre-scaled icon, or nil for none
 	Running     bool
 }
 
