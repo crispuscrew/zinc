@@ -1,8 +1,9 @@
-// Package render draws the picker into an in-memory RGBA image with a bundled antialiased font
-// (pure Go, no cgo). Frame is a pure function of the model, the palette, the per-frame view
-// state, and the pixel size, so the whole look is unit-testable without a display: the menu's
-// Wayland layer only has to blit the pixels Frame returns into a shared-memory buffer.
-// Software rendering is ample for a small, redraw-on-keystroke menu window.
+// Package render draws the picker into an in-memory RGBA image with an antialiased monospace
+// font (pure Go, no cgo; a system Nerd Font when one is installed, else the bundled Go Mono -
+// see font.go). Frame is a pure function of the model, the palette, the per-frame view state,
+// and the pixel size, so the whole look is unit-testable without a display: the menu's Wayland
+// layer only has to blit the pixels Frame returns into a shared-memory buffer. Software
+// rendering is ample for a small, redraw-on-keystroke menu window.
 //
 // Frame returns PREMULTIPLIED-alpha pixels (what Wayland surfaces expect), so translucency,
 // the rounded corners, and the fade-in composite correctly over the desktop.
@@ -16,9 +17,6 @@ import (
 	"math"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
-	"golang.org/x/image/font/gofont/gomono"
-	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
 	"github.com/crispuscrew/zinc/menu/internal/picker"
@@ -43,43 +41,6 @@ const (
 
 // IconSize is the pixel size icons are scaled to and drawn at; the caller pre-scales to this.
 const IconSize = 16
-
-// fontSizePx is the pixel size of the rendered text (DPI is fixed at 72, so points == px).
-const fontSizePx = 13
-
-// The renderer uses one monospace face; its metrics (all in whole pixels) drive the layout.
-var (
-	face        font.Face
-	faceAscent  int
-	faceHeight  int
-	faceAdvance int // one cell width - the font is monospace, so every glyph shares it
-)
-
-func init() {
-	face = loadFace()
-	metrics := face.Metrics()
-	faceAscent = metrics.Ascent.Round()
-	faceHeight = metrics.Height.Round()
-	if advance, ok := face.GlyphAdvance('M'); ok {
-		faceAdvance = advance.Round()
-	} else {
-		faceAdvance = fontSizePx * 6 / 10
-	}
-}
-
-// loadFace builds the antialiased Go Mono face, falling back to the bundled bitmap font only
-// if the embedded TTF ever fails to parse (it should not, so the fallback is just insurance).
-func loadFace() font.Face {
-	parsed, err := opentype.Parse(gomono.TTF)
-	if err != nil {
-		return basicfont.Face7x13
-	}
-	built, err := opentype.NewFace(parsed, &opentype.FaceOptions{Size: fontSizePx, DPI: 72, Hinting: font.HintingFull})
-	if err != nil {
-		return basicfont.Face7x13
-	}
-	return built
-}
 
 // View is the transient, per-frame state the renderer needs beyond the model: the entrance
 // fade (0..1), the steady-state background opacity (0..1), and an optional launch error to

@@ -38,6 +38,10 @@ Adds the GUI launcher.
   existing `Icon` field (a freedesktop icon name or an absolute image path) by looking the
   name up in the icon-theme directories, decoding and scaling in pure Go. It is raster-only
   (PNG/JPEG/GIF); an SVG-only or missing icon just leaves that row's slot blank.
+- **Font** - text is antialiased (rendered with `x/image/opentype`), not the old bitmap face.
+  It auto-detects an installed system Nerd Font (monospace, so it matches your terminal),
+  falling back to the bundled Go Mono when none is found. `ZLG_FONT=/path/to/font.ttf` pins a
+  specific font.
 
 ### Known limitations
 

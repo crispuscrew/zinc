@@ -41,14 +41,15 @@ type ActivateFunc func(item Item) error
 // Options tunes one Run. The zero value is usable: a default-size, opaque, animated overlay
 // with a "> " prompt.
 type Options struct {
-	Prompt  string  // drawn before the query (default "> ")
-	Footer  string  // hint line at the bottom (default "up/down move   enter select   esc quit")
-	AppID   string  // layer-surface namespace / app-id for compositor window rules (default "menu")
-	Width   int     // overlay width in px (default 720)
-	Height  int     // overlay height in px (default 440)
-	Opacity float64 // background opacity 0..1; <= 0 means opaque
-	NoAnim  bool    // disable the entrance fade-in
-	Debug   bool    // trace the Wayland handshake to stderr
+	Prompt   string  // drawn before the query (default "> ")
+	Footer   string  // hint line at the bottom (default "up/down move   enter select   esc quit")
+	AppID    string  // layer-surface namespace / app-id for compositor window rules (default "menu")
+	FontPath string  // .ttf/.otf to render with; empty auto-detects a system Nerd Font, else Go Mono
+	Width    int     // overlay width in px (default 720)
+	Height   int     // overlay height in px (default 440)
+	Opacity  float64 // background opacity 0..1; <= 0 means opaque
+	NoAnim   bool    // disable the entrance fade-in
+	Debug    bool    // trace the Wayland handshake to stderr
 }
 
 const (
@@ -75,6 +76,10 @@ func trace(format string, args ...any) {
 // closed it).
 func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 	debugOn = opts.Debug
+	if opts.FontPath != "" {
+		render.UseFont(opts.FontPath)
+	}
+	trace("font: %s", render.LoadedFont)
 	application := &app{
 		model:    picker.New(toApps(items)),
 		items:    items,
