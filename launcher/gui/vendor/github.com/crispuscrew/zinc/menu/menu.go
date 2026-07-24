@@ -39,6 +39,7 @@ type ActivateFunc func(item Item) error
 // with a "> " prompt.
 type Options struct {
 	Prompt  string  // drawn before the query (default "> ")
+	Footer  string  // hint line at the bottom (default "up/down move   enter select   esc quit")
 	AppID   string  // layer-surface namespace / app-id for compositor window rules (default "menu")
 	Width   int     // overlay width in px (default 720)
 	Height  int     // overlay height in px (default 440)
@@ -77,6 +78,7 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 		activate: activate,
 		palette:  theme.Detect(),
 		prompt:   orString(opts.Prompt, "> "),
+		footer:   opts.Footer, // empty falls back to a neutral default in the renderer
 		appID:    orString(opts.AppID, "menu"),
 		width:    orInt(opts.Width, defaultWidth),
 		height:   orInt(opts.Height, defaultHeight),
@@ -131,6 +133,7 @@ type app struct {
 	items    []Item
 	activate ActivateFunc
 	prompt   string
+	footer   string
 	appID    string
 
 	palette theme.Palette
@@ -151,7 +154,7 @@ type app struct {
 
 	width, height int
 
-	opacity      float64 // steady-state background opacity (ZLG_OPACITY), 1 = opaque
+	opacity      float64 // steady-state background opacity (Options.Opacity), 1 = opaque
 	fade         float64 // entrance-animation progress, 0..1
 	animating    bool
 	animStarted  bool
@@ -196,8 +199,8 @@ func (application *app) connect() error {
 	}
 	if application.compositor == nil || application.shm == nil || application.layerShell == nil {
 		return fmt.Errorf("the compositor is missing a required Wayland global "+
-			"(have wl_compositor=%t wl_shm=%t zwlr_layer_shell_v1=%t); zlg needs wlr-layer-shell "+
-			"(niri, hyprland, sway all have it). Run again with ZLG_DEBUG=1 to list what it advertised",
+			"(have wl_compositor=%t wl_shm=%t zwlr_layer_shell_v1=%t); this menu needs wlr-layer-shell "+
+			"(niri, hyprland, sway all have it). Set Options.Debug to list what it advertised",
 			application.compositor != nil, application.shm != nil, application.layerShell != nil)
 	}
 	if err := application.roundtrip(); err != nil {
@@ -312,7 +315,7 @@ func bindGlobal(registry *client.Registry, name uint32, iface string, version ui
 	return registry.Context().WriteMsg(buf, nil)
 }
 
-// handleGlobal binds the globals zlg needs, at the version the compositor advertises (only
+// handleGlobal binds the globals the menu needs, at the version the compositor advertises (only
 // v1 requests are used, so any advertised version is safe).
 func (application *app) handleGlobal(event client.RegistryGlobalEvent) {
 	trace("global advertised: %s v%d (name %d)", event.Interface, event.Version, event.Name)
@@ -533,7 +536,7 @@ func (application *app) newBuffer(width, height int) (*shmBuffer, error) {
 	if dir == "" {
 		dir = os.TempDir()
 	}
-	file, err := os.CreateTemp(dir, "zlg-shm-*")
+	file, err := os.CreateTemp(dir, "menu-shm-*")
 	if err != nil {
 		return nil, fmt.Errorf("create shm file: %w", err)
 	}
@@ -597,7 +600,7 @@ func (application *app) redraw() {
 	if buf == nil || buf.mmap == nil {
 		return
 	}
-	view := render.View{Prompt: application.prompt, Fade: application.fade, Opacity: application.opacity, Error: application.launchErr}
+	view := render.View{Prompt: application.prompt, Footer: application.footer, Fade: application.fade, Opacity: application.opacity, Error: application.launchErr}
 	frame := render.Frame(application.model, application.palette, view, buf.width, buf.height)
 	src := frame.Pix
 	dst := buf.mmap

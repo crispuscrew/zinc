@@ -1,7 +1,7 @@
-// Package theme resolves the launcher's color palette. It prefers the system appearance from
+// Package theme resolves the menu's color palette. It prefers the system appearance from
 // the XDG desktop portal (org.freedesktop.appearance: the dark/light preference and the
-// accent color) so zlg matches the rest of the desktop, and falls back to a built-in palette
-// when no portal is reachable. It speaks D-Bus through the pure-Go godbus client, so zlg
+// accent color) so the menu matches the rest of the desktop, and falls back to a built-in palette
+// when no portal is reachable. It speaks D-Bus through the pure-Go godbus client, so the menu
 // stays a static, cgo-free binary.
 package theme
 
@@ -55,7 +55,7 @@ func Light() Palette {
 
 // Detect returns a palette from the system appearance, falling back to Dark(). It reads the
 // portal's color-scheme (dark vs light base) and accent-color; anything missing, erroring, or
-// slow just leaves the built-in value in place, so it never blocks the launcher for long.
+// slow just leaves the built-in value in place, so it never blocks the menu for long.
 func Detect() Palette {
 	conn, err := dbus.SessionBus()
 	if err != nil {

@@ -39,8 +39,9 @@ use the same config format.
 The creator carries no runtime: `zcc` authors app files and shells out to the `zcr` binary
 to run them, so the two meet only at the on-disk YAML format and never share code.
 
-Layout: `common/`, `container/{creator,runner}`, `container/e2e` (end-to-end tests), and
-`launcher/{common,tui,gui}` (the shared launcher library and the TUI/GUI pickers).
+Layout: `common/`, `container/{creator,runner}`, `container/e2e` (end-to-end tests),
+`launcher/{common,tui,gui}` (the shared launcher library and the TUI/GUI pickers), and
+`menu/` (the reusable Wayland overlay-menu core the GUI launcher builds on).
 
 ## Status
 

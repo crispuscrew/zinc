@@ -122,6 +122,7 @@ func loadItems() ([]menu.Item, error) {
 func menuOptions() menu.Options {
 	opts := menu.Options{
 		Prompt: "> ",
+		Footer: "up/down move   enter launch   esc quit",
 		AppID:  "zinc.launcher",
 		NoAnim: os.Getenv("ZLG_NO_ANIM") != "",
 		Debug:  os.Getenv("ZLG_DEBUG") != "",

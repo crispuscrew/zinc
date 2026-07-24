@@ -1,8 +1,8 @@
-// Package render draws the picker into an in-memory RGBA image with a bundled bitmap font
+// Package render draws the picker into an in-memory RGBA image with a bundled antialiased font
 // (pure Go, no cgo). Frame is a pure function of the model, the palette, the per-frame view
-// state, and the pixel size, so the whole look is unit-testable without a display: zlg's
+// state, and the pixel size, so the whole look is unit-testable without a display: the menu's
 // Wayland layer only has to blit the pixels Frame returns into a shared-memory buffer.
-// Software rendering is ample for a small, redraw-on-keystroke launcher window.
+// Software rendering is ample for a small, redraw-on-keystroke menu window.
 //
 // Frame returns PREMULTIPLIED-alpha pixels (what Wayland surfaces expect), so translucency,
 // the rounded corners, and the fade-in composite correctly over the desktop.
@@ -82,6 +82,7 @@ func loadFace() font.Face {
 // surface in a banner.
 type View struct {
 	Prompt  string
+	Footer  string // the hint line at the bottom (default "up/down move   enter select   esc quit")
 	Fade    float64
 	Opacity float64
 	Error   string
@@ -135,7 +136,7 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 	if view.Error != "" {
 		drawError(img, pal, width, height, view.Error)
 	}
-	drawFooter(img, pal, width, height, len(visible))
+	drawFooter(img, pal, width, height, view.Footer, len(visible))
 
 	finish(img, view.Opacity, view.Fade)
 	return img
@@ -192,12 +193,15 @@ func drawError(img *image.RGBA, pal theme.Palette, width, height int, message st
 	drawText(img, nameX, baseline, pal.Error, truncate(message, maxChars))
 }
 
-// drawFooter draws a divider and a hint line, with the match count right-aligned.
-func drawFooter(img *image.RGBA, pal theme.Palette, width, height, count int) {
+// drawFooter draws a divider and the hint line, with the match count right-aligned.
+func drawFooter(img *image.RGBA, pal theme.Palette, width, height int, hint string, count int) {
+	if hint == "" {
+		hint = "up/down move   enter select   esc quit"
+	}
 	top := height - footerH
 	fill(img, image.Rect(marginX, top, width-marginX, top+1), pal.SelBG)
 	baseline := top + (footerH-faceHeight)/2 + faceAscent
-	drawText(img, marginX, baseline, pal.Dim, "up/down move   enter launch   esc quit")
+	drawText(img, marginX, baseline, pal.Dim, hint)
 	countText := fmt.Sprintf("%d shown", count)
 	countX := width - marginX - runeLen(countText)*faceAdvance
 	drawText(img, countX, baseline, pal.Dim, countText)

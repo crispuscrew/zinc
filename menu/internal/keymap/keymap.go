@@ -1,5 +1,5 @@
 // Package keymap turns a Wayland wl_keyboard keycode into a character or a named key, for
-// zlg's picker. Wayland delivers the raw Linux evdev keycode (KEY_A = 30, KEY_ENTER = 28,
+// the menu's picker. Wayland delivers the raw Linux evdev keycode (KEY_A = 30, KEY_ENTER = 28,
 // ...); this maps it with a fixed US-QWERTY layout plus Shift.
 //
 // Honest limitation: this is a US-layout fallback, not a full xkb interpreter. It reads

@@ -4,7 +4,7 @@ package menu
 // zwlr_layer_surface_v1). go-wayland ships only core + xdg-shell, so this is hand-written in
 // the same style as its generated code: proxy types embedding client.BaseProxy, requests
 // encoded straight onto the wire, and a Dispatch method that decodes the events we care
-// about. Only the subset zlg needs is here - enough to put a fixed-size, centered, keyboard-
+// about. Only the subset the menu needs is here - enough to put a fixed-size, centered, keyboard-
 // grabbing overlay on screen, which is how launchers (fuzzel, wofi, tofi) float above tiled
 // windows instead of being tiled themselves.
 
@@ -132,7 +132,7 @@ func (surf *layerSurface) destroy() error {
 	return surf.request0(7)
 }
 
-// Dispatch decodes the two events zlg handles: configure(serial, width, height) and closed.
+// Dispatch decodes the two events the menu handles: configure(serial, width, height) and closed.
 func (surf *layerSurface) Dispatch(opcode uint32, fd int, data []byte) {
 	switch opcode {
 	case 0: // configure

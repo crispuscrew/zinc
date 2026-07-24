@@ -49,7 +49,9 @@ never imports the runtime. Lives at `launcher/tui`, leaving `launcher/gui` for `
 
 A graphical sibling to `zlt`: the same quick picker over the defined apps, for a
 point-and-click launch. Like the other tools it depends only on `common` and shells out to
-the `zcr` binary, so it never imports the runtime. Lands at `launcher/gui`.
+the `zcr` binary, so it never imports the runtime. Lands at `launcher/gui`. The shared
+overlay-menu core (a `wlr-layer-shell` surface + software renderer + fuzzy picker) is
+extracted into a standalone `menu/` module so `zde` and a future wofi-like tool can reuse it.
 
 ## 0.4 - Virtualization (zvc + zvr) - planned
 
