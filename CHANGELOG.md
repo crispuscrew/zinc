@@ -12,24 +12,29 @@ Adds the GUI launcher.
 ### Added
 
 - **`zlg` (zinc-launcher-gui)** - the graphical sibling of `zlt`: the same quick
-  picker over the defined apps, as a Wayland window. Type to filter, up/down (or
-  ctrl+p/n) to move, enter launches the selected app through `zcr` and quits, and a
-  dot marks apps already running. `zlg <app>` launches one directly, for a desktop
-  hotkey. It renders in **pure Go** - it speaks the Wayland wire protocol directly and
-  software-renders the picker into a shared-memory buffer with a bundled bitmap font -
-  so it stays a **static, `CGO_ENABLED=0`, runs-anywhere, byte-reproducible** binary
-  built from the same minimal image as the other tools, with no cgo and no graphics
-  libraries. Like `zcc` and `zlt` it shells out to the `zcr` binary and never imports
-  the runtime.
+  picker over the defined apps, as a floating `wlr-layer-shell` overlay. Type to
+  filter, up/down (or ctrl+p/n) to move, enter launches the selected app through
+  `zcr` and quits, and a dot marks apps already running. `zlg <app>` launches one
+  directly, for a desktop hotkey. The picker window itself is the new `menu` module
+  (below), so `zlg` is a thin consumer that just supplies the app list and an activate
+  callback; it inherits a **static, `CGO_ENABLED=0`, runs-anywhere, byte-reproducible**
+  binary with no cgo and no graphics libraries. Like `zcc` and `zlt` it shells out to
+  the `zcr` binary and never imports the runtime.
 - **`launcher/common`** - a shared library holding the read-side app store, the `zcr`
   delegate, and the fuzzy matcher, so `zlt` and `zlg` share one copy of the
   list / launch / match logic (and its security guards).
+- **`menu`** - a standalone, reusable overlay-menu module (repo-root `menu/`, module
+  path `github.com/crispuscrew/zinc/menu`) extracted out of `zlg`: a pure-Go Wayland
+  `wlr-layer-shell` overlay, a software renderer, a keymap, a theme resolver, and a
+  fuzzy-filter picker view-model, all behind one call - `menu.Run(items, activate,
+  opts)`. It speaks layer-shell directly through a hand-written binding and reads the
+  system light/dark theme from the XDG portal, and it depends on **no** Zinc sibling
+  module (Go `replace` directives are not transitive), so `zde` and a future wofi-like
+  picker can import it too. The fuzzy matcher is copied in as `menu/internal/match`.
 
 ### Known limitations
 
 - `zlg`'s keymap is US-QWERTY; full keyboard-layout (xkb) support is future work.
-- `zlg` is a normal Wayland window, not a dmenu-style overlay (the pure-Go Wayland
-  library carries no `wlr-layer-shell` yet).
 - Like `zlt`, `zlg` lists and launches; managing an app (stop, logs, edit) stays in
   `zcc`.
 

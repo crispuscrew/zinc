@@ -70,6 +70,18 @@ jobs:
       - name: make vendor-check
         run: make -C launcher/common vendor-check
 
+  menu:
+    name: menu (menu lib)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure podman
+        run: podman --version || { sudo apt-get update && sudo apt-get install -y podman; }
+      - name: make check
+        run: make -C menu check
+      - name: make vendor-check
+        run: make -C menu vendor-check
+
   e2e:
     name: end-to-end (podman)
     runs-on: ubuntu-latest

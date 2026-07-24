@@ -591,18 +591,31 @@ shares with `zlg` lives in the `launcher/common` library.
 
 **Stack:** Go, rendering in pure Go with no cgo. `zlg` (zinc-launcher-gui) is the graphical
 sibling of `zlt`: the same quick picker over the defined apps, for a point-and-click or
-keyboard launch. It speaks the Wayland wire protocol directly (go-wayland) and
-software-renders the picker into a shared-memory buffer with a bundled bitmap font, so it
-stays a **static, `CGO_ENABLED=0`, runs-anywhere, byte-reproducible** binary built from the
-same minimal image as the other tools - no graphics libraries, no dynamic linking. It shares
-`zlt`'s read / launch / match logic through `launcher/common` and, like it, shells out to
-`zcr` and never imports the runtime. `zlg <app>` launches one app directly.
+keyboard launch. The picker window itself is the reusable **`menu` module** (below); `zlg` is
+a thin consumer of it - it loads the defined apps, marks the ones `zcr` reports running, and
+hands `menu.Run` an activate closure that launches the chosen app through `zcr`. So, like
+`zlt`, it takes the read / launch / match logic from `launcher/common`, shells out to `zcr`,
+and never imports the runtime. `zlg <app>` launches one app directly.
 
+Because it builds on `menu`, `zlg` is a **static, `CGO_ENABLED=0`, runs-anywhere,
+byte-reproducible** binary built from the same minimal image as the other tools (no graphics
+libraries, no dynamic linking), and it is a real **`wlr-layer-shell` floating overlay** - a
+centered, keyboard-grabbing panel that floats above the tiled windows, the way fuzzel/wofi
+do, not a tiled window. Known limit (0.3): the keymap is US-QWERTY (full xkb layout support
+is future work).
+
+**The `menu` module** (repo-root `menu/`, module path `github.com/crispuscrew/zinc/menu`) is
+the overlay-menu core, extracted out of `zlg` so any program can build its own menus over it.
+It speaks the Wayland wire protocol directly (go-wayland) plus a **hand-written
+`wlr-layer-shell` binding** (`menu/layershell.go`, since go-wayland ships only core +
+xdg-shell), software-renders a fuzzy-filtered list into a shared-memory buffer with a bundled
+bitmap font, and reads the system light/dark palette from the XDG desktop portal over D-Bus.
 Everything but the Wayland event loop is a pure, unit-tested package (`internal/picker`,
-`internal/keymap`, `internal/render`); only `internal/ui` needs a live compositor. Known
-limits (0.3): the keymap is US-QWERTY (full xkb layout support is future work), and
-go-wayland carries no `wlr-layer-shell`, so `zlg` is a normal window, not a dmenu-style
-overlay.
+`internal/keymap`, `internal/render`, `internal/theme`, and the `internal/match` fuzzy
+matcher). Its whole public API is one call, `menu.Run(items, activate, opts)`. It
+deliberately depends on **no** Zinc sibling module (Go `replace` directives are not
+transitive, so a sibling dependency would make it un-importable from another repo), so `zde`
+and a future wofi-like picker can import it too.
 
 ### 9.5 Planned components (roadmap)
 
@@ -693,7 +706,10 @@ zinc/
     e2e/                 end-to-end tests: drive the real zcc/zcr against podman
   launcher/common/       shared launcher library (store + zcr delegate + fuzzy matcher)
   launcher/tui/          zlt - the launcher TUI (fuzzy picker over the apps; shells out to zcr)
-  launcher/gui/          zlg - the launcher GUI (pure-Go Wayland; shells out to zcr)
+  launcher/gui/          zlg - the launcher GUI (thin consumer of menu/; shells out to zcr)
+  menu/                  reusable Wayland overlay-menu core: layer-shell surface + software
+                           renderer + keymap + theme + fuzzy picker. Pure-Go, cgo-free, and
+                           depends on no Zinc module, so zde and others can import it (menu.Run)
   virtualization/creator/  zvc skeleton - NOT migrated to common yet, does not compile
   docs/architecture.md   this document
 ```
