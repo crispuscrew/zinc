@@ -15,6 +15,26 @@ Like `zcc` and `zlt`, `zlg` **never imports the runtime**: it lists what `zcc` a
 shells out to the `zcr` binary to run the chosen app, so dependency auto-start, the network
 lock-down, and derived-image builds all stay `zcr`'s job.
 
+## Appearance and behaviour
+
+`zlg` has no config file; the few knobs it has are environment variables, so they can be set
+per-invocation or in the hotkey binding that launches it:
+
+| Variable | Effect |
+| --- | --- |
+| `ZLG_OPACITY` | Background translucency. Takes a percentage (`20`) or a fraction (`0.2`) - `1` and `100` both mean fully opaque. Unset is opaque. An unusable value is reported on stderr and ignored. |
+| `ZLG_FONT` | Path to a `.ttf`/`.otf` to render with. Unset auto-detects an installed monospace Nerd Font and falls back to the bundled Go Mono. |
+| `ZLG_NO_ANIM` | Set to anything to disable the entrance fade-in. |
+| `ZLG_DEBUG` | Set to anything to trace the Wayland handshake to stderr. |
+
+```sh
+ZLG_OPACITY=85 zlg          # a lightly translucent overlay
+ZLG_DEBUG=1 zlg             # diagnose a compositor that will not show the surface
+```
+
+Translucency needs a compositor that blends layer-shell surfaces; `zlg` always writes an
+alpha channel, so if the window still looks opaque the compositor is discarding it.
+
 ## A thin consumer of the `menu` module
 
 The picker window itself is not in `zlg` anymore: the overlay core (a pure-Go Wayland

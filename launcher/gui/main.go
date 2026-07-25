@@ -20,6 +20,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/crispuscrew/zinc/launcher/common/runner"
 	"github.com/crispuscrew/zinc/launcher/common/store"
@@ -132,9 +133,10 @@ func loadItems() ([]menu.Item, error) {
 	return items, nil
 }
 
-// menuOptions maps zlg's env knobs onto the menu Options: ZLG_OPACITY (a 0..100 percentage),
-// ZLG_NO_ANIM (disable the fade-in), and ZLG_DEBUG (trace the Wayland handshake). The app-id
-// lets tiling compositors match window rules against zlg.
+// menuOptions maps zlg's env knobs onto the menu Options: ZLG_OPACITY (background
+// translucency), ZLG_FONT (pin a font), ZLG_NO_ANIM (disable the fade-in), and ZLG_DEBUG
+// (trace the Wayland handshake). The app-id lets tiling compositors match window rules
+// against zlg.
 func menuOptions() menu.Options {
 	opts := menu.Options{
 		Prompt:   "> ",
@@ -145,11 +147,31 @@ func menuOptions() menu.Options {
 		Debug:    os.Getenv("ZLG_DEBUG") != "",
 	}
 	if raw := os.Getenv("ZLG_OPACITY"); raw != "" {
-		if percent, err := strconv.Atoi(raw); err == nil && percent >= 0 && percent <= 100 {
-			opts.Opacity = float64(percent) / 100
+		opacity, ok := parseOpacity(raw)
+		if !ok {
+			// Warn rather than ignore silently: a typo here is otherwise indistinguishable
+			// from the overlay simply not supporting translucency.
+			fmt.Fprintf(os.Stderr, "zlg: ignoring ZLG_OPACITY=%q - want a percentage (0-100, e.g. 20) or a fraction (0-1, e.g. 0.2)\n", raw)
 		}
+		opts.Opacity = opacity
 	}
 	return opts
+}
+
+// parseOpacity reads a ZLG_OPACITY value in either form people reach for: a percentage
+// ("20") or a fraction ("0.2"). A value above 1 is read as a percentage, at or below 1 as a
+// fraction - so "1" and "100" both mean fully opaque and there is no reading under which a
+// plausible input silently becomes an invisible window. It reports false for a value it
+// cannot use, in which case the returned 0 leaves the overlay opaque.
+func parseOpacity(raw string) (float64, bool) {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || value < 0 || value > 100 {
+		return 0, false
+	}
+	if value > 1 {
+		value /= 100
+	}
+	return value, true
 }
 
 // versionString returns the ldflags-stamped version, falling back to the module version
