@@ -42,6 +42,17 @@ Adds the GUI launcher.
   It auto-detects an installed system Nerd Font (monospace, so it matches your terminal),
   falling back to the bundled Go Mono when none is found. `ZLG_FONT=/path/to/font.ttf` pins a
   specific font.
+- **`menu` grid layout** - the `menu` module can lay items out as a thumbnail grid
+  (`Options.Grid`) instead of the default list: each item's new `Preview` image is drawn as a
+  tile with its label beneath, arrow keys navigate in two dimensions, and typing still
+  fuzzy-filters. Thumbnails decode in the background (bounded, cgo-free, aspect-preserving) and
+  appear as they land, so a directory of large images stays responsive. The decode/scale core
+  is shared with the icon path in the new `internal/imgutil`, and WebP is now decodable too.
+- **`wallpaper` example** - a thumbnail wallpaper chooser built on the grid layout
+  (`menu/example/wallpaper`), alongside the `dmenu` example. It scans a directory, shows the
+  images as a filterable grid, and on Enter sets the chosen one via `$WALLPAPER_CMD`
+  (`swww`/`swaybg`/`hyprpaper`) or prints the path when that is unset - proving the grid is
+  reusable by an ordinary program and staying compositor-agnostic.
 
 ### Known limitations
 

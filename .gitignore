@@ -8,6 +8,7 @@ coverage.*
 /launcher/gui/gui
 /launcher/tui/tui
 /menu/example/dmenu/dmenu
+/menu/example/wallpaper/wallpaper
 
 # Editors
 .obsidian/

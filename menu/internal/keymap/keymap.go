@@ -19,6 +19,8 @@ const (
 	Backspace
 	Up
 	Down
+	Left
+	Right
 	PageUp
 	PageDown
 	Home
@@ -47,6 +49,8 @@ const (
 	codePageDown  = 109
 	codeUp        = 103
 	codeDown      = 108
+	codeLeft      = 105
+	codeRight     = 106
 )
 
 // printable maps an evdev keycode to its {unshifted, shifted} US-QWERTY runes.
@@ -81,6 +85,10 @@ func Decode(keycode uint32, shift bool) Key {
 		return Key{Special: Up}
 	case codeDown:
 		return Key{Special: Down}
+	case codeLeft:
+		return Key{Special: Left}
+	case codeRight:
+		return Key{Special: Right}
 	case codePageUp:
 		return Key{Special: PageUp}
 	case codePageDown:

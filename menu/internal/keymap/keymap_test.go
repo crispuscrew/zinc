@@ -31,6 +31,8 @@ func TestDecode_SpecialKeys(t *testing.T) {
 		14:  Backspace,
 		103: Up,
 		108: Down,
+		105: Left,
+		106: Right,
 		104: PageUp,
 		109: PageDown,
 		102: Home,

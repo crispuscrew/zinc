@@ -259,6 +259,96 @@ func TestFrame_PartialOpacity(t *testing.T) {
 	}
 }
 
+// solidThumb returns a provider that hands back the same solid-colour image for any preview
+// path, standing in for the async thumbnail store in a deterministic render test.
+func solidThumb(col color.RGBA, w, h int) func(string) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for x := 0; x < w; x++ {
+		for y := 0; y < h; y++ {
+			img.Set(x, y, col)
+		}
+	}
+	return func(string) *image.RGBA { return img }
+}
+
+func gridSample() *picker.Model {
+	return picker.New([]picker.App{
+		{Name: "sunset", Preview: "/w/sunset.jpg"},
+		{Name: "forest", Preview: "/w/forest.jpg"},
+		{Name: "ocean", Preview: "/w/ocean.jpg"},
+	})
+}
+
+// In grid layout the provided thumbnail is drawn into a cell.
+func TestFrame_GridDrawsThumbnail(t *testing.T) {
+	col := color.RGBA{0x11, 0x22, 0x33, 0xff}
+	view := View{Fade: 1, Opacity: 1, Grid: true, CellW: 180, CellH: 140, Thumb: solidThumb(col, 120, 80)}
+	img := Frame(gridSample(), pal, view, 600, 460)
+	if !hasColor(img, col) {
+		t.Fatal("the grid should draw the provided thumbnail into a cell")
+	}
+}
+
+// The selected grid cell shows the selection band and the accent border.
+func TestFrame_GridSelectionBandAndBorder(t *testing.T) {
+	view := View{Fade: 1, Opacity: 1, Grid: true, CellW: 180, CellH: 140}
+	img := Frame(gridSample(), pal, view, 600, 460) // cursor 0 selected by default
+	if !hasColor(img, pal.SelBG) {
+		t.Fatal("the selected cell should paint the selection band")
+	}
+	if !hasColor(img, pal.Accent) {
+		t.Fatal("the selected cell should draw the accent border")
+	}
+}
+
+// A grid with no Thumb provider (or unready thumbnails) still renders every visible label
+// without panicking, so the placeholder-tile state is safe.
+func TestFrame_GridWithoutThumbsIsSafe(t *testing.T) {
+	view := View{Fade: 1, Opacity: 1, Grid: true, CellW: 180, CellH: 140}
+	img := Frame(gridSample(), pal, view, 600, 460)
+	if !hasGlyphPixels(img, headerH+4, 460-footerH) {
+		t.Fatal("cell labels should still draw when thumbnails are not ready")
+	}
+}
+
+func TestGridColumns(t *testing.T) {
+	if got := GridColumns(920, 180); got < 3 {
+		t.Fatalf("GridColumns(920,180) = %d, want at least 3", got)
+	}
+	if got := GridColumns(100, 180); got != 1 {
+		t.Fatalf("GridColumns(100,180) = %d, want 1 (clamped)", got)
+	}
+	if GridColumns(600, 0) < 1 {
+		t.Fatal("GridColumns must clamp a zero cell width to a default and return at least 1")
+	}
+}
+
+func TestThumbBox(t *testing.T) {
+	w, h := ThumbBox(180, 140)
+	if w <= 0 || h <= 0 || w >= 180 || h >= 140 {
+		t.Fatalf("ThumbBox(180,140) = %dx%d, want a positive box smaller than the cell", w, h)
+	}
+	if w0, h0 := ThumbBox(0, 0); w0 <= 0 || h0 <= 0 {
+		t.Fatalf("ThumbBox(0,0) = %dx%d, want positive defaults", w0, h0)
+	}
+}
+
+// gridScrollStart keeps the cursor's cell inside the visible window for every cursor position,
+// and starts each window on a row boundary.
+func TestGridScrollStart_KeepsCursorVisible(t *testing.T) {
+	const count, cols, rows = 30, 4, 3
+	page := cols * rows
+	for cursor := 0; cursor < count; cursor++ {
+		start := gridScrollStart(cursor, count, cols, rows)
+		if start < 0 || start%cols != 0 {
+			t.Fatalf("cursor %d: start %d not a non-negative row boundary", cursor, start)
+		}
+		if cursor < start || cursor >= start+page {
+			t.Fatalf("cursor %d not visible in window [%d,%d)", cursor, start, start+page)
+		}
+	}
+}
+
 func hasColor(img *image.RGBA, want color.Color) bool {
 	// compare RGBA tuples pixel by pixel against a palette colour.
 	wr, wg, wb, wa := want.RGBA()

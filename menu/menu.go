@@ -12,6 +12,7 @@ package menu
 
 import (
 	"fmt"
+	"image"
 	"os"
 	"syscall"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/crispuscrew/zinc/menu/internal/picker"
 	"github.com/crispuscrew/zinc/menu/internal/render"
 	"github.com/crispuscrew/zinc/menu/internal/theme"
+	"github.com/crispuscrew/zinc/menu/internal/thumbs"
 
 	"github.com/rajveermalviya/go-wayland/wayland/client"
 )
@@ -30,6 +32,7 @@ type Item struct {
 	Description string // secondary text, shown dimmed after the label
 	Group       string // optional section header; keep items of one group adjacent (shown only when idle)
 	Icon        string // optional icon: a freedesktop icon name or an absolute image path
+	Preview     string // optional image path, drawn as a thumbnail tile in grid layout (Options.Grid)
 	Marked      bool   // draws an indicator dot; the caller decides what it means (e.g. running)
 }
 
@@ -51,7 +54,19 @@ type Options struct {
 	Opacity  float64 // background opacity 0..1; <= 0 means opaque
 	NoAnim   bool    // disable the entrance fade-in
 	Debug    bool    // trace the Wayland handshake to stderr
+
+	// Grid lays items out as a thumbnail grid (each Item.Preview drawn as a tile) instead of
+	// the default list, for pickers that are visual rather than textual - a wallpaper chooser,
+	// an icon picker. Arrow keys navigate in two dimensions; typing still fuzzy-filters.
+	Grid       bool
+	CellWidth  int // grid cell width in px (default 180); ignored unless Grid
+	CellHeight int // grid cell height in px (default 140); ignored unless Grid
 }
+
+const (
+	defaultCellWidth  = 180
+	defaultCellHeight = 140
+)
 
 const (
 	// The overlay is a fixed-size, centered floating panel (like fuzzel/wofi), not a tiled
@@ -98,6 +113,14 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 	if opts.Opacity > 0 && opts.Opacity < 1 {
 		application.opacity = opts.Opacity
 	}
+	if opts.Grid {
+		application.grid = true
+		application.cellW = orInt(opts.CellWidth, defaultCellWidth)
+		application.cellH = orInt(opts.CellHeight, defaultCellHeight)
+		// Decode thumbnails at exactly the box the renderer draws them into, off the render path.
+		boxW, boxH := render.ThumbBox(application.cellW, application.cellH)
+		application.thumbs = thumbs.New(boxW, boxH)
+	}
 	// Fade the overlay in unless the caller disabled it, in which case it starts fully shown.
 	if !opts.NoAnim {
 		application.fade = 0
@@ -123,6 +146,7 @@ func toApps(items []Item) []picker.App {
 			Description: item.Description,
 			Group:       item.Group,
 			Icon:        icons.Resolve(item.Icon, render.IconSize),
+			Preview:     item.Preview,
 			Running:     item.Marked,
 		}
 	}
@@ -151,6 +175,11 @@ type app struct {
 	prompt   string
 	footer   string
 	appID    string
+
+	grid   bool
+	cellW  int
+	cellH  int
+	thumbs *thumbs.Store // async thumbnail decode+cache for the grid layout; nil unless grid
 
 	palette theme.Palette
 
@@ -439,11 +468,21 @@ func (application *app) handleKey(event client.KeyboardKeyEvent) {
 		application.model.Backspace()
 		application.redraw()
 	case keymap.Up:
-		application.model.MoveCursor(-1)
+		application.model.MoveCursor(-application.rowStep())
 		application.redraw()
 	case keymap.Down:
-		application.model.MoveCursor(1)
+		application.model.MoveCursor(application.rowStep())
 		application.redraw()
+	case keymap.Left:
+		if application.grid {
+			application.model.MoveCursor(-1)
+			application.redraw()
+		}
+	case keymap.Right:
+		if application.grid {
+			application.model.MoveCursor(1)
+			application.redraw()
+		}
 	case keymap.PageUp:
 		application.model.MoveCursor(-pageStep)
 		application.redraw()
@@ -622,7 +661,17 @@ func (application *app) redraw() {
 	if buf == nil || buf.mmap == nil {
 		return
 	}
-	view := render.View{Prompt: application.prompt, Footer: application.footer, Fade: application.fade, Opacity: application.opacity, Error: application.launchErr}
+	view := render.View{
+		Prompt:  application.prompt,
+		Footer:  application.footer,
+		Fade:    application.fade,
+		Opacity: application.opacity,
+		Error:   application.launchErr,
+		Grid:    application.grid,
+		CellW:   application.cellW,
+		CellH:   application.cellH,
+		Thumb:   application.thumbFor,
+	}
 	frame := render.Frame(application.model, application.palette, view, buf.width, buf.height)
 	src := frame.Pix
 	dst := buf.mmap
@@ -641,11 +690,37 @@ func (application *app) redraw() {
 	// depend on binding wl_compositor at v4+. We redraw the whole surface, so full-surface
 	// damage is exactly right.
 	application.surface.Damage(0, 0, int32(buf.width), int32(buf.height))
-	// While the entrance fade runs, ask for a frame callback so the next step is drawn.
-	if application.animating {
+	// Ask for a frame callback while there is animation to advance, or (in the grid) while
+	// thumbnails are still decoding in the background, so the next step or thumbnail is drawn.
+	if application.animating || application.thumbsPending() {
 		application.requestFrame()
 	}
 	application.surface.Commit()
+}
+
+// thumbFor returns the decoded thumbnail for a preview path, scheduling its background decode
+// on first request; nil means "not ready yet" and the renderer draws a placeholder tile. It is
+// the render-time bridge from the picker's Preview paths to the async thumbnail store.
+func (application *app) thumbFor(preview string) *image.RGBA {
+	if application.thumbs == nil {
+		return nil
+	}
+	thumb, _ := application.thumbs.Get(preview)
+	return thumb
+}
+
+// thumbsPending reports whether any grid thumbnail is still decoding.
+func (application *app) thumbsPending() bool {
+	return application.thumbs != nil && application.thumbs.Pending()
+}
+
+// rowStep is how far Up/Down move the cursor: one item in the list, a whole row (the current
+// column count) in the grid, so vertical arrows move between rows rather than neighbours.
+func (application *app) rowStep() int {
+	if !application.grid {
+		return 1
+	}
+	return render.GridColumns(application.width, application.cellW)
 }
 
 // requestFrame asks the compositor for a frame callback (paced to the display), so the
@@ -662,15 +737,25 @@ func (application *app) requestFrame() {
 	application.framePending = true
 }
 
-// onFrame advances the fade using the callback's timestamp and redraws, until the fade is
-// complete (redraw stops requesting frames once animating is false).
+// onFrame drives the two things paced by frame callbacks: the entrance fade, and (in the grid)
+// picking up background-decoded thumbnails. While the fade runs it advances and redraws. Once
+// the fade is done, if a thumbnail decoded since the last frame it redraws so it appears; if
+// none is ready yet but some are still decoding, it just asks for another frame - polling
+// without redrawing until one actually lands.
 func (application *app) onFrame(event client.CallbackDoneEvent) {
 	application.framePending = false
-	if !application.animating {
+	if application.animating {
+		application.advanceFade(event.CallbackData)
+		application.redraw()
 		return
 	}
-	application.advanceFade(event.CallbackData)
-	application.redraw()
+	if application.thumbs != nil {
+		if application.thumbs.TakeDirty() {
+			application.redraw()
+		} else if application.thumbs.Pending() {
+			application.requestFrame()
+		}
+	}
 }
 
 // advanceFade sets the current fade from the elapsed time (ease-out cubic) and ends the

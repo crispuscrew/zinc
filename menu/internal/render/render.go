@@ -42,15 +42,34 @@ const (
 // IconSize is the pixel size icons are scaled to and drawn at; the caller pre-scales to this.
 const IconSize = 16
 
+// Grid-layout geometry (used only when View.Grid is set).
+const (
+	gridGap      = 14   // gap between grid cells
+	cellPad      = 6    // inner padding around a cell's thumbnail
+	cellLabelH   = rowH // label row height beneath a cell's thumbnail
+	defaultCellW = 180  // cell width when View.CellW is unset
+	defaultCellH = 140  // cell height when View.CellH is unset
+)
+
 // View is the transient, per-frame state the renderer needs beyond the model: the entrance
-// fade (0..1), the steady-state background opacity (0..1), and an optional launch error to
-// surface in a banner.
+// fade (0..1), the steady-state background opacity (0..1), an optional launch error to surface
+// in a banner, and the layout (list by default, or a thumbnail grid).
 type View struct {
 	Prompt  string
 	Footer  string // the hint line at the bottom (default "up/down move   enter select   esc quit")
 	Fade    float64
 	Opacity float64
 	Error   string
+
+	// Grid switches from the default one-per-row list to a thumbnail grid, drawing each item's
+	// Preview image (fetched through Thumb) as a tile with its label beneath.
+	Grid  bool
+	CellW int // grid cell width in px (default defaultCellW)
+	CellH int // grid cell height in px (default defaultCellH)
+	// Thumb returns the decoded, box-fitted thumbnail for a preview path, or nil if it is not
+	// ready yet (drawn as a placeholder tile). It is called only for the cells actually on
+	// screen, so a caller can lazily decode exactly what is visible. Ignored unless Grid.
+	Thumb func(preview string) *image.RGBA
 }
 
 // Frame renders the picker at width x height pixels into a fresh RGBA image using pal and
@@ -59,7 +78,39 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	fill(img, img.Bounds(), pal.BG)
 
-	// Prompt line: the (accent) prompt, the query, then a block cursor.
+	drawPromptHeader(img, pal, view, mdl, width)
+
+	visible := mdl.Visible()
+	listTop := headerH + 4
+	listBottom := height - footerH
+	if view.Error != "" {
+		listBottom -= errorH
+	}
+	if listBottom < listTop+rowH {
+		listBottom = listTop + rowH
+	}
+
+	switch {
+	case len(visible) == 0:
+		drawText(img, marginX, listTop+faceAscent, pal.Dim, "no matches")
+	case view.Grid:
+		drawGrid(img, mdl, pal, view, visible, width, listTop, listBottom)
+	default:
+		drawList(img, mdl, pal, visible, width, listTop, listBottom)
+	}
+
+	if view.Error != "" {
+		drawError(img, pal, width, height, view.Error)
+	}
+	drawFooter(img, pal, width, height, view.Footer, len(visible))
+
+	finish(img, view.Opacity, view.Fade)
+	return img
+}
+
+// drawPromptHeader draws the prompt line (accent prompt, query, block cursor) and the divider
+// beneath it - shared by the list and grid layouts.
+func drawPromptHeader(img *image.RGBA, pal theme.Palette, view View, mdl *picker.Model, width int) {
 	prompt := view.Prompt
 	if prompt == "" {
 		prompt = "> "
@@ -72,48 +123,188 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 	fill(img, image.Rect(cursorX, marginY, cursorX+faceAdvance, marginY+faceHeight), pal.Accent)
 	// Separator under the prompt (a subtle, theme-matched divider).
 	fill(img, image.Rect(marginX, headerH-1, width-marginX, headerH), pal.SelBG)
+}
 
-	visible := mdl.Visible()
-	listTop := headerH + 4
-	listBottom := height - footerH
-	if view.Error != "" {
-		listBottom -= errorH
-	}
-	if listBottom < listTop+rowH {
-		listBottom = listTop + rowH
-	}
+// drawList renders the default one-item-per-row list into [listTop,listBottom), grouping into
+// sections only when idle (typing flattens to the ranked list). visible is non-empty.
+func drawList(img *image.RGBA, mdl *picker.Model, pal theme.Palette, visible []picker.App, width, listTop, listBottom int) {
 	rows := (listBottom - listTop) / rowH
 	if rows < 1 {
 		rows = 1
 	}
-
-	if len(visible) == 0 {
-		drawText(img, marginX, listTop+faceAscent, pal.Dim, "no matches")
-	} else {
-		// Group into sections only when idle; typing flattens to the ranked list.
-		grouping := mdl.Query() == "" && anyGroup(visible)
-		display := buildRows(visible, grouping)
-		descCol := descColumn(visible)
-		iconCol := anyIcon(visible)
-		start := scrollStart(rowForItem(display, mdl.Cursor()), len(display), rows)
-		for offset := 0; offset < rows && start+offset < len(display); offset++ {
-			row := display[start+offset]
-			y := listTop + offset*rowH
-			if row.isHeader {
-				drawHeader(img, pal, width, y, row.header)
-			} else {
-				drawRow(img, pal, width, y, visible[row.item], descCol, iconCol, row.item == mdl.Cursor())
-			}
+	grouping := mdl.Query() == "" && anyGroup(visible)
+	display := buildRows(visible, grouping)
+	descCol := descColumn(visible)
+	iconCol := anyIcon(visible)
+	start := scrollStart(rowForItem(display, mdl.Cursor()), len(display), rows)
+	for offset := 0; offset < rows && start+offset < len(display); offset++ {
+		row := display[start+offset]
+		y := listTop + offset*rowH
+		if row.isHeader {
+			drawHeader(img, pal, width, y, row.header)
+		} else {
+			drawRow(img, pal, width, y, visible[row.item], descCol, iconCol, row.item == mdl.Cursor())
 		}
 	}
+}
 
-	if view.Error != "" {
-		drawError(img, pal, width, height, view.Error)
+// drawGrid renders the items as a thumbnail grid into [listTop,listBottom): as many CellW-wide
+// columns as fit, scrolling by whole rows to keep the cursor visible. visible is non-empty.
+func drawGrid(img *image.RGBA, mdl *picker.Model, pal theme.Palette, view View, visible []picker.App, width, listTop, listBottom int) {
+	cellW, cellH := view.CellW, view.CellH
+	if cellW <= 0 {
+		cellW = defaultCellW
 	}
-	drawFooter(img, pal, width, height, view.Footer, len(visible))
+	if cellH <= 0 {
+		cellH = defaultCellH
+	}
+	cols := GridColumns(width, cellW)
+	rows := (listBottom - listTop + gridGap) / (cellH + gridGap)
+	if rows < 1 {
+		rows = 1
+	}
+	used := cols*cellW + (cols-1)*gridGap
+	originX := marginX + (width-2*marginX-used)/2
+	if originX < marginX {
+		originX = marginX
+	}
+	start := gridScrollStart(mdl.Cursor(), len(visible), cols, rows)
+	for index := 0; index < cols*rows && start+index < len(visible); index++ {
+		column := index % cols
+		row := index / cols
+		x := originX + column*(cellW+gridGap)
+		y := listTop + row*(cellH+gridGap)
+		drawCell(img, pal, view, x, y, cellW, cellH, visible[start+index], start+index == mdl.Cursor())
+	}
+}
 
-	finish(img, view.Opacity, view.Fade)
-	return img
+// drawCell draws one grid cell at pixel (x,y): a selection band and accent border when
+// selected, the thumbnail (or a placeholder tile until it decodes) centered in the thumbnail
+// box, and the label centered beneath it.
+func drawCell(img *image.RGBA, pal theme.Palette, view View, x, y, cellW, cellH int, app picker.App, selected bool) {
+	boxLeft := x + cellPad
+	boxTop := y + cellPad
+	boxW := cellW - 2*cellPad
+	boxH := cellH - cellLabelH - cellPad
+	if boxW < 1 {
+		boxW = 1
+	}
+	if boxH < 1 {
+		boxH = 1
+	}
+
+	if selected {
+		fill(img, image.Rect(x, y, x+cellW, y+cellH), pal.SelBG)
+		strokeRect(img, image.Rect(x, y, x+cellW, y+cellH), 2, pal.Accent)
+	}
+
+	// A backing tile so an undecoded cell still reads as a tile, and any letterbox margins
+	// around the fitted thumbnail frame it rather than showing the raw background.
+	fill(img, image.Rect(boxLeft, boxTop, boxLeft+boxW, boxTop+boxH), tileColor(pal, selected))
+	var thumb *image.RGBA
+	if view.Thumb != nil && app.Preview != "" {
+		thumb = view.Thumb(app.Preview)
+	}
+	if thumb != nil {
+		thumbW := thumb.Bounds().Dx()
+		thumbH := thumb.Bounds().Dy()
+		if thumbW > boxW {
+			thumbW = boxW
+		}
+		if thumbH > boxH {
+			thumbH = boxH
+		}
+		tx := boxLeft + (boxW-thumbW)/2
+		ty := boxTop + (boxH-thumbH)/2
+		draw.Draw(img, image.Rect(tx, ty, tx+thumbW, ty+thumbH), thumb, image.Point{}, draw.Over)
+	}
+
+	// Label beneath the thumbnail, centered and truncated to the cell width.
+	labelColor := pal.FG
+	if selected {
+		labelColor = pal.SelFG
+	}
+	maxChars := boxW / faceAdvance
+	text := truncate(app.Name, maxChars)
+	labelX := x + (cellW-runeLen(text)*faceAdvance)/2
+	if labelX < x+cellPad {
+		labelX = x + cellPad
+	}
+	labelBaseline := y + cellH - cellLabelH + (cellLabelH-faceHeight)/2 + faceAscent
+	drawText(img, labelX, labelBaseline, labelColor, text)
+}
+
+// tileColor is the colour behind a cell's thumbnail: a panel one step off the layer it sits
+// on, so the tile stays visible whether or not its thumbnail has decoded.
+func tileColor(pal theme.Palette, selected bool) color.Color {
+	if selected {
+		return pal.BG
+	}
+	return pal.SelBG
+}
+
+// strokeRect draws a hollow rectangle (four filled edges of the given thickness) in col.
+func strokeRect(img *image.RGBA, rect image.Rectangle, thickness int, col color.Color) {
+	fill(img, image.Rect(rect.Min.X, rect.Min.Y, rect.Max.X, rect.Min.Y+thickness), col)
+	fill(img, image.Rect(rect.Min.X, rect.Max.Y-thickness, rect.Max.X, rect.Max.Y), col)
+	fill(img, image.Rect(rect.Min.X, rect.Min.Y, rect.Min.X+thickness, rect.Max.Y), col)
+	fill(img, image.Rect(rect.Max.X-thickness, rect.Min.Y, rect.Max.X, rect.Max.Y), col)
+}
+
+// GridColumns returns how many CellW-wide cells fit across an overlay of the given pixel
+// width, at least one. The menu uses it to translate an Up/Down keypress into a whole-row
+// cursor jump, matching what drawGrid lays out.
+func GridColumns(width, cellW int) int {
+	if cellW <= 0 {
+		cellW = defaultCellW
+	}
+	avail := width - 2*marginX
+	cols := (avail + gridGap) / (cellW + gridGap)
+	if cols < 1 {
+		cols = 1
+	}
+	return cols
+}
+
+// ThumbBox returns the pixel box a thumbnail is fit into inside a cellW x cellH grid cell, so
+// a caller's thumbnail store scales to exactly the size drawCell draws.
+func ThumbBox(cellW, cellH int) (int, int) {
+	if cellW <= 0 {
+		cellW = defaultCellW
+	}
+	if cellH <= 0 {
+		cellH = defaultCellH
+	}
+	boxW := cellW - 2*cellPad
+	boxH := cellH - cellLabelH - cellPad
+	if boxW < 1 {
+		boxW = 1
+	}
+	if boxH < 1 {
+		boxH = 1
+	}
+	return boxW, boxH
+}
+
+// gridScrollStart returns the index of the first item to draw so the cursor's row stays on
+// screen, scrolling by whole rows once the cursor would fall past the last visible row.
+func gridScrollStart(cursor, count, cols, rows int) int {
+	if cols < 1 {
+		cols = 1
+	}
+	cursorRow := cursor / cols
+	totalRows := (count + cols - 1) / cols
+	startRow := 0
+	if cursorRow >= rows {
+		startRow = cursorRow - rows + 1
+	}
+	if startRow+rows > totalRows {
+		startRow = totalRows - rows
+	}
+	if startRow < 0 {
+		startRow = 0
+	}
+	return startRow * cols
 }
 
 // descColumn returns the column (in characters) at which descriptions line up: the longest
