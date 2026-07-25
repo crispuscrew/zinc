@@ -9,6 +9,7 @@ coverage.*
 /launcher/tui/tui
 /menu/example/dmenu/dmenu
 /menu/example/wallpaper/wallpaper
+/menu/example/wallpaper/gen/gen
 
 # Editors
 .obsidian/

@@ -53,6 +53,13 @@ Adds the GUI launcher.
   images as a filterable grid, and on Enter sets the chosen one via `$WALLPAPER_CMD`
   (`swww`/`swaybg`/`hyprpaper`) or prints the path when that is unset - proving the grid is
   reusable by an ordinary program and staying compositor-agnostic.
+- **`make -C menu wallpaper-demo`** - the grid's counterpart to the launchers' `demo` targets:
+  generates sample wallpapers, builds the example, and opens the grid over them, so the layout
+  can be tried in one command. `WALLPAPER_DIR=...` points it at your own images instead. The
+  samples are generated deterministically (`menu/example/wallpaper/gen`) rather than committed,
+  so the repository carries no binary image assets.
+- **Screenshots** - the READMEs now show the launcher and the grid (`docs/media`), captured
+  headlessly under sway so they are reproducible and contain nobody's desktop.
 
 ### Fixed
 

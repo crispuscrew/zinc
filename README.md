@@ -111,6 +111,16 @@ zlg                            # open the picker window: type to filter, enter l
 zlg firefox                    # or launch one directly (bind this to a desktop hotkey)
 ```
 
+![The zlg launcher overlay, listing apps grouped by section](docs/media/zlg-launcher.png)
+
+Try either launcher against the bundled demo apps, without touching your real config:
+
+```sh
+make -C launcher/tui demo      # the terminal picker
+make -C launcher/gui demo      # the Wayland overlay (needs a wlroots compositor)
+make -C menu wallpaper-demo    # the overlay's thumbnail-grid layout
+```
+
 In the TUI (default scheme): `n` new, `e` edit, `r` run, `s` stop, `l` logs, `d` delete,
 `R` rename, `?` keybind schemes, `q` quit. In a form: `tab`/arrows move, `space` toggles,
 `ctrl+d` clears a field, `ctrl+r` resolves the image to a pinned digest, `ctrl+s` saves,

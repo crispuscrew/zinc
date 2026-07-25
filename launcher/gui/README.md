@@ -11,6 +11,14 @@ zlg firefox    # launch a defined app directly (bind this to a hotkey)
 zlg --version
 ```
 
+![The zlg launcher overlay, listing the demo apps grouped by section](../../docs/media/zlg-launcher.png)
+
+To try it without installing anything or touching your real config:
+
+```sh
+make -C launcher/gui demo    # builds zlg, opens it over the bundled demo apps
+```
+
 Like `zcc` and `zlt`, `zlg` **never imports the runtime**: it lists what `zcc` authored and
 shells out to the `zcr` binary to run the chosen app, so dependency auto-start, the network
 lock-down, and derived-image builds all stay `zcr`'s job.

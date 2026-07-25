@@ -98,10 +98,23 @@ Set `Options.Grid` and the menu becomes a **thumbnail grid** instead of a list: 
 dimensions, and typing still fuzzy-filters. It is meant for visual pickers - a wallpaper chooser,
 an icon or emoji picker - rather than textual menus.
 
+![The menu module's thumbnail grid, showing eight wallpapers of differing aspect ratios](../docs/media/menu-grid.png)
+
 Thumbnails decode **off the render path**, in bounded, cgo-free background workers, and appear as
 they land, so pointing the grid at a directory of large photos does not stall the overlay. A cell
 whose thumbnail is not ready yet shows a placeholder tile until it is. Decoding is aspect-preserving
-(letterboxed, never cropped) and supports PNG, JPEG, GIF, and WebP.
+(letterboxed, never cropped) and supports PNG, JPEG, GIF, and WebP - the ultrawide, square and
+portrait sources above keep their shape instead of being stretched to fill the tile.
+
+Try it without writing any code:
+
+```sh
+make -C menu wallpaper-demo                                  # generated sample images
+make -C menu wallpaper-demo WALLPAPER_DIR=~/Pictures/Walls    # or your own
+```
+
+That generates the sample wallpapers, builds the example, and opens the grid. It needs a running
+wlroots compositor (niri, Hyprland, sway) for the layer-shell overlay.
 
 ```go
 items := []menu.Item{
@@ -137,8 +150,9 @@ The [`wallpaper`](example/wallpaper) example is a complete chooser built this wa
 `menu` is a library, not a tool, so it only carries the containerized checks:
 
 ```sh
-make check        # gofmt + vet + test in the pinned container
-make vendor       # refresh vendored deps (the only step that needs network)
+make check            # gofmt + vet + test in the pinned container
+make vendor           # refresh vendored deps (the only step that needs network)
+make wallpaper-demo   # generate sample images, build the wallpaper example, open the grid
 ```
 
 ## Known limits
