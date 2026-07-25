@@ -17,11 +17,15 @@ const (
 	// maxThumbBytes caps how much of a source file is read. Wallpapers are large, so this is
 	// far more generous than the icon cap, but still bounds a hostile or corrupt file.
 	maxThumbBytes = 64 << 20
-	// maxThumbPixels rejects a source whose declared dimensions would allocate too much when
-	// decoded (up to ~8K fits; a crafted file claiming more is refused rather than OOM-ing).
-	maxThumbPixels = 64 << 20
+	// maxThumbDecoded is the memory one decode may allocate. It fits every plausible wallpaper -
+	// an 8K photograph decodes to about 132 MiB, a 4K one at 16 bits per channel to about 66 -
+	// while refusing a file crafted to be enormous once decoded rather than OOM-ing on it. It is
+	// a byte budget rather than a pixel count because pixels do not bound memory: the same
+	// dimensions cost 8x more as 16-bit-per-channel than as a paletted image.
+	maxThumbDecoded = 160 << 20
 	// maxInFlight bounds concurrent decodes so a big grid cannot spawn hundreds of goroutines
-	// each holding a full decoded image; a few at a time keeps peak memory modest.
+	// each holding a full decoded image. With the budget above it also sets the ceiling on the
+	// store's peak: at most maxInFlight x maxThumbDecoded of decoded pixels at any moment.
 	maxInFlight = 3
 )
 
@@ -81,7 +85,7 @@ func (store *Store) decode(path string) {
 	store.sem <- struct{}{}
 	defer func() { <-store.sem }()
 
-	thumb := imgutil.Fit(imgutil.Decode(path, maxThumbBytes, maxThumbPixels), store.boxW, store.boxH)
+	thumb := imgutil.Fit(imgutil.Decode(path, maxThumbBytes, maxThumbDecoded), store.boxW, store.boxH)
 
 	store.mu.Lock()
 	store.cache[path] = thumb // may be nil: records that we tried and there is nothing to draw

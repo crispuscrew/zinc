@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"image"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/crispuscrew/zinc/menu/internal/icons"
@@ -40,6 +41,13 @@ type Item struct {
 // menu open and shows the error in a banner; returning nil closes the menu with that item
 // selected. This lets the caller act while the menu is up - launch a program, print a line.
 // It may be nil, in which case Enter simply closes the menu and Run returns the chosen index.
+//
+// It runs on its own goroutine rather than on the Wayland event loop, so a slow activation -
+// starting a container, building an image - leaves the overlay drawing and responsive instead
+// of freezing it on screen while it holds an exclusive keyboard grab. Only one call is ever in
+// flight: the menu shows a busy banner and ignores Enter until it returns. Esc takes the
+// overlay down immediately without waiting, and Run then returns once the call finishes, so no
+// activation ever outlives Run.
 type ActivateFunc func(item Item) error
 
 // Options tunes one Run. The zero value is usable: a default-size, opaque, animated overlay
@@ -47,6 +55,7 @@ type ActivateFunc func(item Item) error
 type Options struct {
 	Prompt   string  // drawn before the query (default "> ")
 	Footer   string  // hint line at the bottom (default "up/down move   enter select   esc quit")
+	BusyVerb string  // verb in the banner shown while ActivateFunc runs, before the item label (default "running")
 	AppID    string  // layer-surface namespace / app-id for compositor window rules (default "menu")
 	FontPath string  // .ttf/.otf to render with; empty keeps the process default (a system Nerd Font found at startup, else Go Mono)
 	Width    int     // overlay width in px (default 720)
@@ -76,6 +85,8 @@ const (
 	pageStep       = 10
 	edgeStep       = 1 << 20 // Home/End: jump far enough to clamp to the first/last row
 	fadeDurationMs = 160     // how long the entrance fade-in takes
+	busyDotMs      = 400     // how long each step of the busy banner's cycling ellipsis lasts
+	busyDotMax     = 3       // how many dots the ellipsis cycles through
 )
 
 // debugOn gates Wayland-handshake tracing; Run sets it from Options.Debug.
@@ -103,6 +114,7 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 		palette:  theme.Detect(),
 		prompt:   orString(opts.Prompt, "> "),
 		footer:   opts.Footer, // empty falls back to a neutral default in the renderer
+		busyVerb: orString(opts.BusyVerb, "running"),
 		appID:    orString(opts.AppID, "menu"),
 		width:    orInt(opts.Width, defaultWidth),
 		height:   orInt(opts.Height, defaultHeight),
@@ -134,8 +146,18 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 	if err := application.connect(); err != nil {
 		return -1, err
 	}
-	if err := application.loop(); err != nil {
-		return -1, err
+	loopErr := application.loop()
+	// Tear the overlay down before waiting on the activation. The user may have pressed Esc
+	// while a slow one was still running, and the window must not sit on screen holding an
+	// exclusive keyboard grab until it finishes - that is the whole point of dismissing it.
+	// cleanup is idempotent, so the deferred call above is harmless.
+	application.cleanup()
+	activateErr := application.awaitActivate()
+	switch {
+	case loopErr != nil:
+		return -1, loopErr
+	case activateErr != nil:
+		return -1, activateErr
 	}
 	return application.selected, nil
 }
@@ -178,6 +200,7 @@ type app struct {
 	activate ActivateFunc
 	prompt   string
 	footer   string
+	busyVerb string
 	appID    string
 
 	grid   bool
@@ -216,6 +239,15 @@ type app struct {
 	launchErr string // an activate failure shown in the window, dismissed on the next keypress
 	runErr    error
 	closed    bool
+
+	// One activation at a time, running off the event loop. activateDone is buffered so the
+	// goroutine can always deliver its result and exit, even after the user dismissed the
+	// overlay and nothing is watching it any more.
+	activating   bool
+	activateItem string     // the label being activated, for the busy banner
+	activateIdx  int        // its index into items, reported as selected once it succeeds
+	activateDone chan error // the in-flight result; nil when nothing is activating
+	frameMs      uint32     // the last frame callback's timestamp, which paces the busy ellipsis
 }
 
 // connect opens the display, binds the globals, and creates the window.
@@ -510,23 +542,82 @@ func (application *app) handleKey(event client.KeyboardKeyEvent) {
 	}
 }
 
-// activateSelected runs the caller's ActivateFunc on the highlighted item. If it returns an
-// error, the error is shown in the window and the menu stays open (dismissed on the next
-// keypress); otherwise the menu closes with that item selected.
+// activateSelected starts the caller's ActivateFunc on the highlighted item, on its own
+// goroutine. Running it inline would block the event loop for as long as it takes - seconds to
+// start a container, minutes to build an image - during which the overlay could not redraw and
+// would not give up its exclusive keyboard grab, so the whole desktop looked hung. Instead the
+// menu shows a busy banner and keeps drawing while it runs; finishActivate handles the result.
+//
+// A second Enter while one is in flight is ignored rather than starting a duplicate: two
+// concurrent activations of the same item are exactly the double-launch race that lets one
+// teardown kill the other's work.
 func (application *app) activateSelected() {
+	if application.activating {
+		return
+	}
 	index, ok := application.model.SelectedIndex()
 	if !ok {
 		return
 	}
-	if application.activate != nil {
-		if err := application.activate(application.items[index]); err != nil {
-			application.launchErr = err.Error()
-			application.redraw()
-			return
-		}
+	if application.activate == nil {
+		application.selected = index
+		application.closed = true
+		return
 	}
-	application.selected = index
+	item := application.items[index]
+	activate := application.activate
+	done := make(chan error, 1)
+	application.activating = true
+	application.activateItem = item.Label
+	application.activateIdx = index
+	application.activateDone = done
+	application.launchErr = ""
+	go func() { done <- activate(item) }()
+	application.redraw() // paint the busy banner and arm the poll that collects the result
+}
+
+// finishActivate applies a completed activation: an error goes into the banner and the menu
+// stays open (dismissed on the next keypress), success closes it with that item selected.
+func (application *app) finishActivate(err error) {
+	application.activating = false
+	application.activateDone = nil
+	if err != nil {
+		application.launchErr = err.Error()
+		application.redraw()
+		return
+	}
+	application.selected = application.activateIdx
 	application.closed = true
+}
+
+// awaitActivate blocks until an activation the user dismissed the overlay out of has finished,
+// so no ActivateFunc call ever outlives Run - a caller that pops the menu on a hotkey gets its
+// state back when Run returns, with nothing still running behind it. Run calls this only after
+// the overlay is off screen, so a slow activation delays Run's return and nothing else. The
+// item still counts as activated if it succeeded: the work happened, the user only stopped
+// watching it.
+func (application *app) awaitActivate() error {
+	if !application.activating {
+		return nil
+	}
+	err := <-application.activateDone
+	application.activating = false
+	application.activateDone = nil
+	if err == nil {
+		application.selected = application.activateIdx
+	}
+	return err
+}
+
+// busyBanner is the line shown while an activation runs: the caller's verb, the item, and an
+// ellipsis that cycles with the compositor's frame clock, so a launch that takes minutes still
+// visibly reads as working rather than as a frozen window.
+func (application *app) busyBanner() string {
+	if !application.activating {
+		return ""
+	}
+	dots := 1 + int(application.frameMs/busyDotMs)%busyDotMax
+	return application.busyVerb + " " + application.activateItem + strings.Repeat(".", dots)
 }
 
 // handleLayerConfigure acknowledges the layer-surface configure, adopts the size the
@@ -679,6 +770,7 @@ func (application *app) redraw() {
 		Fade:    application.fade,
 		Opacity: application.opacity,
 		Error:   application.launchErr,
+		Status:  application.busyBanner(),
 		Grid:    application.grid,
 		CellW:   application.cellW,
 		CellH:   application.cellH,
@@ -702,12 +794,16 @@ func (application *app) redraw() {
 	// depend on binding wl_compositor at v4+. We redraw the whole surface, so full-surface
 	// damage is exactly right.
 	application.surface.Damage(0, 0, int32(buf.width), int32(buf.height))
-	// Ask for a frame callback while there is animation to advance, or (in the grid) while any
-	// thumbnail is still decoding or has decoded but not yet been drawn, so the next step or
-	// thumbnail is picked up. The "decoded but not drawn" half matters: a decode that lands
-	// after Frame read the cache but before this check would otherwise leave nothing armed to
-	// draw it, stranding that tile on its placeholder until the next keypress.
-	if application.animating || application.thumbsActive() {
+	// Ask for a frame callback while there is anything left to pick up: animation to advance,
+	// an activation to collect, or (in the grid) a thumbnail still decoding or decoded but not
+	// yet drawn. The "decoded but not drawn" half matters: a decode that lands after Frame read
+	// the cache but before this check would otherwise leave nothing armed to draw it, stranding
+	// that tile on its placeholder until the next keypress.
+	//
+	// The request must be followed by the commit below. wl_surface.frame is double-buffered
+	// state that the compositor only applies when the surface commits, so asking for a callback
+	// without committing arms one that can never fire.
+	if application.animating || application.activating || application.thumbsActive() {
 		application.requestFrame()
 	}
 	application.surface.Commit()
@@ -753,26 +849,39 @@ func (application *app) requestFrame() {
 	application.framePending = true
 }
 
-// onFrame drives the two things paced by frame callbacks: the entrance fade, and (in the grid)
-// picking up background-decoded thumbnails. While the fade runs it advances and redraws. Once
-// the fade is done, if a thumbnail decoded since the last frame it redraws so it appears; if
-// none is ready yet but some are still decoding, it just asks for another frame - polling
-// without redrawing until one actually lands.
+// onFrame drives everything paced by frame callbacks: the entrance fade, collecting a finished
+// activation, and (in the grid) picking up background-decoded thumbnails.
+//
+// Every branch that wants another frame goes through redraw, which commits. Asking for a frame
+// callback without committing does not work: wl_surface.frame is double-buffered state applied
+// at the next commit, so the callback simply never fires and the poll dies silently - which is
+// what stranded a whole grid of thumbnails on their placeholders until the next keypress
+// whenever a decode outlasted the entrance fade (the fade's own redraws had been hiding it).
+// Redrawing a frame that turns out identical costs one software render; losing the poll costs
+// the feature.
 func (application *app) onFrame(event client.CallbackDoneEvent) {
 	application.framePending = false
+	application.frameMs = event.CallbackData
 	if application.animating {
 		application.advanceFade(event.CallbackData)
 		application.redraw()
+		return
+	}
+	if application.activating {
+		select {
+		case err := <-application.activateDone:
+			application.finishActivate(err)
+		default:
+			application.redraw() // still working: keep the poll alive and step the ellipsis
+		}
 		return
 	}
 	if application.thumbs != nil {
 		// One atomic query, not two: a decode landing between a separate TakeDirty and Pending
 		// would be seen by neither, and the poll would stop with that thumbnail never drawn.
 		dirty, pending := application.thumbs.TakeDirty()
-		if dirty {
-			application.redraw() // redraw re-arms the callback if work remains
-		} else if pending {
-			application.requestFrame()
+		if dirty || pending {
+			application.redraw() // shows whatever landed, and re-arms while work remains
 		}
 	}
 }
@@ -795,7 +904,9 @@ func (application *app) advanceFade(nowMs uint32) {
 	application.fade = 1 - remaining*remaining*remaining
 }
 
-// cleanup frees every buffer (current and any awaiting release) and closes the connection.
+// cleanup frees every buffer (current and any awaiting release) and closes the connection. It
+// is idempotent: Run calls it explicitly to take the overlay down before waiting on a dismissed
+// activation, and again through its defer.
 func (application *app) cleanup() {
 	if application.current != nil {
 		application.current.destroy()
@@ -810,6 +921,7 @@ func (application *app) cleanup() {
 		application.layerSurface = nil
 	}
 	if application.ctx != nil {
-		application.ctx.Close()
+		application.ctx.Close() // this is what takes the overlay off screen
+		application.ctx = nil   // and closing an already-closed context is not the second call's job
 	}
 }

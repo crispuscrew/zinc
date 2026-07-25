@@ -5,6 +5,45 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.3.1] - 2026-07-25
+
+Fixes the two things that made the 0.3 overlay look broken: a frozen window during a launch,
+and a grid of thumbnails that never appeared.
+
+### Changed
+
+- **`zlg` no longer freezes while an app starts.** `menu`'s activate callback now runs off the
+  Wayland event loop, so the overlay keeps drawing - with a `launching <app>...` banner - while
+  `zcr` works, instead of sitting frozen on screen holding an exclusive keyboard grab for the
+  whole launch (a second or two normally, minutes when a derived image has to be rebuilt).
+  Esc dismisses the window immediately; the launch carries on in the background and `menu.Run`
+  returns once it finishes, so no activation outlives the call. A second Enter while one launch
+  is in flight is ignored rather than starting a duplicate. Callers name the banner's verb with
+  the new `Options.BusyVerb`.
+- **Thumbnail and icon decoding is bounded in bytes, not pixels.** The old guard capped declared
+  pixels, which is not a memory bound: the same dimensions cost one byte per pixel as a paletted
+  image and eight at 16 bits per channel, so a deep-colour file crafted to sit just under the
+  pixel cap still decoded to several times what the cap implied. The budget is now the decoded
+  size the file's own header implies, which cuts the grid's adversarial worst case from about
+  1.7 GiB to 480 MiB while still accepting every plausible wallpaper (an 8K photograph decodes
+  to about 132 MiB).
+
+### Fixed
+
+- **Grid thumbnails never appeared unless they decoded within the first 160ms.** The frame
+  callback that paces the decode poll is double-buffered Wayland state, applied only when the
+  surface commits, and the poll's "nothing landed yet, ask again" path asked without committing.
+  The callback therefore never fired and the poll died silently, leaving every tile on its
+  placeholder until the next keypress. It went unnoticed because the entrance fade commits a
+  frame per refresh while it runs, which is long enough for the small sample images but not for
+  a directory of real photographs.
+
+### Known limitations
+
+Unchanged from 0.3.0: the keymap is US-QWERTY, and grid thumbnails decode without
+prioritisation or cancellation. The launch freeze is gone, but a launch still cannot be
+**cancelled**: Esc dismisses the overlay and the launch runs to completion behind it.
+
 ## [0.3.0] - 2026-07-25
 
 Adds the GUI launcher.
@@ -169,6 +208,7 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.3.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.1
 [0.3.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.0
 [0.2.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.2.1
 [0.2.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.2.0

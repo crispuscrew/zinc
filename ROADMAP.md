@@ -34,8 +34,9 @@ Delivered:
 Known gaps (honest, tracked): the network model still rejects (does not run) host-scoped
 egress, gateway / multi-homing, and combining a sibling link with other networking on one
 app; bundle-relative config mounts are deferred. Test coverage is partial away from the
-security path. `launcher/` and `virtualization/creator/` do not yet compile (they still
-reference the removed `core` module).
+security path. (At 0.1 `launcher/` and `virtualization/creator/` did not compile either - they
+still referenced the removed `core` module. `launcher/` was rebuilt in 0.2 and 0.3;
+`virtualization/creator/` is still a skeleton, excluded from the build and CI until 0.4.)
 
 ## 0.2 - Launcher TUI (zlt) - done
 
@@ -45,13 +46,31 @@ running indicator from `zcr ps`, and a `zlt <app>` direct-launch form for a desk
 hotkey. Like `zcc` it depends only on `common` and shells out to the `zcr` binary, so it
 never imports the runtime. Lives at `launcher/tui`, leaving `launcher/gui` for `zlg`.
 
-## 0.3 - Launcher GUI (zlg) - planned
+## 0.3 - Launcher GUI (zlg) - done
 
 A graphical sibling to `zlt`: the same quick picker over the defined apps, for a
 point-and-click launch. Like the other tools it depends only on `common` and shells out to
-the `zcr` binary, so it never imports the runtime. Lands at `launcher/gui`. The shared
-overlay-menu core (a `wlr-layer-shell` surface + software renderer + fuzzy picker) is
-extracted into a standalone `menu/` module so `zde` and a future wofi-like tool can reuse it.
+the `zcr` binary, so it never imports the runtime.
+
+Delivered:
+- **zlg** at `launcher/gui`: a floating `wlr-layer-shell` overlay picker - fuzzy filter as you
+  type, a dot for apps already running, `zlg <app>` for a hotkey - as a static, `CGO_ENABLED=0`,
+  byte-reproducible binary with no cgo and no graphics libraries.
+- **menu** (`menu/`, its own module): the overlay core extracted so `zde` and a future
+  wofi-like tool can import it - a hand-written layer-shell binding, a software renderer, a
+  keymap, a theme resolver and a picker view-model behind one `menu.Run` call, depending on no
+  sibling module. Its `ActivateFunc` runs off the event loop (0.3.1), so a slow launch leaves
+  the overlay responsive instead of freezing it with the keyboard grabbed.
+- **launcher/common**: the read-side app store, the `zcr` delegate and the fuzzy matcher, so
+  `zlt` and `zlg` share one copy of the list / launch / match logic and its security guards.
+- **Richer rows**: app grouping (schema v2's additive `Group` field), freedesktop icon lookup,
+  antialiased text in an auto-detected system Nerd Font, and a thumbnail **grid** layout with
+  bounded background decoding, shown off by the `wallpaper` example.
+
+Known gaps: the keymap is a fixed US-QWERTY fallback rather than a real xkb interpreter; a
+launch cannot be cancelled once started (Esc dismisses the overlay, the launch continues); and
+grid thumbnails are decoded without prioritisation, so fast scrolling queues visible tiles
+behind ones already scrolled past.
 
 ## 0.4 - Virtualization (zvc + zvr) - planned
 

@@ -141,6 +141,7 @@ func menuOptions() menu.Options {
 	opts := menu.Options{
 		Prompt:   "> ",
 		Footer:   "up/down move   enter launch   esc quit",
+		BusyVerb: "launching", // the banner while zcr starts the app: "launching nvim..."
 		AppID:    "zinc.launcher",
 		FontPath: os.Getenv("ZLG_FONT"), // pin a specific font; empty auto-detects a system Nerd Font
 		NoAnim:   os.Getenv("ZLG_NO_ANIM") != "",

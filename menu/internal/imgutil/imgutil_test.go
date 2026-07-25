@@ -92,12 +92,74 @@ func TestDecode_RejectsBadInput(t *testing.T) {
 	}
 }
 
-// A pixel budget below the image's declared size rejects it before allocating the decoder's
-// buffers (the OOM guard), so an oversized image decodes to nil.
-func TestDecode_PixelCapRejectsOversize(t *testing.T) {
-	path := writePNG(t, t.TempDir(), 100, 100) // 10_000 px
+// A byte budget below what the image would decode to rejects it before the decoder allocates
+// anything (the OOM guard), so an oversized image decodes to nil.
+func TestDecode_ByteCapRejectsOversize(t *testing.T) {
+	path := writePNG(t, t.TempDir(), 100, 100) // 10_000 px, 4 bytes each
 	if got := Decode(path, 8<<20, 100); got != nil {
-		t.Fatal("an image past the pixel cap should decode to nil")
+		t.Fatal("an image past the decoded-byte cap should decode to nil")
+	}
+	if got := Decode(path, 8<<20, 10_000*4); got == nil {
+		t.Fatal("an image exactly at the budget should still decode")
+	}
+}
+
+// The budget is charged per decoded byte, not per pixel. A 16-bit-per-channel PNG allocates
+// 8 bytes a pixel where an 8-bit one allocates 4, so the same dimensions cost twice as much -
+// which is what a pixel cap missed, letting a deep-colour file sail past a limit sized for a
+// photograph and allocate several times what the cap implied.
+func TestDecode_DeepColourCostsMore(t *testing.T) {
+	dir := t.TempDir()
+	const width, height = 64, 64
+	shallow := writePNG(t, dir, width, height)
+	deep := filepath.Join(dir, "deep.png")
+	img := image.NewRGBA64(image.Rect(0, 0, width, height))
+	file, err := os.Create(deep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(file, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A budget that fits the 8-bit image exactly must not fit the 16-bit one of equal size.
+	budget := int64(width * height * 4)
+	if Decode(shallow, 8<<20, budget) == nil {
+		t.Error("the 8-bit image should fit a budget of 4 bytes a pixel")
+	}
+	if Decode(deep, 8<<20, budget) != nil {
+		t.Error("the 16-bit image needs 8 bytes a pixel and must be refused at that budget")
+	}
+	if Decode(deep, 8<<20, budget*2) == nil {
+		t.Error("the 16-bit image should decode once the budget covers 8 bytes a pixel")
+	}
+}
+
+// Every colour model the registered decoders produce is charged at least what it allocates.
+// Under-charging any of them would put a hole in the guard.
+func TestBytesPerPixel_NeverUnderCharges(t *testing.T) {
+	cases := []struct {
+		model color.Model
+		want  int64
+	}{
+		{color.RGBAModel, 4}, {color.NRGBAModel, 4}, {color.CMYKModel, 4}, {color.NYCbCrAModel, 4},
+		{color.RGBA64Model, 8}, {color.NRGBA64Model, 8},
+		{color.YCbCrModel, 3},
+		{color.GrayModel, 1}, {color.Gray16Model, 2},
+		{color.AlphaModel, 1}, {color.Alpha16Model, 2},
+		{color.Palette{}, 1},
+	}
+	for _, tc := range cases {
+		if got := bytesPerPixel(tc.model); got != tc.want {
+			t.Errorf("bytesPerPixel(%T) = %d, want %d", tc.model, got, tc.want)
+		}
+	}
+	// An unrecognised model is charged the widest rate we know of rather than assumed cheap.
+	if got := bytesPerPixel(nil); got != 8 {
+		t.Errorf("bytesPerPixel(unknown) = %d, want 8", got)
 	}
 }
 

@@ -87,6 +87,21 @@ func TestFrame_ErrorBanner(t *testing.T) {
 	}
 }
 
+// An activation still running is shown in the same banner slot, in the accent colour rather
+// than the error colour: it has not failed, it is just not finished.
+func TestFrame_StatusBanner(t *testing.T) {
+	img := Frame(sample(), pal, View{Fade: 1, Opacity: 1, Status: "launching nvim..."}, 400, 300)
+	if hasColor(img, pal.Error) {
+		t.Error("a busy status must not be drawn as an error")
+	}
+	// An error wins the slot if both are somehow set, so a failure is never hidden by a stale
+	// status line.
+	both := Frame(sample(), pal, View{Fade: 1, Opacity: 1, Status: "launching nvim...", Error: "no such app"}, 400, 300)
+	if !hasColor(both, pal.Error) {
+		t.Error("an error should still draw when a status is also set")
+	}
+}
+
 // Mid-fade (fade 0) the whole surface is transparent, so nothing flashes opaque.
 func TestFrame_FadeZeroIsFullyTransparent(t *testing.T) {
 	img := Frame(sample(), pal, View{Fade: 0, Opacity: 1}, 400, 300)
