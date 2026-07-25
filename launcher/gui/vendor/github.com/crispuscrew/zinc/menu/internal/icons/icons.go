@@ -1,23 +1,19 @@
 // Package icons resolves an app icon to a small decoded raster, in pure Go. An icon spec is
 // either an absolute path to an image file or a freedesktop icon name (e.g. "firefox") that
 // is looked up in the standard icon-theme directories. Only raster formats the standard
-// library decodes are supported (PNG, JPEG, GIF) - there is no cgo-free SVG rasterizer, so
-// SVG-only icons resolve to nil and the caller simply draws no icon. Resolution is best
-// effort: any failure returns nil rather than an error.
+// library (and pure-Go WebP) decode are supported - there is no cgo-free SVG rasterizer, so
+// SVG-only icons resolve to nil and the caller simply draws no icon. The bounded, panic-safe
+// decode and the scaler live in internal/imgutil, shared with the thumbnail path. Resolution
+// is best effort: any failure returns nil rather than an error.
 package icons
 
 import (
-	"bytes"
 	"image"
-	_ "image/gif"  // register decoders for image.Decode
-	_ "image/jpeg" // register decoders for image.Decode
-	_ "image/png"  // register decoders for image.Decode
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	xdraw "golang.org/x/image/draw"
+	"github.com/crispuscrew/zinc/menu/internal/imgutil"
 )
 
 const (
@@ -49,11 +45,7 @@ func Resolve(spec string, size int) *image.RGBA {
 	if path == "" {
 		return nil
 	}
-	source := decode(path)
-	if source == nil {
-		return nil
-	}
-	return scaleTo(source, size)
+	return imgutil.Square(imgutil.Decode(path, maxIconBytes, maxIconPixels), size)
 }
 
 // lookup finds a PNG-or-other-raster icon file for a freedesktop icon name, searching the
@@ -135,48 +127,4 @@ func isFile(path string) bool {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
-}
-
-// decode reads and decodes an icon file, bounded because the path comes from partly-untrusted
-// app config: it requires a REGULAR file (so a FIFO cannot block the open, and dirs/devices
-// are rejected), caps the bytes read, rejects images whose declared dimensions exceed the
-// pixel budget (a small file can claim huge dimensions and OOM the decoder), and recovers from
-// a decoder panic. Any of these returns nil, which the caller renders as no icon.
-func decode(path string) (result image.Image) {
-	defer func() {
-		if recover() != nil {
-			result = nil
-		}
-	}()
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxIconBytes))
-	if err != nil {
-		return nil
-	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width <= 0 || config.Height <= 0 ||
-		int64(config.Width)*int64(config.Height) > maxIconPixels {
-		return nil
-	}
-	decoded, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil
-	}
-	return decoded
-}
-
-// scaleTo returns source resized to size x size as a premultiplied RGBA (what the renderer
-// blits), preserving the source's alpha so transparent icon backgrounds composite cleanly.
-func scaleTo(source image.Image, size int) *image.RGBA {
-	dst := image.NewRGBA(image.Rect(0, 0, size, size))
-	xdraw.CatmullRom.Scale(dst, dst.Bounds(), source, source.Bounds(), xdraw.Over, nil)
-	return dst
 }

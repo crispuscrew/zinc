@@ -23,17 +23,26 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error)
 type Item struct {
 	Label       string // primary text, and what the fuzzy filter matches against
 	Description string // secondary text, shown dimmed after the label
+	Group       string // optional section header; keep items of one group adjacent
+	Icon        string // optional icon: a freedesktop icon name or an absolute image path
+	Preview     string // optional image path, drawn as a thumbnail tile in grid layout
 	Marked      bool   // draws an indicator dot; the caller decides what it means
 }
 
 type Options struct {
 	Prompt  string  // drawn before the query (default "> ")
+	Footer  string  // hint line at the bottom (default "up/down move   enter select   esc quit")
 	AppID   string  // layer-surface namespace / app-id for compositor rules (default "menu")
+	FontPath string // .ttf/.otf to render with; empty keeps the process default
 	Width   int     // overlay width in px  (default 720)
 	Height  int     // overlay height in px (default 440)
 	Opacity float64 // background opacity 0..1; <= 0 means opaque
 	NoAnim  bool    // disable the entrance fade-in
 	Debug   bool    // trace the Wayland handshake to stderr
+
+	Grid       bool // lay items out as a thumbnail grid (each Item.Preview a tile), not a list
+	CellWidth  int  // grid cell width in px  (default 180); ignored unless Grid
+	CellHeight int  // grid cell height in px (default 140); ignored unless Grid
 }
 
 // Called on Enter. Returning an error keeps the menu open and shows it in a banner;
@@ -82,6 +91,29 @@ func main() {
 }
 ```
 
+## Grid layout
+
+Set `Options.Grid` and the menu becomes a **thumbnail grid** instead of a list: each item's
+`Preview` (a path to an image) is drawn as a tile with its label beneath, arrow keys move in two
+dimensions, and typing still fuzzy-filters. It is meant for visual pickers - a wallpaper chooser,
+an icon or emoji picker - rather than textual menus.
+
+Thumbnails decode **off the render path**, in bounded, cgo-free background workers, and appear as
+they land, so pointing the grid at a directory of large photos does not stall the overlay. A cell
+whose thumbnail is not ready yet shows a placeholder tile until it is. Decoding is aspect-preserving
+(letterboxed, never cropped) and supports PNG, JPEG, GIF, and WebP.
+
+```go
+items := []menu.Item{
+	{Label: "sunset", Preview: "/home/me/Pictures/Wallpapers/sunset.jpg"},
+	{Label: "forest", Preview: "/home/me/Pictures/Wallpapers/forest.jpg"},
+}
+menu.Run(items, activate, menu.Options{Grid: true, Width: 920, Height: 640})
+```
+
+The [`wallpaper`](example/wallpaper) example is a complete chooser built this way; the
+[`dmenu`](example/dmenu) example is the plain-list counterpart.
+
 ## How it works
 
 - **It speaks `wlr-layer-shell` directly.** go-wayland ships only the core protocol plus
@@ -94,9 +126,11 @@ func main() {
   reachable - so the menu looks like the rest of the desktop while staying cgo-free.
 - **The core is pure and unit-tested.** Everything but the thin Wayland event loop lives in
   small internal packages: `internal/picker` (the fuzzy-filter view-model), `internal/keymap`
-  (US-QWERTY key decoding), `internal/render` (the software renderer), `internal/theme` (the
-  portal palette resolver), and `internal/match` (the fuzzy matcher, copied in rather than
-  shared, to keep the no-sibling-dependency rule).
+  (US-QWERTY key decoding), `internal/render` (the software renderer, list and grid),
+  `internal/theme` (the portal palette resolver), `internal/icons` (freedesktop icon lookup),
+  `internal/imgutil` (the shared bounded, panic-safe decode and the scalers), `internal/thumbs`
+  (the async, caching thumbnail store for the grid), and `internal/match` (the fuzzy matcher,
+  copied in rather than shared, to keep the no-sibling-dependency rule).
 
 ## Build
 

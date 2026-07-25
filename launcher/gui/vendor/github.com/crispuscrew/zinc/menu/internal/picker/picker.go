@@ -21,6 +21,7 @@ type App struct {
 	Description string
 	Group       string
 	Icon        *image.RGBA // decoded, pre-scaled icon, or nil for none
+	Preview     string      // path to a preview image, drawn as a thumbnail in grid layout
 	Running     bool
 }
 

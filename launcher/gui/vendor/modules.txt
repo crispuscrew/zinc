@@ -9,11 +9,13 @@ github.com/crispuscrew/zinc/launcher/common/store
 ## explicit; go 1.24.2
 github.com/crispuscrew/zinc/menu
 github.com/crispuscrew/zinc/menu/internal/icons
+github.com/crispuscrew/zinc/menu/internal/imgutil
 github.com/crispuscrew/zinc/menu/internal/keymap
 github.com/crispuscrew/zinc/menu/internal/match
 github.com/crispuscrew/zinc/menu/internal/picker
 github.com/crispuscrew/zinc/menu/internal/render
 github.com/crispuscrew/zinc/menu/internal/theme
+github.com/crispuscrew/zinc/menu/internal/thumbs
 # github.com/godbus/dbus/v5 v5.2.2
 ## explicit; go 1.20
 github.com/godbus/dbus/v5
@@ -30,7 +32,11 @@ golang.org/x/image/font/opentype
 golang.org/x/image/font/sfnt
 golang.org/x/image/math/f64
 golang.org/x/image/math/fixed
+golang.org/x/image/riff
 golang.org/x/image/vector
+golang.org/x/image/vp8
+golang.org/x/image/vp8l
+golang.org/x/image/webp
 # golang.org/x/sys v0.27.0
 ## explicit; go 1.18
 golang.org/x/sys/unix
