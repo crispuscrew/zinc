@@ -19,6 +19,7 @@ type AppConfig struct {
 	AppNameID   string `yaml:"AppNameID"` // Also using as container/vm name
 	Icon        string `yaml:"Icon"`
 	Description string `yaml:"Description"`
+	Group       string `yaml:"Group"` // optional category, for grouping in a launcher; presentation-only
 
 	StartConditions StartConditions `yaml:"StartConditions"`
 	StopConditions  StopConditions  `yaml:"StopConditions"`

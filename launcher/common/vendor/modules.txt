@@ -1,0 +1,7 @@
+# github.com/crispuscrew/zinc/common v0.0.0 => ../../common
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/common/domain/schema
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3
+# github.com/crispuscrew/zinc/common => ../../common

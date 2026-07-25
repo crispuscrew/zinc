@@ -3,6 +3,13 @@ bin/
 *.test
 *.out
 coverage.*
+# stray binaries from `go build ./...` in a module dir (named after the dir); the real
+# builds go to bin/ via the container
+/launcher/gui/gui
+/launcher/tui/tui
+/menu/example/dmenu/dmenu
+/menu/example/wallpaper/wallpaper
+/menu/example/wallpaper/gen/gen
 
 # Editors
 .obsidian/

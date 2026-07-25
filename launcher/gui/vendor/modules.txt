@@ -1,0 +1,55 @@
+# github.com/crispuscrew/zinc/common v0.0.0 => ../../common
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/common/domain/schema
+# github.com/crispuscrew/zinc/launcher/common v0.0.0 => ../common
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/launcher/common/runner
+github.com/crispuscrew/zinc/launcher/common/store
+# github.com/crispuscrew/zinc/menu v0.0.0 => ../../menu
+## explicit; go 1.24.2
+github.com/crispuscrew/zinc/menu
+github.com/crispuscrew/zinc/menu/internal/icons
+github.com/crispuscrew/zinc/menu/internal/imgutil
+github.com/crispuscrew/zinc/menu/internal/keymap
+github.com/crispuscrew/zinc/menu/internal/match
+github.com/crispuscrew/zinc/menu/internal/picker
+github.com/crispuscrew/zinc/menu/internal/render
+github.com/crispuscrew/zinc/menu/internal/theme
+github.com/crispuscrew/zinc/menu/internal/thumbs
+# github.com/godbus/dbus/v5 v5.2.2
+## explicit; go 1.20
+github.com/godbus/dbus/v5
+# github.com/rajveermalviya/go-wayland/wayland v0.0.0-20230130181619-0ad78d1310b2
+## explicit; go 1.19
+github.com/rajveermalviya/go-wayland/wayland/client
+# golang.org/x/image v0.18.0
+## explicit; go 1.18
+golang.org/x/image/draw
+golang.org/x/image/font
+golang.org/x/image/font/basicfont
+golang.org/x/image/font/gofont/gomono
+golang.org/x/image/font/opentype
+golang.org/x/image/font/sfnt
+golang.org/x/image/math/f64
+golang.org/x/image/math/fixed
+golang.org/x/image/riff
+golang.org/x/image/vector
+golang.org/x/image/vp8
+golang.org/x/image/vp8l
+golang.org/x/image/webp
+# golang.org/x/sys v0.27.0
+## explicit; go 1.18
+golang.org/x/sys/unix
+# golang.org/x/text v0.16.0
+## explicit; go 1.18
+golang.org/x/text/encoding
+golang.org/x/text/encoding/charmap
+golang.org/x/text/encoding/internal
+golang.org/x/text/encoding/internal/identifier
+golang.org/x/text/transform
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3
+# github.com/crispuscrew/zinc/menu => ../../menu
+# github.com/crispuscrew/zinc/launcher/common => ../common
+# github.com/crispuscrew/zinc/common => ../../common

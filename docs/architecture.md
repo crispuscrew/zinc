@@ -191,7 +191,7 @@ The short code is the initials.
 | `zcr` | `zinc-container-runner`       | launch + supervise a container app     | 0.1     |
 | `zvc` | `zinc-virtualization-creator` | define VM apps                         | planned |
 | `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app            | planned |
-| `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)                | planned |
+| `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)                | 0.3     |
 | `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)                | 0.2     |
 
 **The split is architectural, not cosmetic.** A *creator* authors an app and writes its
@@ -485,9 +485,9 @@ schema and validation), `check` (a matrix of `container/runner` and `container/c
 running `make check` and `make build`), and `e2e` (the end-to-end suite driving the real
 binaries against podman).
 
-The `launcher/` and `virtualization/creator/` trees still exist as skeletons but are
-**intentionally not built in CI: they still reference the removed `core` hexagon and do not
-compile yet**. They join the matrix once migrated to `common`.
+`virtualization/creator/` still exists as a skeleton and is **intentionally not built in CI:
+it still references the removed `core` hexagon and does not compile yet**. It joins the
+matrix once migrated to `common`.
 
 ---
 
@@ -591,14 +591,43 @@ boundaries), and on **enter launches the selected app by shelling out to `zcr ru
 dependency auto-start, the derived-image build, the network lock-down - and `zlt`, like
 `zcc`, depends only on `common` and never imports the runtime. A `zlt <app>` form launches
 one app directly (for a desktop hotkey or a script), and a `●` marks apps already running
-(best-effort, from `zcr ps`). It lives at `launcher/tui`, leaving `launcher/gui` for the
-planned GUI launcher.
+(best-effort, from `zcr ps`). It lives at `launcher/tui`; the read / launch / match logic it
+shares with `zlg` lives in the `launcher/common` library.
 
-### 9.4 Planned components (roadmap)
+### 9.4 zlg - the launcher (GUI)
 
-`zvc` / `zvr` (virtualization, section 10) and `zlg` (the GUI launcher, sharing zlt's store
-and `zcr` delegation) are not built yet. They will share the same `common` schema library,
-so every tool uses one config format.
+**Stack:** Go, rendering in pure Go with no cgo. `zlg` (zinc-launcher-gui) is the graphical
+sibling of `zlt`: the same quick picker over the defined apps, for a point-and-click or
+keyboard launch. The picker window itself is the reusable **`menu` module** (below); `zlg` is
+a thin consumer of it - it loads the defined apps, marks the ones `zcr` reports running, and
+hands `menu.Run` an activate closure that launches the chosen app through `zcr`. So, like
+`zlt`, it takes the read / launch / match logic from `launcher/common`, shells out to `zcr`,
+and never imports the runtime. `zlg <app>` launches one app directly.
+
+Because it builds on `menu`, `zlg` is a **static, `CGO_ENABLED=0`, runs-anywhere,
+byte-reproducible** binary built from the same minimal image as the other tools (no graphics
+libraries, no dynamic linking), and it is a real **`wlr-layer-shell` floating overlay** - a
+centered, keyboard-grabbing panel that floats above the tiled windows, the way fuzzel/wofi
+do, not a tiled window. Known limit (0.3): the keymap is US-QWERTY (full xkb layout support
+is future work).
+
+**The `menu` module** (repo-root `menu/`, module path `github.com/crispuscrew/zinc/menu`) is
+the overlay-menu core, extracted out of `zlg` so any program can build its own menus over it.
+It speaks the Wayland wire protocol directly (go-wayland) plus a **hand-written
+`wlr-layer-shell` binding** (`menu/layershell.go`, since go-wayland ships only core +
+xdg-shell), software-renders a fuzzy-filtered list into a shared-memory buffer with a bundled
+bitmap font, and reads the system light/dark palette from the XDG desktop portal over D-Bus.
+Everything but the Wayland event loop is a pure, unit-tested package (`internal/picker`,
+`internal/keymap`, `internal/render`, `internal/theme`, and the `internal/match` fuzzy
+matcher). Its whole public API is one call, `menu.Run(items, activate, opts)`. It
+deliberately depends on **no** Zinc sibling module (Go `replace` directives are not
+transitive, so a sibling dependency would make it un-importable from another repo), so `zde`
+and a future wofi-like picker can import it too.
+
+### 9.5 Planned components (roadmap)
+
+`zvc` / `zvr` (virtualization, section 10) are not built yet. They will share the same
+`common` schema library, so every tool uses one config format.
 
 ---
 
@@ -682,7 +711,12 @@ zinc/
       images/netfilter/               Containerfile for the nft helper image (make netfilter-image)
       main.go                         the CLI
     e2e/                 end-to-end tests: drive the real zcc/zcr against podman
-  launcher/tui/          zlt - the launcher (fuzzy picker over the apps; shells out to zcr)
+  launcher/common/       shared launcher library (store + zcr delegate + fuzzy matcher)
+  launcher/tui/          zlt - the launcher TUI (fuzzy picker over the apps; shells out to zcr)
+  launcher/gui/          zlg - the launcher GUI (thin consumer of menu/; shells out to zcr)
+  menu/                  reusable Wayland overlay-menu core: layer-shell surface + software
+                           renderer + keymap + theme + fuzzy picker. Pure-Go, cgo-free, and
+                           depends on no Zinc module, so zde and others can import it (menu.Run)
   virtualization/creator/  zvc skeleton - NOT migrated to common yet, does not compile
   docs/architecture.md   this document
 ```
@@ -727,7 +761,7 @@ the network lock-down applies rules with (6.4).
 | 5 | Some schema fields are validated but not yet enforced at runtime (resources, internal user, notifications, config mounts) | called out explicitly in section 3; on the roadmap, fail-loud where relevant |
 | 6 | Host-scoped egress, gateway/multi-homing, and mixing a sibling link with other networking are unsupported | fail-closed: rejected at launch, never mis-enforced (6.5) |
 | 7 | The netfilter helper runs with namespaced `CAP_NET_ADMIN` | namespaced to the pod's userns, harmless on the host; the image is local and `--pull never` (6.4) |
-| 8 | `launcher/` and `virtualization/creator/` do not compile | intentionally excluded from CI until migrated to `common` (8) |
+| 8 | `virtualization/creator/` does not compile | intentionally excluded from CI until migrated to `common` (8) |
 
 ---
 
@@ -737,9 +771,13 @@ the network lock-down applies rules with (6.4).
 `zcc` + `zcr` split with a keyboard-first TUI, real rootless-container lifecycle, and the
 fail-closed network lock-down (isolated / egress / LAN publish / sibling link).
 
-**Next (see `RELEASES.md`):** a launcher (`zlt`, then `zlg`), the ZDE desktop layer, and
-virtualization (`zvc` / `zvr`). Within the container tools, the near-term work is wiring the
-already-validated schema fields (resources, internal user) into the launch and migrating the
-launcher/virtualization skeletons off the removed `core` hexagon onto `common`.
+**0.2 ships the launcher:** `zlt`, a keyboard-first fuzzy picker over the defined apps that
+shells out to `zcr` (depends only on `common`, never imports the runtime).
+
+**Next (see `RELEASES.md`):** the GUI launcher (`zlg`, 0.3) and virtualization
+(`zvc` / `zvr`, 0.4), the latter migrating the non-compiling `virtualization/` skeleton off
+the removed `core` hexagon onto `common`. The ZDE desktop layer is a separate project in its
+own repository (section 12), not a Zinc release. Within the container tools, the near-term
+work is wiring the already-validated schema fields (resources, internal user) into the launch.
 </content>
 </invoke>

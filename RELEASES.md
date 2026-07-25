@@ -1,14 +1,15 @@
 # Zinc - Release Plan
 
 
-| Version | Focus         | Includes                                         |
-|---------|---------------|--------------------------------------------------|
-| 0.1.0   | Containers    | `zcc` mvp + `zcr` mvp |
-| 0.2.0   | Launcher      | `zlt` mvp                   |
-| 0.3.0   | DE | `zde-niri` mvp                   |
-| 0.4.0   | DE | `zde-niri` automatic qemu config for testing |
-| 0.5.0   | Launcher      | `zlg` mvp|
-| 0.6.0   | DE | `zde-niri` visual helper|
-| 0.7.0   | Virtualization| `zvc` mvp + `zvr` mvp                   |
-| ...       |               |                                                  |
+| Version | Focus          | Includes              |
+|---------|----------------|-----------------------|
+| 0.1.0   | Containers     | `zcc` mvp + `zcr` mvp |
+| 0.2.0   | Launcher       | `zlt` mvp             |
+| 0.3.0   | Launcher       | `zlg` mvp             |
+| 0.4.0   | Virtualization | `zvc` mvp + `zvr` mvp |
+| ...     |                |                       |
+
+**ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project
+layered on Zinc: it lives in its own repository with its own release plan. Only the Zinc
+core and its tools (containers, launchers, virtualization) are released from here.
 
