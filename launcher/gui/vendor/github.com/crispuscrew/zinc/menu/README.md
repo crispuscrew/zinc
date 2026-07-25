@@ -40,13 +40,15 @@ type Options struct {
 	NoAnim  bool    // disable the entrance fade-in
 	Debug   bool    // trace the Wayland handshake to stderr
 
+	BusyVerb string // verb in the banner shown while ActivateFunc runs (default "running")
+
 	Grid       bool // lay items out as a thumbnail grid (each Item.Preview a tile), not a list
 	CellWidth  int  // grid cell width in px  (default 180); ignored unless Grid
 	CellHeight int  // grid cell height in px (default 140); ignored unless Grid
 }
 
-// Called on Enter. Returning an error keeps the menu open and shows it in a banner;
-// returning nil closes the menu with that item selected.
+// Called on Enter, on its own goroutine. Returning an error keeps the menu open and shows
+// it in a banner; returning nil closes the menu with that item selected.
 type ActivateFunc func(item Item) error
 ```
 
@@ -56,7 +58,15 @@ default-size, opaque, animated overlay with a `"> "` prompt.
 
 The `activate` callback is called on Enter **while the overlay is still up**, so a consumer
 can do its work (launch a program, print a line) and, by returning an error, report a failure
-in the window without tearing it down:
+in the window without tearing it down.
+
+It runs **off the Wayland event loop**, on its own goroutine, so an activation that takes a
+while - starting a container, building an image - leaves the overlay drawing and responsive
+instead of freezing it on screen with the keyboard grabbed. While it runs the menu shows a busy
+banner (`Options.BusyVerb` supplies the verb: "launching nvim...") and ignores further Enter
+presses, so one keypress cannot start the same work twice. Esc takes the overlay down straight
+away without waiting for it; `Run` then returns once the call finishes, so an activation never
+outlives `Run`.
 
 ```go
 package main
@@ -158,11 +168,11 @@ make wallpaper-demo   # generate sample images, build the wallpaper example, ope
 ## Known limits
 
 - The keymap is US-QWERTY; full keyboard-layout (xkb) support is future work.
-- `ActivateFunc` is called **on the event loop**, so slow work inside it freezes the overlay -
-  and the surface holds an exclusive keyboard grab while frozen. Start long-running or
-  never-exiting work (a wallpaper daemon, a container launch) rather than waiting on it; the
-  [`wallpaper`](example/wallpaper) example shows the pattern. An asynchronous activate is
-  future work.
+- `ActivateFunc` runs off the event loop, but there is no way to **cancel** one: Esc dismisses
+  the overlay and `Run` then waits for the call to return. A callback that never returns (a
+  daemon waited on rather than started) therefore keeps `Run` from returning, so start
+  never-exiting work rather than waiting on it - the [`wallpaper`](example/wallpaper) example
+  shows the pattern.
 - Grid thumbnails are decoded for every cell that has been drawn, without prioritisation or
   cancellation, so scrolling fast through a very large directory makes the visible tiles queue
   behind ones already scrolled past.

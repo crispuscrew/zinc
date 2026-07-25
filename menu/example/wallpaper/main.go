@@ -54,12 +54,13 @@ func main() {
 	}
 
 	_, err = menu.Run(items, activate, menu.Options{
-		Prompt: "wallpaper> ",
-		Footer: "arrows move   enter set   type to filter   esc quit",
-		AppID:  "zinc.wallpaper",
-		Width:  920,
-		Height: 640,
-		Grid:   true,
+		Prompt:   "wallpaper> ",
+		Footer:   "arrows move   enter set   type to filter   esc quit",
+		BusyVerb: "setting",
+		AppID:    "zinc.wallpaper",
+		Width:    920,
+		Height:   640,
+		Grid:     true,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -29,7 +29,7 @@ const (
 	headerH      = 46 // prompt line plus the separator beneath it
 	rowH         = 22
 	footerH      = 30
-	errorH       = 24 // launch-error banner, shown above the footer when present
+	bannerH      = 24 // launch-error / busy banner, shown above the footer when present
 	barW         = 3  // accent bar down the left of the selected/error row
 	dotSize      = 6  // running-app indicator
 	nameX        = marginX + dotSize + 8
@@ -52,14 +52,18 @@ const (
 )
 
 // View is the transient, per-frame state the renderer needs beyond the model: the entrance
-// fade (0..1), the steady-state background opacity (0..1), an optional launch error to surface
-// in a banner, and the layout (list by default, or a thumbnail grid).
+// fade (0..1), the steady-state background opacity (0..1), an optional launch error or busy
+// status to surface in a banner, and the layout (list by default, or a thumbnail grid).
 type View struct {
 	Prompt  string
 	Footer  string // the hint line at the bottom (default "up/down move   enter select   esc quit")
 	Fade    float64
 	Opacity float64
 	Error   string
+	// Status is an in-progress activation ("launching nvim..."), drawn in the same banner slot
+	// as Error but in the accent colour. Error wins if somehow both are set; a caller shows one
+	// or the other, never both, since an activation that is still running has not failed yet.
+	Status string
 
 	// Grid switches from the default one-per-row list to a thumbnail grid, drawing each item's
 	// Preview image (fetched through Thumb) as a tile with its label beneath.
@@ -83,8 +87,8 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 	visible := mdl.Visible()
 	listTop := headerH + 4
 	listBottom := height - footerH
-	if view.Error != "" {
-		listBottom -= errorH
+	if view.Error != "" || view.Status != "" {
+		listBottom -= bannerH
 	}
 	if listBottom < listTop+rowH {
 		listBottom = listTop + rowH
@@ -99,8 +103,11 @@ func Frame(mdl *picker.Model, pal theme.Palette, view View, width, height int) *
 		drawList(img, mdl, pal, visible, width, listTop, listBottom)
 	}
 
-	if view.Error != "" {
-		drawError(img, pal, width, height, view.Error)
+	switch {
+	case view.Error != "":
+		drawBanner(img, pal, width, height, view.Error, pal.Error)
+	case view.Status != "":
+		drawBanner(img, pal, width, height, view.Status, pal.Accent)
 	}
 	drawFooter(img, pal, width, height, view.Footer, len(visible))
 
@@ -443,15 +450,16 @@ func drawHeader(img *image.RGBA, pal theme.Palette, width, top int, name string)
 	drawText(img, marginX, baseline, pal.Accent, truncate(name, maxChars))
 }
 
-// drawError draws a banner just above the footer: an error-colored bar and message, so a
-// failed launch is reported in the window instead of on the terminal.
-func drawError(img *image.RGBA, pal theme.Palette, width, height int, message string) {
-	top := height - footerH - errorH
-	fill(img, image.Rect(0, top, width, top+errorH), pal.SelBG)
-	fill(img, image.Rect(0, top, barW, top+errorH), pal.Error)
-	baseline := top + (errorH-faceHeight)/2 + faceAscent
+// drawBanner draws a message just above the footer, with a coloured bar down its left edge: a
+// failed launch in the error colour, an activation still running in the accent colour. Either
+// way it is reported in the window rather than on a terminal nobody is looking at.
+func drawBanner(img *image.RGBA, pal theme.Palette, width, height int, message string, col color.Color) {
+	top := height - footerH - bannerH
+	fill(img, image.Rect(0, top, width, top+bannerH), pal.SelBG)
+	fill(img, image.Rect(0, top, barW, top+bannerH), col)
+	baseline := top + (bannerH-faceHeight)/2 + faceAscent
 	maxChars := (width - nameX - marginX) / faceAdvance
-	drawText(img, nameX, baseline, pal.Error, truncate(message, maxChars))
+	drawText(img, nameX, baseline, col, truncate(message, maxChars))
 }
 
 // drawFooter draws a divider and the hint line, with the match count right-aligned.
