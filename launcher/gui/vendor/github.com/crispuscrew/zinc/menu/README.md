@@ -144,3 +144,11 @@ make vendor       # refresh vendored deps (the only step that needs network)
 ## Known limits
 
 - The keymap is US-QWERTY; full keyboard-layout (xkb) support is future work.
+- `ActivateFunc` is called **on the event loop**, so slow work inside it freezes the overlay -
+  and the surface holds an exclusive keyboard grab while frozen. Start long-running or
+  never-exiting work (a wallpaper daemon, a container launch) rather than waiting on it; the
+  [`wallpaper`](example/wallpaper) example shows the pattern. An asynchronous activate is
+  future work.
+- Grid thumbnails are decoded for every cell that has been drawn, without prioritisation or
+  cancellation, so scrolling fast through a very large directory makes the visible tiles queue
+  behind ones already scrolled past.
