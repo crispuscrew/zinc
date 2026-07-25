@@ -9,6 +9,7 @@ package imgutil
 import (
 	"bytes"
 	"image"
+	"image/color"
 	_ "image/gif"  // register the GIF decoder for image.Decode
 	_ "image/jpeg" // register the JPEG decoder for image.Decode
 	_ "image/png"  // register the PNG decoder for image.Decode
@@ -22,11 +23,16 @@ import (
 
 // Decode reads and decodes an image file, bounded because the path may come from
 // partly-untrusted config: it requires a REGULAR file (so a FIFO cannot block the open, and
-// directories and devices are rejected), caps the bytes read at maxBytes, rejects an image
-// whose declared dimensions exceed maxPixels (a small file can claim enormous width x height
-// and OOM the decoder), and recovers from a decoder panic. Any failure returns nil, which
-// callers render as no image.
-func Decode(path string, maxBytes, maxPixels int64) (result image.Image) {
+// directories and devices are rejected), caps the bytes read at maxBytes, refuses an image
+// whose decoded form would exceed maxDecodedBytes, and recovers from a decoder panic. Any
+// failure returns nil, which callers render as no image.
+//
+// The budget is in decoded BYTES rather than pixels because pixels do not bound memory: the
+// same pixel count costs one byte per pixel as a paletted GIF and eight as a 16-bit-per-channel
+// PNG, so a pixel cap that looks safe for a photograph is off by 8x for a file crafted to be
+// deep-coloured. The header says which it is before anything is decoded, so the cap can be
+// applied to the actual allocation.
+func Decode(path string, maxBytes, maxDecodedBytes int64) (result image.Image) {
 	defer func() {
 		if recover() != nil {
 			result = nil
@@ -50,8 +56,10 @@ func Decode(path string, maxBytes, maxPixels int64) (result image.Image) {
 		return nil
 	}
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width <= 0 || config.Height <= 0 ||
-		int64(config.Width)*int64(config.Height) > maxPixels {
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return nil
+	}
+	if decodedBytes(config) > maxDecodedBytes {
 		return nil
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(data))
@@ -59,6 +67,36 @@ func Decode(path string, maxBytes, maxPixels int64) (result image.Image) {
 		return nil
 	}
 	return decoded
+}
+
+// decodedBytes estimates how much memory decoding config will allocate, from the pixel count
+// and the colour model the header declares. It never under-estimates for the models the
+// registered decoders produce, which is what makes it usable as a guard: a subsampled JPEG is
+// charged the 4:4:4 rate, and an unrecognised model is charged the widest rate we know of.
+func decodedBytes(config image.Config) int64 {
+	return int64(config.Width) * int64(config.Height) * bytesPerPixel(config.ColorModel)
+}
+
+func bytesPerPixel(model color.Model) int64 {
+	// A paletted image (GIF, and PNG's colour type 3) stores one index per pixel; its model is
+	// the palette itself, so it cannot be compared against the named models below.
+	if _, paletted := model.(color.Palette); paletted {
+		return 1
+	}
+	switch model {
+	case color.RGBA64Model, color.NRGBA64Model:
+		return 8
+	case color.RGBAModel, color.NRGBAModel, color.CMYKModel, color.NYCbCrAModel:
+		return 4
+	case color.YCbCrModel:
+		return 3 // three full planes; a subsampled image allocates less, never more
+	case color.Gray16Model, color.Alpha16Model:
+		return 2
+	case color.GrayModel, color.AlphaModel:
+		return 1
+	default:
+		return 8
+	}
 }
 
 // Square returns source resized to size x size as premultiplied RGBA, preserving alpha so

@@ -20,9 +20,10 @@ const (
 	// maxIconBytes caps how much of an icon file is read; icons are tiny, and this stops a
 	// partly-untrusted config pointing Icon at a huge file.
 	maxIconBytes = 8 << 20
-	// maxIconPixels rejects an image whose declared dimensions would allocate too much; a
-	// crafted small file can declare enormous width x height and OOM the decoder otherwise.
-	maxIconPixels = 4 << 20
+	// maxIconDecoded is the memory one icon decode may allocate. A 2048x2048 RGBA icon needs
+	// 16 MiB and nothing sane is larger, since these are drawn at 16x16; a crafted small file
+	// that would decode to more than this is refused rather than OOM-ing the decoder.
+	maxIconDecoded = 32 << 20
 )
 
 // searchSizes are the icon-theme size buckets tried, best first (larger scales down cleanly).
@@ -45,7 +46,7 @@ func Resolve(spec string, size int) *image.RGBA {
 	if path == "" {
 		return nil
 	}
-	return imgutil.Square(imgutil.Decode(path, maxIconBytes, maxIconPixels), size)
+	return imgutil.Square(imgutil.Decode(path, maxIconBytes, maxIconDecoded), size)
 }
 
 // lookup finds a PNG-or-other-raster icon file for a freedesktop icon name, searching the
