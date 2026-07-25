@@ -75,6 +75,23 @@ func TestLaunch_RejectsFlagName(t *testing.T) {
 	}
 }
 
+// A bare store key ending in ".yaml" is rejected: zcr reads such an argument as a filesystem
+// path relative to the caller's cwd, so launching the app "notes.yaml" (the file
+// notes.yaml.yaml) would run whatever ./notes.yaml happens to be instead. An explicit path
+// carries a separator and still reaches zcr's path form.
+func TestLaunch_RejectsYAMLSuffixedStoreKey(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no zcr: prove the guard fires first, not "not found"
+	for _, bad := range []string{"notes.yaml", "app.yaml"} {
+		if err := Launch(bad); err == nil || strings.Contains(err.Error(), "not found") {
+			t.Errorf("Launch(%q): want a name-guard error, got %v", bad, err)
+		}
+	}
+	// A path form is still allowed through to zcr (which fails here only because zcr is absent).
+	if err := Launch("./notes.yaml"); err == nil || !strings.Contains(err.Error(), "not found on $PATH") {
+		t.Errorf("Launch(\"./notes.yaml\") should reach zcr, got %v", err)
+	}
+}
+
 // With no zcr on $PATH, actions fail with an actionable message.
 func TestLaunch_ZcrNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // an empty dir: no zcr

@@ -43,6 +43,31 @@ func waitDecoded(t *testing.T, store *Store) {
 	}
 }
 
+// A thumbnail that has finished decoding but has not been drawn yet keeps the store Active
+// even though nothing is in flight. That is what keeps the caller's frame-callback poll alive
+// long enough to blit it: a decode landing after the renderer read the cache but before the
+// poll condition was evaluated would otherwise leave nothing armed to draw it, and the tile
+// would sit on its placeholder until the next keypress.
+func TestActive_StaysSetUntilTheCompletedDecodeIsTaken(t *testing.T) {
+	path := writePNG(t, t.TempDir(), "wall.png", 40, 20)
+	store := New(100, 100)
+	store.Get(path)
+	waitDecoded(t, store)
+
+	if store.Pending() {
+		t.Fatal("nothing should be in flight once the decode has landed")
+	}
+	if !store.Active() {
+		t.Fatal("a decoded-but-undrawn thumbnail must keep the store Active, or its frame is never drawn")
+	}
+	if dirty, pending := store.TakeDirty(); !dirty || pending {
+		t.Fatalf("TakeDirty = (%v, %v), want (true, false)", dirty, pending)
+	}
+	if store.Active() {
+		t.Fatal("with nothing pending and the dirty flag taken, the store should be idle")
+	}
+}
+
 // A first Get schedules the decode and returns "not ready"; once the background decode lands,
 // the store is dirty and Get returns the box-fitted thumbnail.
 func TestGet_DecodesAsynchronously(t *testing.T) {
@@ -56,10 +81,10 @@ func TestGet_DecodesAsynchronously(t *testing.T) {
 		t.Fatal("store should report a decode in flight right after the first Get")
 	}
 	waitDecoded(t, store)
-	if !store.TakeDirty() {
-		t.Fatal("a completed decode should mark the store dirty")
+	if dirty, pending := store.TakeDirty(); !dirty || pending {
+		t.Fatalf("after the decode landed, TakeDirty = (%v, %v), want (true, false)", dirty, pending)
 	}
-	if store.TakeDirty() {
+	if dirty, _ := store.TakeDirty(); dirty {
 		t.Fatal("TakeDirty should clear the flag")
 	}
 	thumb, done := store.Get(path)

@@ -34,6 +34,16 @@ func TestScoreFont(t *testing.T) {
 	if preferred <= generic {
 		t.Errorf("preferred mono nerd font (%d) should outrank a generic one (%d)", preferred, generic)
 	}
+
+	// Within one family, the NerdFontMono variant must outrank the base variant: only Mono
+	// keeps the patched glyphs single-width, which the renderer's fixed-advance layout assumes.
+	// Scoring a bare "mono" substring matched the family name too ("JetBrainsMono..."), so both
+	// variants tied and the base one won by sorting first.
+	mono := scoreFont("jetbrainsmononerdfontmono-regular.ttf")
+	base := scoreFont("jetbrainsmononerdfont-regular.ttf")
+	if mono <= base {
+		t.Errorf("the NerdFontMono variant (%d) must outrank the same family's base variant (%d)", mono, base)
+	}
 }
 
 // With no Nerd Font installed and no usable explicit path, resolveFace falls back to the

@@ -122,6 +122,47 @@ func TestEnter_LaunchErrorStaysOpen(t *testing.T) {
 	}
 }
 
+// A second Enter while the first launch is still in flight is ignored. zcr takes a second or
+// two to bring an app up and the picker only shows a static "launching ..." line meanwhile, so
+// a double press is easy. Two concurrent `zcr run` of one app race on the same pod, and the
+// loser's fail-closed teardown removes the pod the winner just created - killing the app the
+// user asked for while the picker still reports success.
+func TestEnter_IgnoresASecondPressWhileLaunching(t *testing.T) {
+	fake := &fakeRunner{}
+	mdl := typeStr(New(sampleApps(), fake), "fire")
+
+	updated, first := mdl.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mdl = updated.(Model)
+	if first == nil {
+		t.Fatal("the first enter should return a launch command")
+	}
+	updated, second := mdl.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mdl = updated.(Model)
+	if second != nil {
+		t.Fatal("a second enter during an in-flight launch must not start another one")
+	}
+
+	mdl.Update(first()) // resolve the one real launch
+	if len(fake.launched) != 1 || fake.launched[0] != "firefox" {
+		t.Fatalf("expected firefox launched exactly once, got %v", fake.launched)
+	}
+}
+
+// The guard is released when a launch fails, so the user can retry rather than being stuck.
+func TestEnter_RetryAllowedAfterAFailedLaunch(t *testing.T) {
+	fake := &fakeRunner{launchErr: errors.New("boom")}
+	mdl := typeStr(New(sampleApps(), fake), "fire")
+
+	updated, cmd := mdl.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mdl = updated.(Model)
+	updated, _ = mdl.Update(cmd()) // the launchedMsg carrying the failure
+	mdl = updated.(Model)
+
+	if _, retry := mdl.Update(tea.KeyMsg{Type: tea.KeyEnter}); retry == nil {
+		t.Fatal("after a failed launch, enter should be able to try again")
+	}
+}
+
 // The running-state message marks the matching app.
 func TestRunningMsg_MarksApp(t *testing.T) {
 	updated, _ := New(sampleApps(), &fakeRunner{}).Update(runningMsg{running: map[string]bool{"firefox": true}})

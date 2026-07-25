@@ -20,16 +20,17 @@ type App struct {
 
 // Model is the picker state.
 type Model struct {
-	apps     []App          // every defined app, in the caller's order (alphabetical)
-	names    []string       // apps' names, parallel to apps, for the matcher
-	filtered []match.Ranked // the current query's matches, best-first (Index into apps)
-	query    string         // the filter text
-	cursor   int            // selected row, an index into filtered
-	runner   Runner         // the zcr delegate
-	status   string         // a transient message (a launch error); empty shows key hints
-	launched string         // set once an app has launched, so the program can report it
-	width    int
-	height   int
+	apps      []App          // every defined app, in the caller's order (alphabetical)
+	names     []string       // apps' names, parallel to apps, for the matcher
+	filtered  []match.Ranked // the current query's matches, best-first (Index into apps)
+	query     string         // the filter text
+	cursor    int            // selected row, an index into filtered
+	runner    Runner         // the zcr delegate
+	status    string         // a transient message (a launch error); empty shows key hints
+	launching bool           // a launch is in flight, so Enter is ignored until it resolves
+	launched  string         // set once an app has launched, so the program can report it
+	width     int
+	height    int
 }
 
 // New builds a picker over apps (which the caller sorts), driving runner for launch and
@@ -71,6 +72,7 @@ func (mdl Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case launchedMsg:
 		if msg.err != nil {
 			mdl.status = msg.name + ": " + msg.err.Error()
+			mdl.launching = false // failed, so let the user try again
 			return mdl, nil
 		}
 		mdl.launched = msg.name
@@ -114,13 +116,18 @@ func (mdl Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return mdl, nil
 }
 
-// launchSelected launches the highlighted app (if any) via zcr.
+// launchSelected launches the highlighted app (if any) via zcr. A second Enter while a launch
+// is still in flight is ignored: the first only prints a static "launching ..." line while zcr
+// takes a second or two to bring the app up, so it is easy to press twice. Two concurrent
+// `zcr run` of one app race on the same pod, and the loser's fail-closed teardown tears down
+// the pod the winner just started - killing the app the user asked for.
 func (mdl Model) launchSelected() (tea.Model, tea.Cmd) {
-	if len(mdl.filtered) == 0 {
+	if len(mdl.filtered) == 0 || mdl.launching {
 		return mdl, nil
 	}
 	name := mdl.apps[mdl.filtered[mdl.cursor].Index].Name
 	mdl.status = "launching " + name + "..."
+	mdl.launching = true
 	return mdl, launch(mdl.runner, name)
 }
 

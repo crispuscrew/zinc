@@ -4,12 +4,17 @@
 > rootless Podman container (primary) or a libvirt/qemu VM. Priority order: Stable, then
 > Secure, then Beautiful.
 
-The 0.1 tools are `zcc` (zinc-container-creator: authors app files, keyboard-first TUI +
-CLI) and `zcr` (zinc-container-runner: runs an app file via rootless podman). They share
+The container tools are `zcc` (zinc-container-creator: authors app files, keyboard-first TUI
++ CLI) and `zcr` (zinc-container-runner: runs an app file via rootless podman). They share
 one library, `common` (the app schema + validation), and meet only at the on-disk YAML
 format: zcc authors and shells out to the `zcr` binary to run. The network lock-down is
 applied by nftables in the app's own netns before the app starts (fail-closed). Builds are
 podman-only: all Go for the tools runs in a digest-pinned container via `make`.
+
+The launchers are `zlt` (0.2, terminal) and `zlg` (0.3, a Wayland overlay window). Both
+fuzzy-pick a defined app and launch it through the `zcr` binary, sharing `launcher/common`;
+neither imports the runtime. `zlg`'s window is `menu`, a standalone reusable overlay-menu
+module that depends on no Zinc sibling, so other projects can import it.
 
 ## Docs
 
@@ -23,6 +28,7 @@ podman-only: all Go for the tools runs in a digest-pinned container via `make`.
 - [zcr README](container/runner/README.md): the runner - run an app file, the fail-closed network model.
 - [zlt README](launcher/tui/README.md): the launcher TUI (0.2) - fuzzy-pick an app and launch it via zcr.
 - [zlg README](launcher/gui/README.md): the launcher GUI (0.3) - the same picker as a pure-Go Wayland window.
+- [menu README](menu/README.md): the reusable Wayland overlay-menu module (0.3) - list and thumbnail-grid pickers, `go get`-able on its own.
 
 ## Agent guidance
 

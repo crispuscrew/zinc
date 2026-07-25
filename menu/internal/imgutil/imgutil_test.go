@@ -41,6 +41,38 @@ func TestDecode_ValidFile(t *testing.T) {
 	}
 }
 
+// A symlink to an image decodes: the regular-file guard resolves the link rather than
+// describing it. Symlinked icons are common under /usr/share/icons, and symlinked wallpaper
+// directories are a standard dotfiles pattern, so rejecting links rendered them all blank.
+func TestDecode_FollowsSymlinkToRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	target := writePNG(t, dir, 40, 30)
+	link := filepath.Join(dir, "link.png")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	got := Decode(link, 8<<20, 4<<20)
+	if got == nil {
+		t.Fatal("a symlink to a valid PNG decoded to nil")
+	}
+	if b := got.Bounds(); b.Dx() != 40 || b.Dy() != 30 {
+		t.Fatalf("decoded %dx%d through the symlink, want 40x30", b.Dx(), b.Dy())
+	}
+}
+
+// Following the link must not weaken the guard: a symlink whose target is a directory (or any
+// other non-regular file) is still rejected.
+func TestDecode_RejectsSymlinkToNonRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link.png")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if got := Decode(link, 8<<20, 4<<20); got != nil {
+		t.Error("a symlink to a directory should decode to nil")
+	}
+}
+
 // A directory, a missing path, garbage bytes, and a byte cap smaller than the file all decode
 // to nil rather than panicking or blocking - the path is partly-untrusted.
 func TestDecode_RejectsBadInput(t *testing.T) {

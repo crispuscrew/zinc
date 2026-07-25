@@ -72,10 +72,15 @@ func (sto *Store) Path(name string) string {
 	return filepath.Join(sto.Root, name+".yaml")
 }
 
-// safeName rejects a name that is not a plain store key - one with a path separator or a
-// ".." segment - so a name from the CLI cannot read a file outside the apps directory.
+// safeName rejects a name that is not a plain store key - one with a path separator, or the
+// "." / ".." traversal segments - so a name from the CLI cannot read a file outside the apps
+// directory. The separator check is what does the real work: filepath.Base strips every
+// directory component, so any name that survives it is a single path segment. It is deliberately
+// a segment comparison and not a `strings.Contains(name, "..")` substring test, which also
+// rejected ordinary names that merely contain two dots (an app called "my..app"), leaving it
+// listed by the picker but impossible to load.
 func safeName(name string) error {
-	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
+	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
 		return fmt.Errorf("store: invalid app name %q", name)
 	}
 	return nil

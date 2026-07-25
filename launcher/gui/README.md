@@ -69,3 +69,7 @@ make repro        # prove the build is byte-identical
 - The keymap is US-QWERTY; full keyboard-layout (xkb) support is future work (the keymap
   lives in `menu`).
 - It lists and launches; managing an app (stop, logs, edit) stays in `zcc`.
+- The overlay freezes while an app starts. `menu`'s activate callback is synchronous, so
+  `zcr run` blocks the Wayland event loop, and the layer surface keeps its exclusive keyboard
+  grab throughout - a second or two for a normal launch, but minutes for an app whose derived
+  image has to be rebuilt first. An asynchronous activate is 0.4 work.

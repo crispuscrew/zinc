@@ -9,8 +9,12 @@
 //
 //	wallpaper [DIR]                      # DIR, else $WALLPAPER_DIR, else ~/Pictures/Wallpapers
 //	WALLPAPER_CMD='swww img' wallpaper   # set via swww
-//	WALLPAPER_CMD='swaybg -i' wallpaper  # set via swaybg
+//	WALLPAPER_CMD='swaybg -i' wallpaper  # set via swaybg (stays running; see setWallpaper)
 //	wallpaper | while read p; do ... done  # unset: prints the path, wire it yourself
+//
+// hyprpaper needs two commands (preload, then wallpaper), so point $WALLPAPER_CMD at a wrapper
+// script rather than at hyprctl directly - `hyprctl hyprpaper preload` alone loads the image
+// but never applies it.
 package main
 
 import (
@@ -20,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/crispuscrew/zinc/menu"
 )
@@ -105,10 +110,22 @@ func loadWallpapers(dir string) ([]menu.Item, error) {
 	return items, nil
 }
 
-// setWallpaper applies the chosen image. With $WALLPAPER_CMD set (e.g. "swww img", "swaybg -i",
-// "hyprctl hyprpaper preload") it runs that command with the path appended and reports any
-// failure. With it unset it just prints the path to stdout, so the chooser works on any
-// compositor and can be piped into whatever sets the wallpaper.
+// setterGrace is how long setWallpaper waits for the setter to fail before assuming it is a
+// daemon that will keep running. Long enough to catch an immediate error, short enough that
+// the pause before the overlay closes is not noticeable.
+const setterGrace = 300 * time.Millisecond
+
+// setWallpaper applies the chosen image. With $WALLPAPER_CMD set (e.g. "swww img", "swaybg -i")
+// it runs that command with the path appended and reports an immediate failure. With it unset
+// it just prints the path to stdout, so the chooser works on any compositor and can be piped
+// into whatever sets the wallpaper.
+//
+// It deliberately does not wait for the command to finish. menu calls this from its Wayland
+// event loop, so blocking here freezes the overlay - and the overlay holds an exclusive
+// keyboard grab, so it would take the keyboard down with it. swaybg and hyprpaper are
+// foreground daemons that hold the background surface and never exit on their own, which would
+// freeze it for good. Instead the setter is started, given a moment to report an early
+// failure (so a broken recipe still reaches the menu's error banner), and then left running.
 func setWallpaper(path string) error {
 	command := strings.Fields(os.Getenv("WALLPAPER_CMD"))
 	if len(command) == 0 {
@@ -119,8 +136,19 @@ func setWallpaper(path string) error {
 	run := exec.Command(command[0], args...)
 	run.Stdout = os.Stdout
 	run.Stderr = os.Stderr
-	if err := run.Run(); err != nil {
+	if err := run.Start(); err != nil {
 		return fmt.Errorf("%s: %w", command[0], err)
+	}
+	// Buffered, so the waiter never blocks once we stop listening and can exit on its own.
+	done := make(chan error, 1)
+	go func() { done <- run.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("%s: %w", command[0], err)
+		}
+	case <-time.After(setterGrace):
+		// Still running: a daemon setter. Leave it be and report success.
 	}
 	return nil
 }

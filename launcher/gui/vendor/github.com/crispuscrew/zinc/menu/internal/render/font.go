@@ -107,6 +107,12 @@ var preferredFamilies = []string{
 
 // findNerdFont walks the system font directories and returns the highest-scored Nerd Font
 // file (a monospace, upright, regular weight), or "" if none is installed.
+//
+// It walks every directory to the end rather than stopping at the first good-enough file. A
+// family's base and Mono variants sit side by side in one directory, with the base sorting
+// first, so an early exit on score kept picking the base variant and never compared its Mono
+// sibling. Font directories are small (a few hundred files) and this runs once per process,
+// so the full walk costs single-digit milliseconds.
 func findNerdFont() string {
 	var best string
 	bestScore := 0
@@ -115,18 +121,11 @@ func findNerdFont() string {
 			if err != nil || entry.IsDir() {
 				return nil
 			}
-			score := scoreFont(strings.ToLower(entry.Name()))
-			if score > bestScore {
+			if score := scoreFont(strings.ToLower(entry.Name())); score > bestScore {
 				bestScore, best = score, path
-			}
-			if bestScore >= 6 { // a preferred family's Mono variant - good enough, stop walking
-				return fs.SkipAll
 			}
 			return nil
 		})
-		if bestScore >= 6 {
-			break
-		}
 	}
 	return best
 }
@@ -148,13 +147,17 @@ func scoreFont(name string) int {
 		}
 	}
 	score := 1
-	if strings.Contains(name, "mono") {
-		score += 3 // the Mono Nerd Font variant keeps glyphs single-width
+	compact := strings.ReplaceAll(name, " ", "")
+	// Match the "NerdFontMono" variant token, not a bare "mono". A bare substring also matches
+	// the family name of every monospace font (JetBrainsMono, DejaVuSansMono, ...), so it
+	// scored the double-width base variant as if it were the single-width one - which then
+	// broke the renderer's fixed-advance layout on any Nerd Font glyph.
+	if strings.Contains(compact, "nerdfontmono") {
+		score += 3 // the Mono Nerd Font variant keeps patched glyphs single-width
 	}
 	if strings.Contains(name, "regular") {
 		score++
 	}
-	compact := strings.ReplaceAll(name, " ", "")
 	for index, family := range preferredFamilies {
 		if strings.Contains(compact, family) {
 			score += len(preferredFamilies) - index + 4

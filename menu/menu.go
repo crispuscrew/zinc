@@ -126,10 +126,14 @@ func Run(items []Item, activate ActivateFunc, opts Options) (int, error) {
 		application.fade = 0
 		application.animating = true
 	}
+	// Deferred before connect, not after: connect fails late on a compositor that lacks
+	// zwlr_layer_shell_v1, and returning straight out would leak the open Wayland socket (and
+	// any shm mapping already made) once per call - fatal for a long-lived program that pops
+	// the menu on a hotkey. cleanup is nil-safe, so a partial connect tears down correctly.
+	defer application.cleanup()
 	if err := application.connect(); err != nil {
 		return -1, err
 	}
-	defer application.cleanup()
 	if err := application.loop(); err != nil {
 		return -1, err
 	}
@@ -427,12 +431,20 @@ func (application *app) handleKey(event client.KeyboardKeyEvent) {
 	if event.State != uint32(client.KeyboardKeyStatePressed) {
 		return
 	}
-	application.launchErr = "" // any keypress dismisses a shown launch error
+	// Any keypress dismisses a shown launch error and completes the entrance fade (which also
+	// recovers the rare case of a compositor that withholds frame callbacks). Both change what
+	// the overlay should look like, so commit a frame here: a key that no branch below handles
+	// - a bare modifier, an unmapped function key - would otherwise leave the last committed
+	// buffer stuck at a partial fade, or still showing a dismissed error banner, with no
+	// further frame callback coming to correct it.
+	commit := application.launchErr != ""
+	application.launchErr = ""
 	if application.animating {
-		// Any keypress completes the entrance fade. This also recovers the (rare) case of a
-		// compositor that withholds frame callbacks, which would otherwise leave the overlay
-		// stuck transparent while holding the keyboard.
 		application.fade, application.animating = 1, false
+		commit = true
+	}
+	if commit {
+		application.redraw()
 	}
 	key := keymap.Decode(event.Key, application.shift)
 
@@ -690,9 +702,12 @@ func (application *app) redraw() {
 	// depend on binding wl_compositor at v4+. We redraw the whole surface, so full-surface
 	// damage is exactly right.
 	application.surface.Damage(0, 0, int32(buf.width), int32(buf.height))
-	// Ask for a frame callback while there is animation to advance, or (in the grid) while
-	// thumbnails are still decoding in the background, so the next step or thumbnail is drawn.
-	if application.animating || application.thumbsPending() {
+	// Ask for a frame callback while there is animation to advance, or (in the grid) while any
+	// thumbnail is still decoding or has decoded but not yet been drawn, so the next step or
+	// thumbnail is picked up. The "decoded but not drawn" half matters: a decode that lands
+	// after Frame read the cache but before this check would otherwise leave nothing armed to
+	// draw it, stranding that tile on its placeholder until the next keypress.
+	if application.animating || application.thumbsActive() {
 		application.requestFrame()
 	}
 	application.surface.Commit()
@@ -709,9 +724,10 @@ func (application *app) thumbFor(preview string) *image.RGBA {
 	return thumb
 }
 
-// thumbsPending reports whether any grid thumbnail is still decoding.
-func (application *app) thumbsPending() bool {
-	return application.thumbs != nil && application.thumbs.Pending()
+// thumbsActive reports whether any grid thumbnail is still decoding or has decoded without
+// being drawn yet - the condition for keeping the frame-callback poll running.
+func (application *app) thumbsActive() bool {
+	return application.thumbs != nil && application.thumbs.Active()
 }
 
 // rowStep is how far Up/Down move the cursor: one item in the list, a whole row (the current
@@ -750,9 +766,12 @@ func (application *app) onFrame(event client.CallbackDoneEvent) {
 		return
 	}
 	if application.thumbs != nil {
-		if application.thumbs.TakeDirty() {
-			application.redraw()
-		} else if application.thumbs.Pending() {
+		// One atomic query, not two: a decode landing between a separate TakeDirty and Pending
+		// would be seen by neither, and the poll would stop with that thumbnail never drawn.
+		dirty, pending := application.thumbs.TakeDirty()
+		if dirty {
+			application.redraw() // redraw re-arms the callback if work remains
+		} else if pending {
 			application.requestFrame()
 		}
 	}

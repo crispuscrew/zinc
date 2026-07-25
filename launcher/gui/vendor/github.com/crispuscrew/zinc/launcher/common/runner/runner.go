@@ -30,6 +30,14 @@ func safeName(name string) error {
 	if strings.HasPrefix(name, "-") {
 		return fmt.Errorf("app name %q cannot begin with '-'", name)
 	}
+	// zcr reads an argument that ends in ".yaml" as a filesystem path, resolved against the
+	// caller's working directory. A store key with that suffix (the app file "notes.yaml.yaml",
+	// listed as "notes.yaml") would therefore run whatever ./notes.yaml happens to be - an
+	// arbitrary config that never went through the store - instead of the app the user picked.
+	// A real path still reaches zcr's path form, because it carries a separator.
+	if !strings.Contains(name, "/") && strings.HasSuffix(name, ".yaml") {
+		return fmt.Errorf("app name %q cannot end with '.yaml' (zcr would read it as a file path; use ./%s for that)", name, name)
+	}
 	return nil
 }
 

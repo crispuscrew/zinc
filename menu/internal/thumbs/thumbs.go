@@ -97,12 +97,25 @@ func (store *Store) Pending() bool {
 	return len(store.inflight) > 0
 }
 
-// TakeDirty reports whether any decode has completed since the previous call, clearing the
-// flag. The caller redraws when it returns true so newly-decoded thumbnails appear.
-func (store *Store) TakeDirty() bool {
+// Active reports whether there is still thumbnail work to observe: a decode in flight, or a
+// finished one that has not been drawn yet. It is the condition for keeping the caller's poll
+// running, and it must be one atomic read - decode publishes the thumbnail, clears inflight,
+// and sets dirty in a single critical section, so querying "pending" and "dirty" separately
+// lets a decode land in the gap and strand a finished thumbnail with nothing left to draw it.
+func (store *Store) Active() bool {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	dirty := store.dirty
-	store.dirty = false
-	return dirty
+	return store.dirty || len(store.inflight) > 0
+}
+
+// TakeDirty reports whether any decode has completed since the previous call, clearing the
+// flag, and whether any decode is still in flight. Both are read under one lock for the reason
+// in Active: consulting them one after the other can lose the last thumbnail. The caller
+// redraws when dirty is set so newly-decoded thumbnails appear, and keeps polling while
+// pending is set.
+func (store *Store) TakeDirty() (dirty, pending bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	dirty, store.dirty = store.dirty, false
+	return dirty, len(store.inflight) > 0
 }

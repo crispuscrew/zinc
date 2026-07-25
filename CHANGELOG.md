@@ -5,7 +5,7 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-07-25
 
 Adds the GUI launcher.
 
@@ -54,11 +54,37 @@ Adds the GUI launcher.
   (`swww`/`swaybg`/`hyprpaper`) or prints the path when that is unset - proving the grid is
   reusable by an ordinary program and staying compositor-agnostic.
 
+### Fixed
+
+- **Double launch in `zlt`** - a second enter while a launch was still in flight started a
+  second `zcr run` of the same app. The two raced on one pod, and the loser's fail-closed
+  teardown removed the pod the winner had just created, killing the app while the picker
+  still reported success. Enter is now ignored until the launch resolves.
+- **App names containing `..` were unusable** - the store rejected any name with `..` as a
+  substring, not just the traversal segment, so an app called `my..app` was listed by both
+  launchers but could never be loaded or launched. The guard now checks path segments; the
+  separator check that actually confines a name to the apps directory is unchanged.
+- **App names ending in `.yaml` ran the wrong file** - `zcr` reads such an argument as a
+  filesystem path, so launching the app `notes.yaml` ran whatever `./notes.yaml` happened to
+  be in the launcher's working directory (for a hotkey, `$HOME`) instead of the stored app.
+  The launchers now reject that name and point at the explicit `./notes.yaml` path form.
+
 ### Known limitations
 
 - `zlg`'s keymap is US-QWERTY; full keyboard-layout (xkb) support is future work.
 - Like `zlt`, `zlg` lists and launches; managing an app (stop, logs, edit) stays in
   `zcc`.
+- **`zlg` freezes while an app starts.** `menu`'s activate callback is synchronous, so `zlg`
+  runs `zcr run` on the Wayland event loop: the overlay stops redrawing and keeps its
+  exclusive keyboard grab until `zcr` returns. That is a second or two for a normal launch,
+  but minutes for an app whose derived image has to be rebuilt. An asynchronous activate is
+  0.4 work.
+- The grid decodes thumbnails for every cell it has drawn, with no prioritisation or
+  cancellation, so scrolling fast through a very large directory makes the visible tiles
+  queue behind ones already scrolled past.
+- The thumbnail decode guard caps declared pixels, which bounds a plausible image but not a
+  crafted one: a deep-colour file at the pixel limit still decodes to far more memory than
+  the cap implies.
 
 ## [0.2.0] - 2026-07-19
 

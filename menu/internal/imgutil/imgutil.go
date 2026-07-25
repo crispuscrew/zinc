@@ -32,7 +32,11 @@ func Decode(path string, maxBytes, maxPixels int64) (result image.Image) {
 			result = nil
 		}
 	}()
-	info, err := os.Lstat(path)
+	// Stat, not Lstat: Lstat describes the link itself, so IsRegular is false for every
+	// symlink and symlinked icons and wallpapers would silently decode to nothing. Stat
+	// resolves to the target and still reports its mode, so FIFOs, directories and devices
+	// stay rejected - including through a symlink.
+	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil
 	}

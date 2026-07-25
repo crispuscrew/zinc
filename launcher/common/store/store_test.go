@@ -105,9 +105,35 @@ func TestLoad_EmptyFileErrors(t *testing.T) {
 // A crafted name (path separator or ".." segment) cannot read a file outside the store.
 func TestLoad_RejectsUnsafeNames(t *testing.T) {
 	sto := &Store{Root: t.TempDir()}
-	for _, bad := range []string{"../evil", "sub/app", "..", ""} {
+	for _, bad := range []string{"../evil", "sub/app", "..", ".", ""} {
 		if _, err := sto.Load(bad); err == nil {
 			t.Errorf("Load(%q): want error, got nil", bad)
 		}
+	}
+}
+
+// A name that merely contains two dots is a legal store key, not traversal: the separator
+// check already confines a name to one path segment. Rejecting it as a substring left such an
+// app listed by the picker (List's charset allows dots) but impossible to load or launch.
+func TestLoad_AllowsDotsInsideAName(t *testing.T) {
+	dir := t.TempDir()
+	body := "SchemaVersion: 2\nType: ZincContainer\nAppNameID: my..app\nDescription: dotted\nImageMeta:\n  Image: localhost/x:local\n"
+	if err := os.WriteFile(filepath.Join(dir, "my..app.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sto := &Store{Root: dir}
+	names, err := sto.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "my..app" {
+		t.Fatalf("List = %v, want [my..app]", names)
+	}
+	cfg, err := sto.Load("my..app")
+	if err != nil {
+		t.Fatalf("Load(%q) failed for an app the picker lists: %v", "my..app", err)
+	}
+	if cfg.Description != "dotted" {
+		t.Errorf("Description = %q, want %q", cfg.Description, "dotted")
 	}
 }
