@@ -72,7 +72,7 @@ launch cannot be cancelled once started (Esc dismisses the overlay, the launch c
 grid thumbnails are decoded without prioritisation, so fast scrolling queues visible tiles
 behind ones already scrolled past.
 
-## 0.4 - Virtualization (zvr) - in progress
+## 0.4 - Virtualization (zvr) - done
 
 VM apps as the container tools' sibling, sharing the same config library and format: one
 store holds both kinds, split by `Type`, and each runner refuses the other's apps by name.
@@ -93,8 +93,36 @@ accelerated window on their compositor, and SPICE-plus-viewer adds a hop that de
 point for anything interactive. The cost, accepted knowingly, is that zvr owns supervision
 and has no snapshots or managed save. See the architecture doc, Virtualization.
 
-Remaining: an e2e suite against real qemu, and a guest actually rendering through the
-accelerated display path (verified to initialize, not yet to draw).
+Also delivered: an end-to-end suite against real qemu (`virtualization/e2e`, a local gate
+rather than a CI one - GitHub's runners have no `/dev/kvm`), and `make -C
+virtualization/runner demo`, which fetches a Fedora Cloud image, verifies it against
+Fedora's own published digest and boots it.
+
+**What 0.4 does NOT deliver, decided deliberately: a guest's GPU.** The display path works -
+a Fedora guest running Weston draws into the qemu window through virtio-gpu, on a host with
+the proprietary NVIDIA driver. But guest Vulkan measures as `llvmpipe`, which is the CPU,
+and OpenGL acceleration has not been confirmed by measurement either. 0.4 therefore ships as
+an OpenGL-class VM runner where 3D may be software; real GPU access is 0.5 (below).
+
+## 0.5 - Guest GPU access - planned
+
+Make a guest's 3D actually reach the GPU, which is what turns a VM app from an isolation
+tool into somewhere a real workload can run.
+
+- **Vulkan through venus.** qemu's `venus=on` carries guest Vulkan to the host GPU, and it
+  is the half that matters for games: Proton, DXVK and vkd3d are all Vulkan. It needs a host
+  `virglrenderer` built with `-Dvenus=true`; Fedora 43's is not, and enabling venus without
+  it fails the renderer outright and leaves the guest with no display at all. So this needs
+  a venus-capable host to verify against, and then becomes opt-in per app rather than a
+  default that breaks stock distros.
+- **Confirm OpenGL.** Read the renderer from inside a guest session and establish whether
+  virgl is genuinely accelerating, rather than assuming it from the fact that a compositor
+  drew something.
+- **A measurement target**, so the answer is a number rather than an impression, and a
+  regression is visible.
+
+Honest boundary on this hardware: full GPU passthrough is not an option here at all. A
+single RTX 5080 with no integrated GPU means passing it through blinds the host.
 
 **ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project in
 its own repository, layered on these tools; its milestones are tracked there, not in this

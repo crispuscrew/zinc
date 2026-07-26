@@ -5,9 +5,10 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-26
 
-Adds VM apps.
+Adds VM apps. Guests boot, display and are managed; making their 3D actually reach the GPU
+is 0.5 work, and the limits below say exactly where that line falls.
 
 ### Added
 
@@ -284,6 +285,7 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.4.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.4.0
 [0.3.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.1
 [0.3.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.0
 [0.2.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.2.1
