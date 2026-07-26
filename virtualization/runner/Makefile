@@ -116,10 +116,14 @@ windows-demo: build
 			&& mv "$(VIRTIO_WIN).part" "$(VIRTIO_WIN)" \
 			|| echo "the driver ISO did not download; continuing without it (the partial file is kept)"; \
 	fi
-	@if [ -f "$(VIRTIO_WIN)" ] && ! $(MAKE) --no-print-directory check-virtio-win >/dev/null 2>&1; then \
-		echo "the driver ISO on disk is damaged; continuing without it. Remove it to re-fetch:"; \
-		echo "  rm $(VIRTIO_WIN)"; \
-		rm -f "$(VIRTIO_WIN)"; \
+	@if [ -z "$(SKIP_DRIVERS)" ] && [ -f "$(VIRTIO_WIN)" ] && ! $(MAKE) --no-print-directory check-virtio-win >/dev/null 2>&1; then \
+		echo; \
+		echo "the driver ISO on disk does not verify, so it will not be attached."; \
+		echo "It is KEPT, not deleted - it is a large download and yours to judge:"; \
+		echo "  make -C virtualization/runner check-virtio-win   see what failed"; \
+		echo "  rm $(VIRTIO_WIN)                                 discard and re-fetch later"; \
+		echo "Windows installs without it, so this does not block the install."; \
+		echo; \
 	fi
 
 	@echo
@@ -128,7 +132,7 @@ windows-demo: build
 	@echo "Install as usual, then shut the guest down from inside Windows."
 	@echo
 	./bin/zvr install --disk "$(WIN_DISK)" --size $(WIN_SIZE) \
-		--media "$(WIN_ISO)" $$(test -z "$(SKIP_DRIVERS)" && test -f "$(VIRTIO_WIN)" && echo --media "$(VIRTIO_WIN)") \
+		--media "$(WIN_ISO)" $$(test -z "$(SKIP_DRIVERS)" && $(MAKE) --no-print-directory check-virtio-win >/dev/null 2>&1 && echo --media "$(VIRTIO_WIN)") \
 		--firmware UEFI --secure-boot --tpm \
 		--memory $(WIN_MEMORY) --vcpus $(WIN_VCPUS)
 	@echo "=== authoring $(WIN_APP) against the installed disk ==="
