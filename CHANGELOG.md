@@ -5,6 +5,31 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [Unreleased]
+
+### Added
+
+- **Windows-class guests.** A guest can now be given the machine Windows requires: UEFI
+  firmware with a per-app writable variable store, Secure Boot, an emulated TPM 2.0 backed
+  by swtpm, and `Devices: Compatible` - an AHCI disk, an Intel NIC and a USB tablet, which
+  every mainstream OS drives out of the box. Windows Setup has drivers for none of the
+  virtio hardware and reports finding no drives at all when pointed at a virtio disk, which
+  is why the device profile is a field rather than an assumption. `Display: Compatible` adds
+  a plain-VGA mode for guests with no virtio-gpu driver.
+- **`zvr install`** - runs an OS installer to produce a base disk, for guests that have no
+  cloud image. It takes flags rather than an app name deliberately: an app pins its base by
+  digest and a disk that does not exist yet has no digest, so requiring one would be a
+  chicken and egg. When the install finishes it prints the disk's digest and the `zc new`
+  line to author an app against it; from then on every run is an overlay, so `zvr reset`
+  returns the app to its freshly installed state.
+- `zc new --firmware/--secure-boot/--tpm/--devices` to author all of the above.
+
+### Known limitations
+
+- **Windows guests get no 3D acceleration.** There is no virtio-gpu driver for Windows, so
+  they run on plain VGA; passthrough, the usual answer, needs a second GPU. Windows guests
+  are for software that must run on Windows, not for games.
+
 ## [0.5.0] - 2026-07-26
 
 Guest GPU access. A VM app's 3D now reaches the host GPU for both OpenGL and Vulkan.

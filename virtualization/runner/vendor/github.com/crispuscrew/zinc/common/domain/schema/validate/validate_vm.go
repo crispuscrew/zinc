@@ -37,13 +37,35 @@ func checkVirtualization(cfg schema.AppConfig, add addFunc) {
 	}
 
 	switch virt.Display {
-	case schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated:
+	case schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated, schema.VMDisplayCompatible:
 	case "":
-		add("VirtualizationMeta.Display: must be set (%s, %s or %s)",
-			schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated)
+		add("VirtualizationMeta.Display: must be set (%s, %s, %s or %s)",
+			schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated, schema.VMDisplayCompatible)
 	default:
-		add("VirtualizationMeta.Display %q: must be %s, %s or %s",
-			virt.Display, schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated)
+		add("VirtualizationMeta.Display %q: must be one of %s, %s, %s, %s",
+			virt.Display, schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated, schema.VMDisplayCompatible)
+	}
+
+	switch virt.Firmware {
+	case schema.VMFirmwareBIOS, schema.VMFirmwareUEFI, "":
+	default:
+		add("VirtualizationMeta.Firmware %q: must be %s or %s (empty means %s)",
+			virt.Firmware, schema.VMFirmwareBIOS, schema.VMFirmwareUEFI, schema.VMFirmwareBIOS)
+	}
+	if virt.SecureBoot && virt.Firmware != schema.VMFirmwareUEFI {
+		// Secure Boot is a UEFI mechanism; there is nothing for it to attach to on BIOS.
+		add("VirtualizationMeta.SecureBoot: requires Firmware %s", schema.VMFirmwareUEFI)
+	}
+
+	switch virt.Devices {
+	case schema.VMDevicesVirtio, schema.VMDevicesCompatible, "":
+	default:
+		add("VirtualizationMeta.Devices %q: must be %s or %s (empty means %s)",
+			virt.Devices, schema.VMDevicesVirtio, schema.VMDevicesCompatible, schema.VMDevicesVirtio)
+	}
+
+	for index, media := range virt.InstallMedia {
+		checkInstallMedia(index, media, add)
 	}
 
 	// Vulkan rides on the accelerated display's virtio-gpu-gl device; there is nothing for
@@ -98,6 +120,21 @@ func validFileDigest(digest string) bool {
 		}
 	}
 	return true
+}
+
+// checkInstallMedia screens an ISO path. It is opened and handed to qemu as a drive, so it
+// carries the same rules as the base image.
+func checkInstallMedia(index int, media string, add addFunc) {
+	switch {
+	case strings.TrimSpace(media) == "":
+		add("VirtualizationMeta.InstallMedia[%d]: must not be empty", index)
+	case hasUnsafe(media):
+		add("VirtualizationMeta.InstallMedia[%d] %q: must be a single-line path (no whitespace or control characters)", index, media)
+	case !filepath.IsAbs(media):
+		add("VirtualizationMeta.InstallMedia[%d] %q: must be an absolute path", index, media)
+	case hasDotDot(media):
+		add("VirtualizationMeta.InstallMedia[%d] %q: must not contain a '..' segment", index, media)
+	}
 }
 
 func checkForward(index int, forward schema.PortForward, add addFunc) {

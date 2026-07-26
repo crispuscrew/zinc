@@ -316,3 +316,123 @@ func TestArgs_VulkanOnlyOnTheAcceleratedDevice(t *testing.T) {
 		}
 	}
 }
+
+// A Windows-class guest is a different machine, not a Linux one with a flag flipped: it
+// boots UEFI, has a TPM, and can only use hardware whose drivers ship in the box. Windows
+// Setup pointed at a virtio disk reports finding no drives at all.
+func TestArgs_WindowsClassMachine(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Display = schema.VMDisplayCompatible
+	cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+	cfg.VirtualizationMeta.Firmware = schema.VMFirmwareUEFI
+	cfg.VirtualizationMeta.TPM = true
+	layout := testLayout()
+	layout.Firmware = Firmware{CodePath: "/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd", VarsPath: "/data/guest-uefi-vars.fd"}
+	layout.TPMSocket = "/run/user/1000/zinc/vm/guest.tpm"
+
+	args := Args(cfg, layout)
+
+	// UEFI: two pflash drives, and the code half read-only so the guest cannot rewrite the
+	// firmware it booted from.
+	flash := pairs(args, "-drive")
+	var code, vars string
+	for _, drive := range flash {
+		if strings.Contains(drive, "if=pflash") && strings.Contains(drive, "unit=0") {
+			code = drive
+		}
+		if strings.Contains(drive, "if=pflash") && strings.Contains(drive, "unit=1") {
+			vars = drive
+		}
+	}
+	if code == "" || !strings.Contains(code, "readonly=on") {
+		t.Errorf("UEFI code pflash should be attached read-only, got %q", code)
+	}
+	if vars == "" || !strings.Contains(vars, layout.Firmware.VarsPath) {
+		t.Errorf("the guest needs its own writable UEFI variable store, got %q", vars)
+	}
+
+	// TPM 2.0 on the interface Windows looks for.
+	if !has(pairs(args, "-device"), "tpm-tis,tpmdev=tpm0") {
+		t.Error("a TPM guest needs the tpm-tis device Windows expects")
+	}
+	if got := pairs(args, "-tpmdev"); len(got) != 1 || !strings.Contains(got[0], "emulator") {
+		t.Errorf("-tpmdev = %v, want the swtpm emulator backend", got)
+	}
+
+	// Devices an installer without virtio drivers can actually see.
+	devices := pairs(args, "-device")
+	for _, want := range []string{"ahci,id=ahci", "e1000e,netdev=net0", "usb-tablet,bus=usb.0"} {
+		if !has(devices, want) {
+			t.Errorf("a compatible-devices guest needs %q, got %v", want, devices)
+		}
+	}
+	for _, device := range devices {
+		if strings.HasPrefix(device, "virtio-") {
+			t.Errorf("a compatible-devices guest must carry no virtio hardware, got %q", device)
+		}
+	}
+	if got := pairs(args, "-display"); len(got) != 1 || got[0] != "gtk" {
+		t.Errorf("-display = %v, want plain gtk on VGA", got)
+	}
+
+	// Windows reads the hardware clock as local time; UTC leaves it wrong by the offset.
+	if got := pairs(args, "-rtc"); len(got) != 1 || got[0] != "base=localtime" {
+		t.Errorf("-rtc = %v, want base=localtime for a compatible-devices guest", got)
+	}
+}
+
+// A Linux guest must be untouched by any of that: still virtio, still BIOS, still UTC.
+func TestArgs_LinuxGuestUnchangedByWindowsSupport(t *testing.T) {
+	args := Args(testCfg(), testLayout())
+	if len(pairs(args, "-tpmdev")) != 0 {
+		t.Error("a guest that did not ask for a TPM must not get one")
+	}
+	for _, drive := range pairs(args, "-drive") {
+		if strings.Contains(drive, "pflash") {
+			t.Errorf("a BIOS guest should have no pflash, got %q", drive)
+		}
+	}
+	if got := pairs(args, "-rtc"); len(got) != 1 || got[0] != "base=utc" {
+		t.Errorf("-rtc = %v, want base=utc for a virtio guest", got)
+	}
+	if !has(pairs(args, "-device"), "virtio-net-pci,netdev=net0") {
+		t.Error("a virtio guest should keep its virtio NIC")
+	}
+}
+
+// Install media is attached only for an install, and read-only: the installer boots from
+// the disc, and a normal run of the same app must not see it at all.
+func TestArgs_InstallMediaOnlyWhenInstalling(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+	cfg.VirtualizationMeta.InstallMedia = []string{"/iso/win11.iso", "/iso/virtio-win.iso"}
+
+	normal := Args(cfg, testLayout())
+	for _, drive := range pairs(normal, "-drive") {
+		if strings.Contains(drive, "cdrom") {
+			t.Errorf("a normal run must not attach install media, got %q", drive)
+		}
+	}
+	if len(pairs(normal, "-boot")) != 0 {
+		t.Error("a normal run should not override the boot order")
+	}
+
+	layout := testLayout()
+	layout.Installing = true
+	installing := Args(cfg, layout)
+	cdroms := 0
+	for _, drive := range pairs(installing, "-drive") {
+		if strings.Contains(drive, "media=cdrom") {
+			cdroms++
+			if !strings.Contains(drive, "readonly=on") {
+				t.Errorf("install media should be read-only, got %q", drive)
+			}
+		}
+	}
+	if cdroms != 2 {
+		t.Errorf("got %d cdroms, want both install ISOs", cdroms)
+	}
+	if got := pairs(installing, "-boot"); len(got) != 1 || !strings.Contains(got[0], "order=d") {
+		t.Errorf("-boot = %v, want the installer disc first", got)
+	}
+}

@@ -32,6 +32,14 @@ type Layout struct {
 	PIDFile string // qemu writes its pid here, which is how zvr finds it again
 	QMP     string // control socket: status queries and a graceful power button
 	Serial  string // the guest's serial console, for `zvr console`
+
+	// Firmware is empty for a BIOS guest; a UEFI guest needs OVMF plus its own writable
+	// variable store. TPMSocket is empty unless an emulated TPM is attached.
+	Firmware  Firmware
+	TPMSocket string
+	// Installing attaches VirtualizationMeta.InstallMedia and boots from it, which is how a
+	// guest with no cloud image (Windows) gets installed in the first place.
+	Installing bool
 }
 
 // Args returns the full argv for cfg. The caller has already validated cfg, so the sizing
@@ -49,7 +57,6 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		"-smp", strconv.Itoa(virt.VCPUs),
 		"-m", strconv.FormatInt(virt.MemoryMiB, 10) + "M",
 		"-nodefaults",
-		"-rtc", "base=utc",
 		"-pidfile", layout.PIDFile,
 		"-qmp", "unix:" + layout.QMP + ",server=on,wait=off",
 		// server=on,wait=off: the socket exists from the start but the guest never waits
@@ -57,10 +64,18 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		"-serial", "unix:" + layout.Serial + ",server=on,wait=off",
 	}
 
+	args = append(args, rtcArgs(virt.Devices)...)
 	args = append(args, sandboxArgs(virt.Vulkan)...)
-	args = append(args, diskArgs(layout)...)
-	args = append(args, netArgs(virt.ForwardPorts)...)
-	args = append(args, displayArgs(virt.Display, virt.Vulkan)...)
+	args = append(args, firmwareArgs(layout.Firmware)...)
+	args = append(args, tpmArgs(layout.TPMSocket)...)
+	args = append(args, diskArgs(layout, virt.Devices)...)
+	if layout.Installing {
+		args = append(args, mediaArgs(virt.InstallMedia)...)
+		// Boot the installer rather than the empty disk it is about to write to.
+		args = append(args, "-boot", "order=d,menu=on")
+	}
+	args = append(args, netArgs(virt.ForwardPorts, virt.Devices)...)
+	args = append(args, displayArgs(virt.Display, virt.Vulkan, virt.Devices)...)
 	args = append(args, audioArgs(cfg.AudioMeta)...)
 	return args
 }
@@ -85,10 +100,8 @@ func sandboxArgs(vulkan bool) []string {
 // diskArgs attaches the app's overlay and, when present, the cloud-init seed. The overlay
 // is the only writable disk: the pinned base it is backed by is never opened for writing,
 // so the authored image cannot drift from its digest.
-func diskArgs(layout Layout) []string {
-	args := []string{
-		"-drive", "file=" + layout.Overlay + ",if=virtio,format=qcow2,discard=unmap",
-	}
+func diskArgs(layout Layout, devices schema.VMDevices) []string {
+	args := diskArgsFor(devices, layout.Overlay)
 	if layout.Seed != "" {
 		// Read-only and raw: cloud-init looks for a filesystem labelled cidata, and the
 		// guest has no business writing to its own seed.
@@ -101,14 +114,14 @@ func diskArgs(layout Layout) []string {
 // with no host interface to attach to and nothing inbound except the forwards asked for.
 // Each forward binds 127.0.0.1 rather than every interface, so a forwarded guest port
 // reaches the host that started it and not the LAN.
-func netArgs(forwards []schema.PortForward) []string {
+func netArgs(forwards []schema.PortForward, devices schema.VMDevices) []string {
 	netdev := "user,id=net0"
 	for _, forward := range forwards {
 		netdev += fmt.Sprintf(",hostfwd=tcp:127.0.0.1:%d-:%d", forward.HostPort, forward.GuestPort)
 	}
 	return []string{
 		"-netdev", netdev,
-		"-device", "virtio-net-pci,netdev=net0",
+		"-device", netDeviceFor(devices),
 	}
 }
 
@@ -116,8 +129,12 @@ func netArgs(forwards []schema.PortForward) []string {
 // virtio-gpu-gl renders guest 3D on the host GPU and hands the result to the compositor
 // as a dmabuf, so frames never leave the machine and never get encoded - the difference
 // between a playable game and a slideshow.
-func displayArgs(mode schema.VMDisplay, vulkan bool) []string {
+func displayArgs(mode schema.VMDisplay, vulkan bool, devices schema.VMDevices) []string {
 	switch mode {
+	case schema.VMDisplayCompatible:
+		// Plain VGA: no acceleration at all, and the only thing a guest without a virtio-gpu
+		// driver can put on screen - which on this hardware means Windows.
+		return append(inputArgsFor(devices), "-device", "VGA,vgamem_mb=64", "-display", "gtk")
 	case schema.VMDisplayAccelerated:
 		// virtio-gpu-gl gives the guest OpenGL through virgl either way. venus adds Vulkan,
 		// and needs blob resources plus a host memory window to share buffers through -
@@ -127,22 +144,12 @@ func displayArgs(mode schema.VMDisplay, vulkan bool) []string {
 		if vulkan {
 			device += ",venus=on,blob=on,hostmem=" + strconv.Itoa(hostMemGiB) + "G"
 		}
-		return append(inputArgs(), "-device", device, "-display", "gtk,gl=on")
+		return append(inputArgsFor(devices), "-device", device, "-display", "gtk,gl=on")
 	case schema.VMDisplayWindow:
-		return append(inputArgs(), "-device", "virtio-gpu-pci", "-display", "gtk")
+		return append(inputArgsFor(devices), "-device", "virtio-gpu-pci", "-display", "gtk")
 	default: // VMDisplayNone
 		// No window and no graphics card at all; the serial console is the way in.
 		return []string{"-display", "none"}
-	}
-}
-
-// inputArgs gives a windowed guest its keyboard and pointer. The tablet reports absolute
-// coordinates, so the pointer tracks the host's without the window having to grab it -
-// grabbing is still there (qemu binds it) for anything that wants relative motion.
-func inputArgs() []string {
-	return []string{
-		"-device", "virtio-keyboard-pci",
-		"-device", "virtio-tablet-pci",
 	}
 }
 

@@ -17,6 +17,7 @@
 //	zvr validate <app|path>  check a config without running anything
 //	zvr reset <app>          delete the guest's disk, returning it to the pinned base
 //	zvr pin <image>          print the sha256 pin for a base image
+//	zvr install --disk ...   run an OS installer to produce a base disk (Windows)
 //	zvr console <app>        where to attach for the guest's serial console
 package main
 
@@ -46,6 +47,8 @@ const usage = `usage:
   zvr validate <app|path.yaml>  check a config, run nothing
   zvr reset <app>               delete the guest's disk, back to the pinned base
   zvr pin <image.qcow2>         print the sha256 pin to put in a config
+  zvr install --disk PATH --media ISO...
+                                run an OS installer to produce a base disk (Windows)
   zvr console <app>             print how to attach to the guest's serial console
   zvr version`
 
@@ -71,6 +74,9 @@ func run(argv []string) error {
 		return nil
 	case "pin":
 		return cmdPin(rest)
+	case "install":
+		// Standalone: it creates a base disk rather than acting on an existing app.
+		return cmdInstall(rest)
 	}
 
 	svc, err := service()
@@ -262,6 +268,9 @@ func cmdPin(argv []string) error {
 	fmt.Println(digest)
 	return nil
 }
+
+// diskDigest hashes a disk the same way the pin check does.
+func diskDigest(path string) (string, error) { return disk.Digest(path) }
 
 // loadApp resolves an app by store name or by file path, the same rule zcr uses: an
 // argument with a path separator or a .yaml suffix is read directly.

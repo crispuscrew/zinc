@@ -12,6 +12,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 	"github.com/crispuscrew/zinc/virtualization/runner/adapters/disk"
+	"github.com/crispuscrew/zinc/virtualization/runner/adapters/firmware"
 	"github.com/crispuscrew/zinc/virtualization/runner/adapters/fs"
 	"github.com/crispuscrew/zinc/virtualization/runner/adapters/machine"
 	"github.com/crispuscrew/zinc/virtualization/runner/domain/paths"
@@ -42,11 +43,17 @@ func (svc Service) Plan(cfg schema.AppConfig) ([]string, error) {
 	if err := svc.check(cfg); err != nil {
 		return nil, err
 	}
-	return qemu.Args(cfg, svc.layout(cfg)), nil
+	layout, err := svc.machineLayout(cfg, false, false)
+	if err != nil {
+		return nil, err
+	}
+	return qemu.Args(cfg, layout), nil
 }
 
 // Run boots an app's guest.
-func (svc Service) Run(cfg schema.AppConfig) error {
+func (svc Service) Run(cfg schema.AppConfig) error { return svc.start(cfg, false) }
+
+func (svc Service) start(cfg schema.AppConfig, installing bool) error {
 	if err := svc.check(cfg); err != nil {
 		return err
 	}
@@ -79,12 +86,48 @@ func (svc Service) Run(cfg schema.AppConfig) error {
 		}
 		extraEnv = env
 	}
-	return svc.Runtime.Start(cfg.AppNameID, qemu.Args(cfg, svc.layout(cfg)), extraEnv)
+	layout, err := svc.machineLayout(cfg, installing, true)
+	if err != nil {
+		return err
+	}
+	return svc.Runtime.Start(cfg.AppNameID, qemu.Args(cfg, layout), extraEnv)
 }
 
-// Stop shuts a guest down, gracefully unless force is set.
+// machineLayout resolves the host-side pieces a guest's machine needs before qemu starts:
+// its UEFI variable store and, when it has a TPM, a running emulator to back it.
+func (svc Service) machineLayout(cfg schema.AppConfig, installing, startServices bool) (qemu.Layout, error) {
+	name := cfg.AppNameID
+	layout := svc.layout(cfg)
+	layout.Installing = installing
+
+	prepared, err := firmware.Prepare(cfg.VirtualizationMeta, svc.Paths.UEFIVars(name))
+	if err != nil {
+		return qemu.Layout{}, err
+	}
+	layout.Firmware = prepared
+
+	if cfg.VirtualizationMeta.TPM {
+		layout.TPMSocket = svc.Paths.TPMSocket(name)
+		// A plan must not start anything: --dry-run's whole promise is that it shows what
+		// would happen without doing any of it, and a TPM emulator left running would be
+		// exactly the sort of side effect that promise rules out.
+		if startServices {
+			firmware.StopTPM(svc.Paths.TPMSocket(name), svc.Paths.TPMPID(name))
+			if _, err := firmware.StartTPM(svc.Paths.TPMState(name), svc.Paths.TPMSocket(name), svc.Paths.TPMPID(name)); err != nil {
+				return qemu.Layout{}, err
+			}
+		}
+	}
+	return layout, nil
+}
+
+// Stop shuts a guest down, gracefully unless force is set. The TPM emulator is a separate
+// process, so it has to be stopped with the guest rather than left running against a
+// machine that no longer exists.
 func (svc Service) Stop(name string, force bool, timeout time.Duration) error {
-	return svc.Runtime.Stop(name, force, timeout)
+	err := svc.Runtime.Stop(name, force, timeout)
+	firmware.StopTPM(svc.Paths.TPMSocket(name), svc.Paths.TPMPID(name))
+	return err
 }
 
 // State reports one app's guest.

@@ -133,3 +133,19 @@ func (paths Paths) VenusEnv() ([]string, error) {
 		"RENDER_SERVER_EXEC_PATH=" + server,
 	}, nil
 }
+
+// UEFIVars is this app's writable UEFI variable store. Per app because UEFI keeps boot
+// entries there: a shared store would let one guest's boot configuration overwrite
+// another's.
+func (paths Paths) UEFIVars(app string) string {
+	return filepath.Join(paths.StateDir, app+"-uefi-vars.fd")
+}
+
+// TPMState is where this app's emulated TPM keeps its persistent state - the keys a guest
+// believes are sealed to its own machine, which is exactly why it is not shared.
+func (paths Paths) TPMState(app string) string {
+	return filepath.Join(paths.StateDir, app+"-tpm")
+}
+
+func (paths Paths) TPMSocket(app string) string { return filepath.Join(paths.RunDir, app+".tpm") }
+func (paths Paths) TPMPID(app string) string    { return filepath.Join(paths.RunDir, app+".tpm.pid") }

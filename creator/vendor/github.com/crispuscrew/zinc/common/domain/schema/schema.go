@@ -110,6 +110,24 @@ type VirtualizationMeta struct {
 	// OpenGL, but its Vulkan runs on the CPU - which is what Proton, DXVK and vkd3d use.
 	Vulkan bool `yaml:"Vulkan"`
 
+	// Firmware is how the guest boots. Linux images generally boot either way; Windows 11
+	// requires UEFI, and refuses to install without it.
+	Firmware VMFirmware `yaml:"Firmware"`
+	// SecureBoot enables UEFI Secure Boot, which Windows 11 also expects. Requires UEFI.
+	SecureBoot bool `yaml:"SecureBoot"`
+	// TPM attaches an emulated TPM 2.0. Windows 11 refuses to install without one.
+	TPM bool `yaml:"TPM"`
+
+	// Devices picks which hardware the guest is given. It exists because a guest can only
+	// use hardware it has drivers for, and Windows Setup has none for virtio: pointed at a
+	// virtio disk it reports finding no drives at all.
+	Devices VMDevices `yaml:"Devices"`
+
+	// InstallMedia are ISO images attached read-only as CD-ROMs. A Windows guest is
+	// installed from one rather than started from a cloud image; `zvr install` boots with
+	// these attached, and a normal run ignores them.
+	InstallMedia []string `yaml:"InstallMedia"`
+
 	// ForwardPorts publishes a guest port on the host over user-mode networking. VM apps
 	// do not use NetworkMeta: that model is enforced by nftables inside a container's own
 	// network namespace and does not carry over to a guest, so rather than mis-enforce it
@@ -125,9 +143,37 @@ func (virt VirtualizationMeta) IsZero() bool {
 	return virt.BaseDigest == "" &&
 		virt.DiskSizeGiB == 0 && virt.MemoryMiB == 0 && virt.VCPUs == 0 &&
 		virt.Display == "" && !virt.Vulkan &&
+		virt.Firmware == "" && !virt.SecureBoot && !virt.TPM &&
+		virt.Devices == "" && len(virt.InstallMedia) == 0 &&
 		len(virt.ForwardPorts) == 0 &&
 		virt.CloudInit == CloudInit{}
 }
+
+// VMFirmware is how a guest boots.
+type VMFirmware string
+
+const (
+	// VMFirmwareBIOS is the traditional path, and what a Linux cloud image expects.
+	VMFirmwareBIOS VMFirmware = "BIOS"
+	// VMFirmwareUEFI boots through OVMF, with its own writable variable store per app so a
+	// guest's boot entries survive a restart without leaking into any other guest.
+	VMFirmwareUEFI VMFirmware = "UEFI"
+)
+
+// VMDevices is the hardware profile a guest is given. Virtio is faster in every dimension
+// and is what a Linux guest should use; Compatible exists because a guest cannot use
+// hardware it has no driver for, and Windows Setup ships none for virtio - pointed at a
+// virtio disk it simply reports that it cannot find a drive.
+type VMDevices string
+
+const (
+	// VMDevicesVirtio is the default: virtio disk, network and input.
+	VMDevicesVirtio VMDevices = "Virtio"
+	// VMDevicesCompatible uses hardware every mainstream OS has drivers for out of the box:
+	// an AHCI disk, an Intel gigabit NIC and a USB tablet. Slower, and the price of being
+	// able to install an OS that has never heard of virtio.
+	VMDevicesCompatible VMDevices = "Compatible"
+)
 
 // VMDisplay is how a VM app is seen. It is explicit rather than inferred: whether a guest
 // gets an accelerated window is exactly the difference between a usable game and an
@@ -145,6 +191,10 @@ const (
 	// on the host GPU and frames reach the compositor without leaving the machine. Needs a
 	// guest with the virtio-gpu driver (Linux).
 	VMDisplayAccelerated VMDisplay = "Accelerated"
+	// VMDisplayCompatible opens a local window on plain VGA, which every OS can drive
+	// including at install time. No acceleration of any kind: it is what a guest without a
+	// virtio-gpu driver gets, and on this hardware that means Windows.
+	VMDisplayCompatible VMDisplay = "Compatible"
 )
 
 // PortForward publishes GuestPort inside the VM as HostPort on the host.
