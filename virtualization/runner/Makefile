@@ -103,8 +103,12 @@ windows-demo: build
 	@if [ ! -f "$(VIRTIO_WIN)" ]; then \
 		echo "fetching the virtio-win driver ISO (~700 MB, once). It resumes if interrupted,"; \
 		echo "and is what lets the installed guest be switched to fast virtio disk and network."; \
-		curl -fSL -C - --progress-bar -o "$(VIRTIO_WIN).part" "$(VIRTIO_URL)"; \
-		mv "$(VIRTIO_WIN).part" "$(VIRTIO_WIN)"; \
+		curl -fSL -C - --progress-bar -o "$(VIRTIO_WIN).part" "$(VIRTIO_URL)" \
+			&& mv "$(VIRTIO_WIN).part" "$(VIRTIO_WIN)" \
+			|| { echo; \
+			     echo "the virtio-win download did not finish. The partial file is kept, so"; \
+			     echo "running this again resumes it rather than starting over."; \
+			     exit 1; }; \
 	fi
 	@echo
 	@echo "Starting Windows Setup in a qemu window: UEFI + Secure Boot + TPM 2.0,"

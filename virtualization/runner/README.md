@@ -137,3 +137,15 @@ make repro        # prove the build is byte-identical
 
 Running guests needs `qemu-system-x86_64`, `qemu-img` and `xorriso` on the host, plus
 `/dev/kvm`.
+
+### If the driver ISO download fails
+
+It is a ~700 MB fetch and it does sometimes drop. The partial file is kept, so re-running
+the target resumes it. A download that does not complete now fails the target rather than
+letting a truncated file take the finished name - an earlier version of this promoted the
+fragment, which then looked complete to every later run.
+
+A Windows install does not need that ISO: Setup boots from the Windows media and installs
+onto the AHCI disk that `Devices: Compatible` provides. The driver disc only matters if you
+want to switch the installed guest to virtio disk and network afterwards, which is worth
+doing for the speed but can be done any time.
