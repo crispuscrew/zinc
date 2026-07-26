@@ -486,3 +486,38 @@ func TestArgs_SeedFollowsTheDeviceProfile(t *testing.T) {
 		t.Error("a virtio guest should keep its virtio seed drive")
 	}
 }
+
+// Secure Boot is not enabled by loading the secboot firmware. OVMF keeps its signature
+// database in memory only System Management Mode may write, so without SMM the variables
+// are unprotected and the firmware does not ENFORCE Secure Boot. Nothing on the host shows
+// the difference; the guest decides it. Windows 11 Setup refuses with "This PC doesn't
+// currently meet Windows 11 system requirements", because as far as it can tell Secure Boot
+// is simply off.
+func TestArgs_SecureBootRequiresSMM(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Firmware = schema.VMFirmwareUEFI
+	cfg.VirtualizationMeta.SecureBoot = true
+	args := Args(cfg, testLayout())
+
+	machine := pairs(args, "-machine")
+	if len(machine) != 1 || !strings.Contains(machine[0], "smm=on") {
+		t.Errorf("-machine = %v, want smm=on or Secure Boot is not enforced", machine)
+	}
+	globals := pairs(args, "-global")
+	if !has(globals, "driver=cfi.pflash01,property=secure,value=on") {
+		t.Errorf("-global = %v, want the pflash secure property that routes variable writes through SMM", globals)
+	}
+	if !has(globals, "ICH9-LPC.disable_s3=1") {
+		t.Errorf("-global = %v, want S3 disabled: resuming from it bypasses the firmware's re-validation", globals)
+	}
+
+	// A guest that did not ask for Secure Boot pays none of it.
+	cfg.VirtualizationMeta.SecureBoot = false
+	plain := Args(cfg, testLayout())
+	if got := pairs(plain, "-machine"); strings.Contains(got[0], "smm") {
+		t.Errorf("-machine = %v, want no SMM without Secure Boot", got)
+	}
+	if len(pairs(plain, "-global")) != 0 {
+		t.Error("a guest without Secure Boot should carry no secure-boot globals")
+	}
+}

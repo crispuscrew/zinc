@@ -13,6 +13,33 @@ import (
 // separate, explicit fields rather than a "Windows" preset: the config says what the
 // machine has, and the guest either drives it or does not.
 
+// machineType builds the -machine argument. Secure Boot needs SMM: the firmware keeps its
+// signature database in memory that only System Management Mode may write, and without SMM
+// the variables are not protected, so OVMF runs but does not ENFORCE Secure Boot. The
+// distinction is invisible from the host and decisive in the guest - Windows 11 reports
+// that the PC does not meet its requirements, because as far as it can tell Secure Boot is
+// switched off.
+func machineType(virt schema.VirtualizationMeta) string {
+	machine := "q35,accel=kvm"
+	if virt.SecureBoot {
+		machine += ",smm=on"
+	}
+	return machine
+}
+
+// secureBootArgs completes what machineType starts. The pflash "secure" property is what
+// actually routes writes to the variable store through SMM, and S3 suspend is disabled
+// because resuming from it bypasses the firmware's own re-validation.
+func secureBootArgs(virt schema.VirtualizationMeta) []string {
+	if !virt.SecureBoot {
+		return nil
+	}
+	return []string{
+		"-global", "driver=cfi.pflash01,property=secure,value=on",
+		"-global", "ICH9-LPC.disable_s3=1",
+	}
+}
+
 // Firmware is where the OVMF images live on the host, and the per-app copy of the writable
 // variable store. UEFI keeps boot entries in that store, so each app needs its own: a
 // shared one would let one guest's boot configuration overwrite another's.

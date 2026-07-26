@@ -52,7 +52,7 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		// q35 is the modern chipset (PCIe, no legacy baggage); KVM is what makes the guest
 		// fast enough to interact with, and -cpu host exposes the real CPU's features so
 		// guest code is not held back by a generic model.
-		"-machine", "q35,accel=kvm",
+		"-machine", machineType(virt),
 		"-cpu", "host",
 		"-smp", strconv.Itoa(virt.VCPUs),
 		"-m", strconv.FormatInt(virt.MemoryMiB, 10) + "M",
@@ -64,6 +64,7 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		"-serial", "unix:" + layout.Serial + ",server=on,wait=off",
 	}
 
+	args = append(args, secureBootArgs(virt)...)
 	args = append(args, rtcArgs(virt.Devices)...)
 	args = append(args, sandboxArgs(virt.Vulkan)...)
 	args = append(args, firmwareArgs(layout.Firmware)...)
