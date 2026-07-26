@@ -16,9 +16,21 @@ func Validate(cfg schema.AppConfig) error {
 
 	checkIdentity(cfg, add)
 	checkLifecycle(cfg, add)
-	checkResources(cfg.ResourcesMeta, add)
 	checkInstall(cfg.ImageMeta.Install, add)
 	checkDepends(cfg.StartConditions.DependsOn, add)
+
+	// The two app types share their identity, lifecycle and setup rules above and diverge
+	// below: each rejects what the other's runtime cannot honour, so a field is never
+	// accepted into a config where it would do nothing.
+	if cfg.Type == schema.ZincVirtualization {
+		checkVirtualization(cfg, add)
+		checkContainerOnlyFields(cfg, add)
+		return errors.Join(errs...)
+	}
+
+	checkVirtualizationUnset(cfg, add)
+	checkContainerImage(cfg.ImageMeta.Image, add)
+	checkResources(cfg.ResourcesMeta, add)
 
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		checkNetworkList(index, netList, add)
@@ -92,11 +104,11 @@ func checkIdentity(cfg schema.AppConfig, add addFunc) {
 	}
 
 	switch cfg.Type {
-	case schema.ZincContainer:
+	case schema.ZincContainer, schema.ZincVirtualization:
 	case "":
-		add("Type: must be set (ZincContainer)")
+		add("Type: must be set (%s or %s)", schema.ZincContainer, schema.ZincVirtualization)
 	default:
-		add("Type %q: must be ZincContainer (ZincVirtualization not yet supported)", cfg.Type)
+		add("Type %q: must be %s or %s", cfg.Type, schema.ZincContainer, schema.ZincVirtualization)
 	}
 
 	switch {
@@ -106,20 +118,25 @@ func checkIdentity(cfg schema.AppConfig, add addFunc) {
 		add("AppNameID %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", cfg.AppNameID)
 	}
 
-	switch {
-	case strings.TrimSpace(cfg.ImageMeta.Image) == "":
-		add("ImageMeta.Image: must not be empty")
-	case hasUnsafe(cfg.ImageMeta.Image):
-		// Interpolated into a FROM line - must be a single-line ref (section 5.5).
-		add("ImageMeta.Image %q: must be a single-line reference (no whitespace or control characters)", cfg.ImageMeta.Image)
-	case !LocalImage(cfg.ImageMeta.Image) && !digestRE.MatchString(cfg.ImageMeta.Image):
-		// section 5.5: third-party images pinned by canonical digest; only localhost/ may use a mutable tag.
-		add("ImageMeta.Image %q: third-party images must be digest-pinned (...@sha256:<64 hex>); only localhost/ images may use a mutable tag (section 5.5)", cfg.ImageMeta.Image)
-	}
-
 	// NonRootUserName becomes `podman --user`; keep it a safe charset.
 	if name := cfg.InternalUserMeta.NonRootUserName; name != "" && !nameRE.MatchString(name) {
 		add("InternalUserMeta.NonRootUserName %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", name)
+	}
+}
+
+// checkContainerImage screens a container app's image reference. A VM app's Image is a
+// path to a base disk instead, pinned by its own file digest, so it is screened by
+// checkBaseImage rather than here.
+func checkContainerImage(image string, add addFunc) {
+	switch {
+	case strings.TrimSpace(image) == "":
+		add("ImageMeta.Image: must not be empty")
+	case hasUnsafe(image):
+		// Interpolated into a FROM line - must be a single-line ref (section 5.5).
+		add("ImageMeta.Image %q: must be a single-line reference (no whitespace or control characters)", image)
+	case !LocalImage(image) && !digestRE.MatchString(image):
+		// section 5.5: third-party images pinned by canonical digest; only localhost/ may use a mutable tag.
+		add("ImageMeta.Image %q: third-party images must be digest-pinned (...@sha256:<64 hex>); only localhost/ images may use a mutable tag (section 5.5)", image)
 	}
 }
 

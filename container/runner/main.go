@@ -313,6 +313,9 @@ func cmdLifecycle(svc app.Service, opt options.HostOptions, cmd string, argv []s
 	}
 	name := argv[0]
 	if cmd == "inspect" {
+		if err := refuseVM(svc, name); err != nil {
+			return err
+		}
 		return svc.Do(podman.InspectArgs(name))
 	}
 	cfg, err := loadApp(svc, name)
@@ -342,6 +345,9 @@ func cmdLogs(svc app.Service, argv []string) error {
 	}
 	if fset.NArg() != 1 {
 		return fmt.Errorf("usage: zcr logs <app> [-f]")
+	}
+	if err := refuseVM(svc, fset.Arg(0)); err != nil {
+		return err
 	}
 	return svc.Do(podman.LogsArgs(fset.Arg(0), *follow))
 }
@@ -462,7 +468,40 @@ func printPlan(plan []ports.Command) {
 
 // loadApp resolves an app by store name or by file path. An argument containing a path
 // separator or ending in ".yaml" is read directly; otherwise it is looked up in the store.
+// Every command that needs a config goes through here, which is why the app-type check
+// lives here: one store holds both container and VM apps, and zcr runs only the
+// containers. The passthrough commands that never load a config (inspect, logs) call
+// refuseVM instead.
 func loadApp(svc app.Service, arg string) (schema.AppConfig, error) {
+	cfg, err := load(svc, arg)
+	if err != nil {
+		return schema.AppConfig{}, err
+	}
+	if cfg.Type == schema.ZincVirtualization {
+		// Refuse rather than try: none of what follows - the image build, the pod, the
+		// nftables lock-down - means anything for a guest, and a half-applied container
+		// launch is exactly the mis-enforcement the network model refuses elsewhere.
+		return schema.AppConfig{}, fmt.Errorf("app %q is a VM app (Type: %s); run it with zvr", cfg.AppNameID, cfg.Type)
+	}
+	return cfg, nil
+}
+
+// refuseVM stops a container-only passthrough from being aimed at a VM app. inspect and
+// logs hand the name straight to podman without loading anything, so without this they
+// fail with podman's "no such object" - true, but silent about the actual reason, which
+// is that the app is a guest and zvr owns it. A name that is not a defined app is left
+// alone: it may legitimately be a raw container name.
+func refuseVM(svc app.Service, name string) error {
+	cfg, err := load(svc, name)
+	if err != nil || cfg.Type != schema.ZincVirtualization {
+		// Not a defined app (it may legitimately be a raw container name), or unreadable,
+		// or a container: either way this guard has nothing to say and podman answers.
+		return nil
+	}
+	return fmt.Errorf("app %q is a VM app (Type: %s); use zvr", name, cfg.Type)
+}
+
+func load(svc app.Service, arg string) (schema.AppConfig, error) {
 	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".yaml") {
 		return svc.LoadFile(arg)
 	}

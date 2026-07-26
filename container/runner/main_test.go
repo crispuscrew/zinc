@@ -73,6 +73,27 @@ func TestValidateDispatch(t *testing.T) {
 	}
 }
 
+// One store holds both app types, so zcr must refuse a VM app by name rather than trying
+// to run a guest as a container: the image build, the pod and the nftables lock-down all
+// mean nothing for a VM, and half-applying them is exactly the mis-enforcement the
+// network model refuses elsewhere.
+func TestVMAppRefusedByRunner(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	quiet(t)
+
+	vm := writeApp(t, "SchemaVersion: 2\nType: ZincVirtualization\nAppNameID: guest\n"+
+		"ImageMeta:\n  Image: /var/lib/zinc/images/fedora.qcow2\n"+
+		"VirtualizationMeta:\n  BaseDigest: sha256:"+strings.Repeat("a", 64)+
+		"\n  MemoryMiB: 4096\n  VCPUs: 2\n  Display: None\n")
+
+	for _, command := range []string{"validate", "run", "stop", "inspect"} {
+		err := run([]string{command, vm})
+		if err == nil || !strings.Contains(err.Error(), "zvr") {
+			t.Errorf("zcr %s on a VM app: want an error pointing at zvr, got: %v", command, err)
+		}
+	}
+}
+
 // run without --exec is a dry run: it validates and prints the podman plan, touching no
 // runtime, so it succeeds for a valid app under test.
 func TestRunDryRun(t *testing.T) {
