@@ -68,6 +68,29 @@ accelerated window is the difference between a playable game and a slideshow:
 
 Accelerated 3D needs a guest with the virtio-gpu driver, which in practice means Linux.
 
+### OpenGL yes, Vulkan no
+
+`Accelerated` gives the guest **OpenGL** through virgl. It does **not** give it Vulkan: a
+guest's Vulkan falls back to `llvmpipe`, which is software rasterisation on the CPU.
+
+That matters more than it sounds, because Proton, DXVK and vkd3d are all Vulkan - so a
+Windows game running under Proton in a guest would be rendering on the CPU, however good the
+host GPU is.
+
+Guest Vulkan needs qemu's `venus=on`, which is deliberately not set here. It requires a host
+`virglrenderer` built with venus support, and where that is missing the renderer does not
+degrade to OpenGL - it fails outright, leaving the guest with no display at all. Measured on
+Fedora 43, whose `virglrenderer 1.2.0` ships without venus:
+
+```
+failed to initialize venus renderer
+qemu: virgl could not be initialized: -1
+```
+
+Getting Vulkan therefore means building `virglrenderer` with `-Dvenus=true` on the host. Once
+there is a host to verify it against, enabling venus can become an opt-in per app; shipping it
+on by default would trade a working display for a broken one on every stock distro.
+
 ## Known limits
 
 - **No egress filtering.** The container network model is nftables inside a container's own

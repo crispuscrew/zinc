@@ -31,11 +31,9 @@ Adds VM apps.
   boundary that is not there.
 - **Accelerated guest display** - `Display: Accelerated` attaches `virtio-gpu-gl` and a local
   window, so guest 3D runs on the host GPU and frames reach the compositor without leaving
-  the machine or being encoded. It enables `venus=on,blob=on`, which is off by default in
-  qemu: without it a guest gets accelerated OpenGL but silently falls back to llvmpipe -
-  software rasterisation on the CPU - for **Vulkan**, which is what Proton, DXVK and vkd3d
-  actually use. Measured on real hardware before it was enabled: `vulkaninfo` reported
-  `driverName = llvmpipe`.
+  the machine or being encoded. This is **OpenGL only**: a guest's Vulkan falls back to
+  llvmpipe, software rasterisation on the CPU, which matters because Proton, DXVK and vkd3d
+  are all Vulkan. See the known limitations below.
 - **`make -C virtualization/runner demo`** - downloads a Fedora Cloud image (verified against
   the digest Fedora publishes), authors a VM app with an accelerated display and boots it, so
   the whole path can be tried in one command.
@@ -72,10 +70,16 @@ Adds VM apps.
 - **No host directory sharing** into a guest (that needs virtiofs), no snapshots, x86_64
   guests only, and `zvr console` prints the console socket rather than attaching to it.
 - The accelerated display path is **confirmed to display**: a Fedora guest running Weston
-  draws into the qemu window through virtio-gpu. Whether OpenGL and Vulkan inside that
-  session are hardware-accelerated rather than falling back to software is still being
-  measured; Vulkan was llvmpipe until `venus=on` was added, and the OpenGL renderer has not
-  yet been read from inside a guest session.
+  draws into the qemu window through virtio-gpu, on a host with the proprietary NVIDIA
+  driver.
+- **Guest Vulkan is not accelerated.** It falls back to llvmpipe, which is the CPU, so
+  anything using Proton, DXVK or vkd3d renders in software. Fixing it needs qemu's
+  `venus=on`, which in turn needs a host `virglrenderer` built with venus support - Fedora
+  43's is not, and enabling venus without it fails the whole renderer and leaves the guest
+  with no display at all rather than degrading to OpenGL. Verified by measurement, both
+  ways.
+- The **OpenGL** renderer string has not yet been read from inside a guest session, so
+  virgl acceleration is expected but not yet confirmed by measurement.
 
 ## [0.3.1] - 2026-07-25
 
