@@ -5,6 +5,63 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [Unreleased]
+
+Adds VM apps.
+
+### Added
+
+- **`zvr` (zinc-virtualization-runner)** - boots VM apps as qemu guests, the sibling of
+  `zcr`. One store and one schema hold both app kinds, split by `Type`, and each runner
+  refuses the other's apps by name rather than half-running them. Disks are copy-on-write
+  over a digest-pinned base image that is never written to, so `zvr reset` returns an app to
+  the image it was authored against. A cloud-init seed gives a fresh guest its hostname,
+  user and SSH key. Supervision is a pidfile plus QMP, and the same socket carries the ACPI
+  power button, so `zvr stop` lets the guest's own OS flush and unmount rather than being
+  killed mid-write. `zvr run --dry-run` prints the exact qemu command line, as `zcr` does for
+  podman.
+- **VM apps in the schema** - `Type: ZincVirtualization` plus a `VirtualizationMeta` group:
+  the guest's sizing, an explicit display mode, user-mode port forwards and cloud-init
+  identity. `ImageMeta` is shared rather than duplicated - `Image` is a container reference
+  or a base disk path depending on `Type`, and `Install` steps become a derived image's RUN
+  layer or the guest's cloud-init `runcmd`. The two kinds **reject each other's fields**
+  rather than ignoring them: a VM app carrying `Capabilities` or `NetworkLists` does not
+  save, and each message says what supporting it would take. A field that looks configured
+  while doing nothing is worse than one that refuses, because the author believes in a
+  boundary that is not there.
+- **Accelerated guest display** - `Display: Accelerated` attaches `virtio-gpu-gl` and a local
+  window, so guest 3D runs on the host GPU and frames reach the compositor without leaving
+  the machine or being encoded.
+
+### Changed
+
+- **BREAKING: `zcc` is now `zc` (`zinc-creator`)**, and `container/creator/` moved to
+  `creator/`. The creator no longer creates only containers, so the kind letter in its name
+  was wrong. There is no separate `zvc`: a VM app is the same YAML with a different `Type`,
+  and `zc` already had the form, keybinds, validation and CLI for authoring it, so the
+  non-compiling `virtualization/creator/` skeleton was deleted rather than migrated. The
+  runners keep their kind letter, because `zcr` and `zvr` really are different things.
+  Reinstall the binary under its new name; app files are unaffected.
+- **`zc` authors both kinds.** `zc new --vm` writes a VM app, and the form grows a type row
+  that rebuilds the rest of itself. Runtime commands route by the app's `Type` - `zcr` for
+  containers, `zvr` for guests - with commands that have no counterpart refused by name
+  rather than silently doing nothing.
+- **VMs are run over qemu directly, not libvirt**, a deliberate departure from the
+  architecture doc. libvirtd spawns the qemu process outside the user's session, so it cannot
+  open an accelerated window on their compositor, and SPICE plus a viewer adds a hop that
+  defeats the point for anything interactive. The cost, accepted knowingly, is that `zvr`
+  owns supervision and has no snapshots or managed save.
+
+### Known limitations
+
+- VM apps have **no egress filtering**: the nftables model lives inside a container's own
+  network namespace and does not reach a guest, so a VM app gets user-mode networking with
+  explicit port forwards, each bound to 127.0.0.1. `NetworkMeta` on a VM app is an error.
+- **No host directory sharing** into a guest (that needs virtiofs), no snapshots, x86_64
+  guests only, and `zvr console` prints the console socket rather than attaching to it.
+- The accelerated display path is verified to **initialize** on this hardware, but no guest
+  has yet been observed rendering 3D through it.
+
 ## [0.3.1] - 2026-07-25
 
 Fixes the two things that made the 0.3 overlay look broken: a frozen window during a launch,

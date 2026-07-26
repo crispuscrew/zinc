@@ -182,15 +182,14 @@ the roadmap and are called out here so the doc does not overclaim.
 ## 4. Tools and the creator / runner split
 
 Every Zinc tool is named `zinc-<kind>-<role>`, where `<kind>` is `container` or
-`virtualization` and `<role>` is `creator` or `runner`, plus a `zinc-launcher-<ui>` picker.
-The short code is the initials.
+`virtualization` and `<role>` is `runner`, plus a `zinc-launcher-<ui>` picker. One creator
+authors both app kinds, so it carries no kind at all. The short code is the initials.
 
 | Short | Tool                          | Role                                   | Status  |
 |-------|-------------------------------|----------------------------------------|---------|
-| `zc` | `zinc-creator`      | define container apps (write configs)  | 0.1     |
+| `zc`  | `zinc-creator`                | define apps, container or VM           | 0.1     |
 | `zcr` | `zinc-container-runner`       | launch + supervise a container app     | 0.1     |
-| `zvc` | `zinc-virtualization-creator` | define VM apps                         | planned |
-| `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app            | planned |
+| `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app            | 0.4     |
 | `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)                | 0.3     |
 | `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)                | 0.2     |
 
@@ -624,24 +623,94 @@ deliberately depends on **no** Zinc sibling module (Go `replace` directives are 
 transitive, so a sibling dependency would make it un-importable from another repo), so `zde`
 and a future wofi-like picker can import it too.
 
-### 9.5 Planned components (roadmap)
+### 9.5 zvr - the VM runner
 
-`zvc` / `zvr` (virtualization, section 10) are not built yet. They will share the same
-`common` schema library, so every tool uses one config format.
-
----
-
-## 10. Virtualization (planned - zvc / zvr)
-
-For isolation needs beyond what containers provide - untrusted GUI apps, foreign OSes,
-throwaway environments - Zinc will add VMs (`libvirt` + `qemu`) as a parallel runtime, with a
-creator/runner split (`zvc` / `zvr`) mirroring the container tools and reusing the shared
-schema. Containers remain the primary runtime; VMs are the heavy-isolation escape hatch. A VM
-works for any guest (including Windows) where a nested Wayland compositor would break on
-real-world software. None of this ships in 0.1; the schema reserves `Type:
-ZincVirtualization` for it.
+`zvr` (section 10) is the virtualization sibling of `zcr`, sharing the same `common` schema
+library so every tool uses one config format. It depends only on `common` and drives
+`qemu-system-x86_64` directly.
 
 ---
+
+## 10. Virtualization (zvr)
+
+For isolation beyond what containers provide - untrusted GUI apps, foreign OSes, throwaway
+environments - Zinc runs VM apps alongside container apps. Containers remain the primary
+runtime; VMs are the heavy-isolation escape hatch. Both kinds are authored by `zc` into the
+same store and split by `Type`, and each runner refuses the other's apps by name rather than
+half-running them.
+
+### 10.1 Why qemu directly, and not libvirt
+
+Earlier drafts of this document specified libvirt. The implementation does not use it, and
+the reason is worth recording because it is not a matter of taste.
+
+libvirtd spawns the qemu process, so that process is not in the user's session and cannot
+open a window on their compositor. libvirt's answer is SPICE plus a separate viewer, which
+adds a hop between the guest's frames and the screen. For a VM that exists to run something
+interactive - a game, anything real-time - that hop is the whole problem.
+
+Driving qemu directly means `zvr` starts it as a child of the user's session, so the guest
+gets a local, GPU-accelerated window whose frames never leave the machine. It also matches
+the container side exactly: build an argv from validated config, exec a binary, print the
+command with `--dry-run`.
+
+The cost is real and is paid deliberately: **`zvr` owns supervision.** Starting, finding and
+stopping guests is its job, where libvirt would have provided it, along with snapshots and
+managed save, which `zvr` does not have.
+
+### 10.2 How a guest runs
+
+A launch is: validate the config, verify the base image against its pinned digest, create
+the app's overlay if it has none, rebuild its cloud-init seed, compose the argv, start the
+process. Nothing is created for a config that does not validate, and no guest starts from a
+base image that no longer matches its digest.
+
+**Disks are copy-on-write.** The base image named by `ImageMeta.Image` is never opened for
+writing; each app gets its own qcow2 overlay backed by it, so `zvr reset` deletes the overlay
+and the app is back to its authored image. That is the VM reading of a container's
+disposability.
+
+**The base is pinned by `VirtualizationMeta.BaseDigest`**, the sha256 of the file's bytes. A
+container digest rides inside its reference; a file's cannot, so the pin is its own field -
+but the rule is the one from section 5.5: what runs is what was authorised. The image is
+hashed in full on first use and then whenever its identity moves (device, inode, size, and
+both timestamps at nanosecond resolution). That catches a base that was replaced, rebuilt or
+restored. It is not a defence against someone who can already write to the image directory,
+because they can rewrite the cache alongside it.
+
+**Supervision is a pidfile plus QMP.** The same control socket carries the ACPI power button,
+so a graceful stop lets the guest's own OS flush and unmount rather than being killed
+mid-write; SIGTERM and then SIGKILL stand behind it. A pidfile is checked against `/proc`
+before anything is signalled, because pids are recycled.
+
+**The guest's hardware is exactly what the config asked for.** qemu is started with
+`-nodefaults`, so nothing arrives merely because it was compiled in, and the host process is
+confined by qemu's own seccomp jail (`-sandbox on`, denying privilege elevation, helper
+spawning and scheduling changes).
+
+### 10.3 Display and the boundaries that do not carry over
+
+`VirtualizationMeta.Display` is explicit, never inferred: `Accelerated` attaches
+`virtio-gpu-gl` and a local window, so guest 3D runs on the host GPU and reaches the
+compositor as a dmabuf; `Window` is the same without acceleration; `None` is headless with a
+serial console. Accelerated 3D needs a guest with the virtio-gpu driver, which in practice
+means Linux.
+
+Two container mechanisms deliberately do **not** carry over, and are rejected rather than
+approximated:
+
+- **The egress lock-down.** It is nftables applied inside a container's own network
+  namespace; a guest has its own kernel and none of that reaches it. A VM app uses user-mode
+  networking with explicit `ForwardPorts`, each bound to 127.0.0.1 so a guest service reaches
+  the host that started it and not the LAN. `NetworkMeta` on a VM app is a validation error.
+- **Host mounts, keys, capabilities and the theme bundle.** All of these are bind mounts or
+  kernel features of a shared kernel. Sharing a directory into a guest needs virtiofs, which
+  this build does not implement, so those fields are refused on a VM app with a message
+  saying what supporting them would take.
+
+A field that looks configured while doing nothing is worse than one that refuses to save,
+because the author believes in a boundary that is not there. This is the same principle as
+the network model rejecting what it cannot enforce.
 
 ## 11. Host Surface (minimal)
 
@@ -690,15 +759,16 @@ zinc/
     domain/schema/                    schema.go (AppConfig, schema version 2)
     domain/schema/validate/           the hard rules + create-time warnings
     examples/apps/                    sample app YAMLs
+  creator/               zc - the creator for BOTH app kinds (CLI + Bubbletea TUI)
+    main.go                           CLI: authoring local; runtime routed by app Type
+    delegate.go                       picks the runner: zcr for containers, zvr for VMs
+    internal/store/                   the YAML app store (~/.config/zinc/apps)
+    internal/runner/                  the runner delegate (finds zcr/zvr on $PATH)
+    internal/backend/                 the one facade the CLI + TUI use
+    internal/tui/                     the keyboard-first terminal UI
+    internal/keys/                    the TUI keybind schemes (~/.config/zinc/zc)
   container/
-    creator/             zc - the creator (CLI + Bubbletea TUI)
-      main.go                         CLI: authoring local; runtime forwarded to zcr
-      internal/store/                 the YAML app store (~/.config/zinc/apps)
-      internal/runner/                the zcr delegate (finds zcr on $PATH, drives it)
-      internal/backend/               the one facade the CLI + TUI use
-      internal/tui/                   the keyboard-first terminal UI
-      internal/keys/                  the TUI keybind schemes (~/.config/zinc/zc)
-    runner/              zcr - the runtime (the hexagon)
+    runner/              zcr - the container runtime (the hexagon)
       domain/                         pure model: derived-image policy, launch options
       ports/                          interfaces: Store, Runtime, ImageBuilder,
                                         ImageResolver, NetEnforcer, + the neutral Command type
@@ -717,8 +787,13 @@ zinc/
   menu/                  reusable Wayland overlay-menu core: layer-shell surface + software
                            renderer + keymap + theme + fuzzy picker. Pure-Go, cgo-free, and
                            depends on no Zinc module, so zde and others can import it (menu.Run)
-  virtualization/runner/ zvr - the VM runner (drives qemu directly; guests get a local
-                           accelerated window because qemu runs in the user's session)
+  virtualization/runner/ zvr - the VM runner (the same shape as zcr)
+    domain/qemu/                      pure: the qemu argv for a validated config
+    domain/paths/                     where overlays, seeds and control sockets live
+    adapters/machine/                 process supervision: start, find, stop a guest
+    adapters/qmp/                     the guest control channel (status, power button)
+    adapters/disk/                    overlay creation, digest verification, seed ISO
+    app/                              launch orchestration (the Service)
   docs/architecture.md   this document
 ```
 
@@ -755,7 +830,7 @@ the network lock-down applies rules with (6.4).
 
 | # | Issue | Mitigation |
 |---|-------|------------|
-| 1 | wayland-security-context enforcement is the compositor's, not Zinc's | the container boundary is the real wall (5.1); a VM (section 10) is the future path for untrusted GUI apps |
+| 1 | wayland-security-context enforcement is the compositor's, not Zinc's | the container boundary is the real wall (5.1); a VM (section 10) is the stronger boundary for untrusted GUI apps |
 | 2 | GPU passthrough weakens isolation | off by default; never enable for untrusted images (5.4) |
 | 3 | Image tags can be poisoned upstream | third-party images must be digest-pinned; launch is `--pull never` (5.5) |
 | 4 | Derived images are per-machine, not digest-pinned | their guarantee is the pinned base plus the visible install lines (7) |
@@ -775,9 +850,9 @@ fail-closed network lock-down (isolated / egress / LAN publish / sibling link).
 **0.2 ships the launcher:** `zlt`, a keyboard-first fuzzy picker over the defined apps that
 shells out to `zcr` (depends only on `common`, never imports the runtime).
 
-**Next (see `RELEASES.md`):** the GUI launcher (`zlg`, 0.3) and virtualization
-(`zvc` / `zvr`, 0.4), the latter migrating the non-compiling `virtualization/` skeleton off
-the removed `core` hexagon onto `common`. The ZDE desktop layer is a separate project in its
+**0.3 ships the GUI launcher** `zlg` over the reusable `menu` module, and **0.4 ships
+virtualization**: `zvr` runs VM apps over qemu (section 10), and `zcc` became `zc` because one
+creator now authors both app kinds. The ZDE desktop layer is a separate project in its
 own repository (section 12), not a Zinc release. Within the container tools, the near-term
 work is wiring the already-validated schema fields (resources, internal user) into the launch.
 </content>

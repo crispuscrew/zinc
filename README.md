@@ -1,9 +1,8 @@
 # Zinc
 
 **Zinc** is a keyboard-first, security-focused **sandboxing core**. It runs user-facing
-apps in rootless Podman containers (primary runtime) or libvirt/qemu VMs (heavy
-isolation), each walled off from the rest of the desktop through the Wayland
-security-context protocol. Zinc is compositor-agnostic and installs cleanly on any
+apps in rootless Podman containers (primary runtime) or qemu VMs (heavy isolation), each
+walled off from the rest of the desktop through the Wayland security-context protocol. Zinc is compositor-agnostic and installs cleanly on any
 existing system.
 
 **ZDE** (Zinc Desktop Environment, `zde`) is a separate project built on Zinc - the full
@@ -18,16 +17,15 @@ home-manager flake, and developed in its own repository.
 
 ## Components
 
-Every tool is `zinc-<kind>-<role>`: `<kind>` is `container` or `virtualization`, `<role>`
-is `creator` or `runner`, plus the `zinc-launcher-<ui>` picker. The short code is the
-initials.
+Every runner is `zinc-<kind>-runner`, where `<kind>` is `container` or `virtualization`,
+plus the `zinc-launcher-<ui>` picker. One creator authors both app kinds, so it carries no
+kind at all. The short code is the initials.
 
 | Short | Tool                          | Role                                  | Status  |
 |-------|-------------------------------|---------------------------------------|---------|
-| `zc` | `zinc-creator`      | define container apps (write configs) | 0.1     |
+| `zc`  | `zinc-creator`               | define apps, container or VM          | 0.1     |
 | `zcr` | `zinc-container-runner`       | launch + supervise a container app    | 0.1     |
-| `zvc` | `zinc-virtualization-creator` | define VM apps                        | planned |
-| `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app           | planned |
+| `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app           | 0.4     |
 | `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)               | 0.3     |
 | `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)               | 0.2     |
 
@@ -57,8 +55,12 @@ before it starts:
 - sibling link: a private internal bridge between two apps, gated per-port
 
 Not yet supported (rejected, not run): host-scoped egress, gateway / multi-homing, and
-combining a sibling link with other networking on one app. The launcher and virtualization
-tools are on the roadmap.
+combining a sibling link with other networking on one app.
+
+This is the container network model. A **VM app** does not get it - nftables in a container's
+own network namespace does not reach a guest kernel - so rather than mis-enforce it, a guest
+runs on user-mode networking with explicit port forwards bound to loopback, and
+`NetworkMeta` on a VM app is a validation error.
 
 ## Install
 

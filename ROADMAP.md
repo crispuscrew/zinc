@@ -72,10 +72,29 @@ launch cannot be cancelled once started (Esc dismisses the overlay, the launch c
 grid thumbnails are decoded without prioritisation, so fast scrolling queues visible tiles
 behind ones already scrolled past.
 
-## 0.4 - Virtualization (zvc + zvr) - planned
+## 0.4 - Virtualization (zvr) - in progress
 
-VM apps as the container tools' sibling: a creator and a runner over rootless
-libvirt/qemu, sharing the same config library and format.
+VM apps as the container tools' sibling, sharing the same config library and format: one
+store holds both kinds, split by `Type`, and each runner refuses the other's apps by name.
+
+Delivered:
+- **zvr** at `virtualization/runner`: boots VM apps as qemu guests. Copy-on-write overlays
+  over a digest-pinned base (`zvr reset` returns an app to its authored image), a cloud-init
+  seed for first-boot identity, supervision by pidfile and QMP, and a graceful stop that
+  presses the guest's ACPI power button rather than killing it mid-write.
+- **Schema**: `Type: ZincVirtualization` plus a `VirtualizationMeta` group. The two kinds
+  reject each other's fields rather than ignoring them.
+- **zcc renamed to zc** (`zinc-creator`), moved to `creator/`, and taught to author both
+  kinds. There is no separate `zvc`; the old `virtualization/creator` skeleton was deleted.
+
+Deliberate departure from the original plan: **qemu is driven directly, not through
+libvirt.** libvirtd spawns the qemu process outside the user's session, so it cannot open an
+accelerated window on their compositor, and SPICE-plus-viewer adds a hop that defeats the
+point for anything interactive. The cost, accepted knowingly, is that zvr owns supervision
+and has no snapshots or managed save. See the architecture doc, Virtualization.
+
+Remaining: an e2e suite against real qemu, and a guest actually rendering through the
+accelerated display path (verified to initialize, not yet to draw).
 
 **ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project in
 its own repository, layered on these tools; its milestones are tracked there, not in this

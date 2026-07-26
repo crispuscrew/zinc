@@ -5,7 +5,7 @@ in-repo companion to [`docs/architecture.md`](docs/architecture.md) (the single 
 truth) and [`README.md`](README.md).
 
 Zinc is a keyboard-first, security-focused app-sandboxing core. Every user-facing app runs
-in a **rootless Podman container** (primary) or a libvirt/qemu VM. Priority order, always:
+in a **rootless Podman container** (primary) or a **qemu VM** (heavy isolation). Priority order, always:
 **Stable, then Secure, then Beautiful.**
 
 ## Golden rules
