@@ -118,10 +118,14 @@ func StartTPM(stateDir, socketPath, pidPath string) (*TPM, error) {
 	// sockets do.
 	_ = os.Remove(socketPath)
 
+	// The socket qemu is given must be swtpm's CONTROL channel, not its data channel.
+	// qemu's tpmdev emulator speaks the control protocol over that chardev and swtpm hands
+	// back the data channel through it. Pointed at --server instead, qemu connects, sends a
+	// control request and blocks forever on a reply the data channel will never send - it
+	// never even reaches the point of opening its window.
 	command := exec.Command("swtpm", "socket",
 		"--tpmstate", "dir="+stateDir,
-		"--ctrl", "type=unixio,path="+socketPath+".ctrl",
-		"--server", "type=unixio,path="+socketPath,
+		"--ctrl", "type=unixio,path="+socketPath,
 		"--tpm2",
 		"--flags", "startup-clear",
 		"--daemon",
@@ -154,7 +158,6 @@ func StopTPM(socketPath, pidPath string) {
 	}
 	_ = os.Remove(pidPath)
 	_ = os.Remove(socketPath)
-	_ = os.Remove(socketPath + ".ctrl")
 }
 
 // isSwtpm confirms a pid really is a TPM emulator before it is signalled. A stale pidfile
