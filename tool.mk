@@ -1,4 +1,4 @@
-# Build logic for Zinc TOOLS (zcc, zcr, ...): the binary targets layered on top of the
+# Build logic for Zinc TOOLS (zc, zcr, ...): the binary targets layered on top of the
 # shared containerized checks in check.mk. A tool's Makefile sets TOOL (and APP /
 # RUN_ARGS if it has them), then `include ../../tool.mk`.
 #
@@ -6,7 +6,7 @@
 # is no host `go` and no `go run`. Run from a tool's module root: `make <target>`.
 
 ifndef TOOL
-$(error TOOL is not set - put `TOOL := zcc` above `include ../../tool.mk`)
+$(error TOOL is not set - put `TOOL := zc` above `include ../../tool.mk`)
 endif
 
 # Include check.mk relative to THIS file (not the invoking dir), so it resolves

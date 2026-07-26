@@ -28,21 +28,21 @@ in a **rootless Podman container** (primary) or a libvirt/qemu VM. Priority orde
    commit messages. Use a plain hyphen for punctuation; write "section 5.3" or name the
    thing instead of the section glyph.
 
-## Repo layout and the zcc/zcr split
+## Repo layout and the zc/zcr split
 
 - `common/` - the shared library: the app-config schema and its validation, pure stdlib.
   Both the creator and the runner depend on it and nothing else shared.
 - `container/runner` (**zcr**) - the runtime. It reads an app file and runs it via rootless
   podman, applying the network lock-down. It is a ports-and-adapters hexagon (below).
-- `container/creator` (**zcc**) - the authoring tool (CLI + keyboard-first TUI). It depends
+- `creator` (**zc**) - the authoring tool (CLI + keyboard-first TUI). It depends
   ONLY on `common` and shells out to the `zcr` binary on `$PATH` to run apps. It never
   imports the runner; the two meet only at the on-disk YAML format.
 - `container/e2e` - black-box end-to-end tests that drive the real binaries against podman.
-- `launcher/` and `virtualization/creator/` exist as skeletons but do NOT compile yet (they
-  still reference the removed `core` module); they are on the roadmap.
+- `virtualization/runner` - `zvr`, the VM runner. Same split as the container side: it
+  depends only on `common` and drives `qemu-system-x86_64` directly.
 
-App files are YAML at `~/.config/zinc/apps/<name>.yaml`. zcc's keybind config is under
-`~/.config/zinc/zcc`.
+App files are YAML at `~/.config/zinc/apps/<name>.yaml`. zc's keybind config is under
+`~/.config/zinc/zc`.
 
 ### The runner hexagon (`container/runner`)
 
@@ -65,7 +65,7 @@ Each module shares one build pipeline ([`check.mk`](check.mk) + [`tool.mk`](tool
 digest-pinned [`Containerfile`](Containerfile)). Work from a module directory:
 
 ```sh
-cd container/runner    # or container/creator, common
+cd container/runner    # or creator, common
 make check             # gofmt + go vet + go test, in the pinned container
 make build             # reproducible build, produces ./bin/<tool>
 make vendor            # refresh vendored deps (the only networked step; GOWORK=off)
@@ -96,7 +96,7 @@ the two tools plus the podman-backed scenarios.
 - [`docs/architecture.md`](docs/architecture.md) - single source of truth. Its section
   numbers are cited in the code (for example section 5.5 image trust, section 5.3 the
   network lock-down).
-- [`container/creator/README.md`](container/creator/README.md) and
+- [`creator/README.md`](creator/README.md) and
   [`container/runner/README.md`](container/runner/README.md) - per-tool docs.
 - [`README.md`](README.md) - overview and quickstart.
 - [`ROADMAP.md`](ROADMAP.md) and [`RELEASES.md`](RELEASES.md) - what is planned and the

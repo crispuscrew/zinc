@@ -1,8 +1,8 @@
 # zlt - Zinc launcher (TUI)
 
 `zlt` (zinc-launcher-tui) is a fast, keyboard-first fuzzy picker over the apps you
-defined with `zcc`. It lists everything in `~/.config/zinc/apps`, filters as you type,
-and launches the chosen app by shelling out to the `zcr` binary - so, like `zcc`, it
+defined with `zc`. It lists everything in `~/.config/zinc/apps`, filters as you type,
+and launches the chosen app by shelling out to the `zcr` binary - so, like `zc`, it
 depends only on the shared schema library and never imports the runtime.
 
 ## Use

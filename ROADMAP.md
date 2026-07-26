@@ -12,7 +12,7 @@ Legend: done, in progress, planned.
 
 ---
 
-## 0.1 - Containers (zcc + zcr) - done
+## 0.1 - Containers (zc + zcr) - done
 
 The two container tools reach MVP.
 
@@ -24,7 +24,7 @@ Delivered:
 - **zcr**: real rootless-container lifecycle (`run`/`stop`/`restart`/`inspect`/`logs`/
   `ps`), derived images (`FROM image` + the install layer), multiterminal apps, and a
   `--version` stamped from git.
-- **zcc**: a keyboard-first Bubbletea TUI plus a scriptable CLI; it authors app files and
+- **zc**: a keyboard-first Bubbletea TUI plus a scriptable CLI; it authors app files and
   shells out to `zcr` to run them.
 - **Network lock-down**, applied in the app's own netns by an nftables init step before the
   app starts, with no unfiltered window: isolated (localhost only), egress whitelist,
@@ -35,15 +35,15 @@ Known gaps (honest, tracked): the network model still rejects (does not run) hos
 egress, gateway / multi-homing, and combining a sibling link with other networking on one
 app; bundle-relative config mounts are deferred. Test coverage is partial away from the
 security path. (At 0.1 `launcher/` and `virtualization/creator/` did not compile either - they
-still referenced the removed `core` module. `launcher/` was rebuilt in 0.2 and 0.3;
-`virtualization/creator/` is still a skeleton, excluded from the build and CI until 0.4.)
+still referenced the removed `core` module. `launcher/` was rebuilt in 0.2 and 0.3; the
+virtualization skeleton was deleted in 0.4, when `zc` took over authoring both app types.)
 
 ## 0.2 - Launcher TUI (zlt) - done
 
 A fast, keyboard-driven picker (TUI) over the defined apps: fuzzy filter as you type,
 enter launches the selected app through `zcr` (which handles dependency auto-start), a
 running indicator from `zcr ps`, and a `zlt <app>` direct-launch form for a desktop
-hotkey. Like `zcc` it depends only on `common` and shells out to the `zcr` binary, so it
+hotkey. Like `zc` it depends only on `common` and shells out to the `zcr` binary, so it
 never imports the runtime. Lives at `launcher/tui`, leaving `launcher/gui` for `zlg`.
 
 ## 0.3 - Launcher GUI (zlg) - done

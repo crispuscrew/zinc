@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package e2e drives the real zcc and zcr binaries against rootless podman and asserts
+// Package e2e drives the real zc and zcr binaries against rootless podman and asserts
 // that an app actually runs and that the network lock-down is actually enforced - the
 // guarantees unit tests cannot prove. It is black-box: everything goes through os/exec,
 // nothing is imported from the tools under test.
@@ -52,11 +52,11 @@ func TestE2E(t *testing.T) {
 	}
 	creator := filepath.Join(here, "..", "creator")
 	runner := filepath.Join(here, "..", "runner")
-	zcc := filepath.Join(creator, "bin", "zcc")
+	zc := filepath.Join(creator, "bin", "zc")
 	zcr := filepath.Join(runner, "bin", "zcr")
 
 	// Build what's missing: the two binaries, the nft helper image, and the test app image.
-	if _, err := os.Stat(zcc); err != nil {
+	if _, err := os.Stat(zc); err != nil {
 		must(t, "make", "-C", creator, "build")
 	}
 	if _, err := os.Stat(zcr); err != nil {
@@ -67,7 +67,7 @@ func TestE2E(t *testing.T) {
 	}
 	must(t, "podman", "build", "-t", appImage, here)
 
-	// Isolate the store and running state; zcc delegates runtime actions to zcr on $PATH.
+	// Isolate the store and running state; zc delegates runtime actions to zcr on $PATH.
 	cfg := t.TempDir()
 	apps := filepath.Join(cfg, "zinc", "apps")
 	if err := os.MkdirAll(apps, 0o755); err != nil {
@@ -117,25 +117,25 @@ func TestE2E(t *testing.T) {
 	}
 
 	t.Run("authoring", func(t *testing.T) {
-		must(t, zcc, "new", "authored", "--image", appImage)
+		must(t, zc, "new", "authored", "--image", appImage)
 		if _, err := os.Stat(filepath.Join(apps, "authored.yaml")); err != nil {
-			t.Fatal("zcc new should have written authored.yaml")
+			t.Fatal("zc new should have written authored.yaml")
 		}
-		must(t, zcc, "validate", "authored")
+		must(t, zc, "validate", "authored")
 	})
 
 	t.Run("lifecycle", func(t *testing.T) {
-		must(t, zcc, "run", "sleeper", "--exec")
+		must(t, zc, "run", "sleeper", "--exec")
 		if !waitFor(func() bool { return running("sleeper") }) {
-			t.Fatal("sleeper should be running after `zcc run --exec`")
+			t.Fatal("sleeper should be running after `zc run --exec`")
 		}
-		out, _ := tool(zcc, "logs", "sleeper")
+		out, _ := tool(zc, "logs", "sleeper")
 		if !strings.Contains(out, "sleeper up") {
-			t.Fatalf("zcc logs should return the app's output, got:\n%s", out)
+			t.Fatalf("zc logs should return the app's output, got:\n%s", out)
 		}
-		must(t, zcc, "stop", "sleeper")
+		must(t, zc, "stop", "sleeper")
 		if !waitFor(func() bool { return !running("sleeper") }) {
-			t.Fatal("sleeper should be stopped after `zcc stop`")
+			t.Fatal("sleeper should be stopped after `zc stop`")
 		}
 	})
 
@@ -145,17 +145,17 @@ func TestE2E(t *testing.T) {
 		if os.Getenv("ZINC_E2E_NO_NET") != "" {
 			t.Skip("ZINC_E2E_NO_NET set; skipping the network-enforcement scenario")
 		}
-		must(t, zcc, "run", "producer", "--exec")
+		must(t, zc, "run", "producer", "--exec")
 		if !waitFor(func() bool { return running("producer") }) {
 			t.Fatal("producer should be running")
 		}
-		must(t, zcc, "run", "consumer", "--exec")
+		must(t, zc, "run", "consumer", "--exec")
 		waitFor(func() bool { return running("consumer") })
 
 		// The consumer's entrypoint probes the producer and prints the verdict to its logs.
 		var verdict string
 		waitFor(func() bool {
-			out, _ := tool(zcc, "logs", "consumer")
+			out, _ := tool(zc, "logs", "consumer")
 			for _, line := range strings.Split(out, "\n") {
 				if strings.HasPrefix(line, "PROBE ") {
 					verdict = strings.TrimSpace(line)

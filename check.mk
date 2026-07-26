@@ -1,4 +1,4 @@
-# Shared, containerized Go checks for every Zinc module - the tools (zcc, zcr) and
+# Shared, containerized Go checks for every Zinc module - the tools (zc, zcr) and
 # the shared library (common). Included by tool.mk (which adds the binary targets)
 # and by common's Makefile directly. Podman-only: there is no host Go; every command
 # runs in the digest-pinned container. Run from a module's root: `make <target>`.

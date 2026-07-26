@@ -21,7 +21,7 @@ var (
 func (mdl Model) View() string {
 	if len(mdl.apps) == 0 {
 		return promptStyle.Render("Zinc launcher") + "\n\n" +
-			hintStyle.Render("no apps defined yet - create one with: zcc new <name> --image <img>") + "\n\n" +
+			hintStyle.Render("no apps defined yet - create one with: zc new <name> --image <img>") + "\n\n" +
 			hintStyle.Render("esc quit") + "\n"
 	}
 

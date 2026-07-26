@@ -8,7 +8,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-// Validate checks an AppConfig against the hard rules. Pure (no I/O), so zcc (save)
+// Validate checks an AppConfig against the hard rules. Pure (no I/O), so zc (save)
 // and zcr (launch) judge identically; all problems are joined, not just the first.
 func Validate(cfg schema.AppConfig) error {
 	var errs []error
@@ -172,7 +172,7 @@ func checkResources(res schema.ResourcesMeta, add addFunc) {
 	}
 }
 
-// Warnings returns non-fatal create-time advisories (zcc); nothing here blocks save or
+// Warnings returns non-fatal create-time advisories (zc); nothing here blocks save or
 // launch - it flags valid-but-risky or probably-unintended configs. Exposing inbound
 // (an Ingress list) is always surfaced, loudest when it reaches the LAN.
 func Warnings(cfg schema.AppConfig) []string {

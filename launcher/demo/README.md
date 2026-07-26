@@ -1,7 +1,7 @@
 # Zinc launcher demo apps
 
 A small set of ready-made app definitions so you can try the launchers without authoring
-any apps of your own. They are plain schema-v2 app files - the same kind `zcc` writes to
+any apps of your own. They are plain schema-v2 app files - the same kind `zc` writes to
 `~/.config/zinc/apps`.
 
 Run the picker against them (your real `~/.config/zinc/apps` is left untouched):

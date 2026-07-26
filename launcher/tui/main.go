@@ -1,6 +1,6 @@
 // Command zlt is the Zinc launcher (TUI): a fast, keyboard-first fuzzy picker over the
-// defined apps (~/.config/zinc/apps). It lists what zcc authored and shells out to the
-// `zcr` binary to run the chosen app - it never imports the runtime (the same split zcc
+// defined apps (~/.config/zinc/apps). It lists what zc authored and shells out to the
+// `zcr` binary to run the chosen app - it never imports the runtime (the same split zc
 // uses). Run it two ways:
 //
 //	zlt            open the picker (type to filter, enter launches, esc quits)

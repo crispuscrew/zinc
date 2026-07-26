@@ -15,7 +15,7 @@
 //	zcr image search <term> | resolve <ref>
 //
 // <app> is a store name (~/.config/zinc/apps) or a path (contains '/' or ends .yaml).
-// zcc (the creator) shells out to this binary to run what it authors.
+// zc (the creator) shells out to this binary to run what it authors.
 package main
 
 import (
@@ -401,7 +401,7 @@ func cmdTermWaiter(svc app.Service, opt options.HostOptions, argv []string) erro
 }
 
 // cmdPs prints the apps podman reports as running, one per line and sorted, so a
-// front-end (zcc) can read it to show live state.
+// front-end (zc) can read it to show live state.
 func cmdPs(svc app.Service) error {
 	running, err := svc.Running()
 	if err != nil {
@@ -506,7 +506,7 @@ func load(svc app.Service, arg string) (schema.AppConfig, error) {
 		return svc.LoadFile(arg)
 	}
 	if !svc.Exists(arg) {
-		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zcc list)", arg)
+		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zc list)", arg)
 	}
 	return svc.Load(arg)
 }
