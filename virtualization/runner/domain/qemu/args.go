@@ -20,6 +20,11 @@ import (
 // VMs are for.
 const Binary = "qemu-system-x86_64"
 
+// hostMemGiB sizes the host memory window blob resources are shared through. It is address
+// space, not committed memory, so it is set generously enough for a guest pushing real
+// textures rather than trimmed to the qemu default of 256 MiB.
+const hostMemGiB = 8
+
 // Layout is where one app's files live, resolved by the caller so this stays pure.
 type Layout struct {
 	Overlay string // the app's copy-on-write disk, backed by the pinned base image
@@ -100,7 +105,15 @@ func netArgs(forwards []schema.PortForward) []string {
 func displayArgs(mode schema.VMDisplay) []string {
 	switch mode {
 	case schema.VMDisplayAccelerated:
-		return append(inputArgs(), "-device", "virtio-gpu-gl-pci", "-display", "gtk,gl=on")
+		// venus=on is what carries the guest's VULKAN calls to the host GPU, and it is off
+		// by default in qemu. Without it a guest gets accelerated OpenGL through virgl and
+		// silently falls back to llvmpipe - software rasterisation on the CPU - for
+		// Vulkan, which is what every modern game actually uses through Proton, DXVK and
+		// vkd3d. Venus needs blob resources and a host memory window to share buffers
+		// through; hostmem reserves address space rather than committing RAM.
+		return append(inputArgs(),
+			"-device", "virtio-gpu-gl-pci,venus=on,blob=on,hostmem="+strconv.Itoa(hostMemGiB)+"G",
+			"-display", "gtk,gl=on")
 	case schema.VMDisplayWindow:
 		return append(inputArgs(), "-device", "virtio-gpu-pci", "-display", "gtk")
 	default: // VMDisplayNone

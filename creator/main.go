@@ -51,6 +51,7 @@ const usage = `usage: zc <command> [args]
   new <name> --image <img> [--desc d] [--icon i]
   new <name> --vm --image <base.qcow2> --base-digest sha256:... [--memory MiB]
              [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]
+             [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
   list
   validate <name|app.yaml>
   delete <name>
@@ -186,6 +187,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	ciUser := fset.String("ci-user", "", "VM only: account cloud-init creates in the guest")
 	ciKey := fset.String("ci-ssh-key", "", "VM only: path to a PUBLIC key authorised for that account")
 	forward := fset.String("forward", "", "VM only: publish a guest port as HOST:GUEST (e.g. 2222:22), repeatable with commas")
+	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
 	if err := fset.Parse(flags); err != nil {
 		return err
 	}
@@ -204,6 +206,12 @@ func cmdNew(svc backend.Service, argv []string) error {
 		Icon:          *icon,
 	}
 	cfg.ImageMeta.Image = *image
+	// ';' rather than ',' because these are shell lines and commas are ordinary in them.
+	for _, step := range strings.Split(*install, ";") {
+		if trimmed := strings.TrimSpace(step); trimmed != "" {
+			cfg.ImageMeta.Install = append(cfg.ImageMeta.Install, trimmed)
+		}
+	}
 	if *isVM {
 		cfg.Type = schema.ZincVirtualization
 		forwards, ferr := parseForwards(*forward)

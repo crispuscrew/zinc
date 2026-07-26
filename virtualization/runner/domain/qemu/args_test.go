@@ -189,8 +189,14 @@ func TestArgs_DisplayModes(t *testing.T) {
 				}
 				return
 			}
-			if !has(devices, tc.wantDevice) {
-				t.Errorf("devices = %v, want %q", devices, tc.wantDevice)
+			found := false
+			for _, device := range devices {
+				if strings.HasPrefix(device, tc.wantDevice) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("devices = %v, want one starting with %q", devices, tc.wantDevice)
 			}
 			if !has(devices, "virtio-keyboard-pci") || !has(devices, "virtio-tablet-pci") {
 				t.Errorf("a windowed guest needs a keyboard and pointer, got %v", devices)
@@ -201,6 +207,38 @@ func TestArgs_DisplayModes(t *testing.T) {
 
 // Audio is an explicit grant, as it is for containers: an app that did not ask for sound
 // gets no sound card at all rather than a silent one.
+// Vulkan is what modern games actually use, through Proton, DXVK and vkd3d. Without venus
+// a guest gets accelerated OpenGL and silently falls back to llvmpipe - software
+// rasterisation on the CPU - for Vulkan, which was measured on real hardware before this
+// was enabled: vulkaninfo reported driverName=llvmpipe.
+func TestArgs_AcceleratedEnablesVulkanPassthrough(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Display = schema.VMDisplayAccelerated
+	var gpu string
+	for _, device := range pairs(Args(cfg, testLayout()), "-device") {
+		if strings.HasPrefix(device, "virtio-gpu-gl-pci") {
+			gpu = device
+		}
+	}
+	if gpu == "" {
+		t.Fatal("no virtio-gpu-gl device on an accelerated guest")
+	}
+	for _, want := range []string{"venus=on", "blob=on", "hostmem="} {
+		if !strings.Contains(gpu, want) {
+			t.Errorf("gpu device %q must contain %q, or guest Vulkan silently runs on the CPU", gpu, want)
+		}
+	}
+
+	// The unaccelerated modes must not carry it: blob resources and a host memory window
+	// are the accelerated path's cost, not something every guest should pay.
+	cfg.VirtualizationMeta.Display = schema.VMDisplayWindow
+	for _, device := range pairs(Args(cfg, testLayout()), "-device") {
+		if strings.Contains(device, "venus") {
+			t.Errorf("the plain Window mode should not enable venus, got %q", device)
+		}
+	}
+}
+
 func TestArgs_AudioOnlyOnGrant(t *testing.T) {
 	cfg := testCfg()
 	for _, arg := range Args(cfg, testLayout()) {
