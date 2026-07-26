@@ -50,7 +50,9 @@ func TestE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creator := filepath.Join(here, "..", "creator")
+	// The creator sits at the repo root, not beside the container tools: it authors both
+	// app kinds, so it is not a container-specific tool.
+	creator := filepath.Join(here, "..", "..", "creator")
 	runner := filepath.Join(here, "..", "runner")
 	zc := filepath.Join(creator, "bin", "zc")
 	zcr := filepath.Join(runner, "bin", "zcr")
