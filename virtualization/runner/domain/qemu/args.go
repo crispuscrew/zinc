@@ -20,6 +20,11 @@ import (
 // VMs are for.
 const Binary = "qemu-system-x86_64"
 
+// hostMemGiB sizes the host memory window venus shares blob resources through. It is
+// address space rather than committed memory, so it is set generously for a guest pushing
+// real textures instead of qemu's 256 MiB default.
+const hostMemGiB = 8
+
 // Layout is where one app's files live, resolved by the caller so this stays pure.
 type Layout struct {
 	Overlay string // the app's copy-on-write disk, backed by the pinned base image
@@ -45,10 +50,6 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		"-m", strconv.FormatInt(virt.MemoryMiB, 10) + "M",
 		"-nodefaults",
 		"-rtc", "base=utc",
-		// qemu's own seccomp jail. The host process is the boundary between a guest and
-		// this machine, so it gives up what it does not need: spawning helpers, raising
-		// privileges, changing its own scheduling.
-		"-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
 		"-pidfile", layout.PIDFile,
 		"-qmp", "unix:" + layout.QMP + ",server=on,wait=off",
 		// server=on,wait=off: the socket exists from the start but the guest never waits
@@ -56,11 +57,29 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		"-serial", "unix:" + layout.Serial + ",server=on,wait=off",
 	}
 
+	args = append(args, sandboxArgs(virt.Vulkan)...)
 	args = append(args, diskArgs(layout)...)
 	args = append(args, netArgs(virt.ForwardPorts)...)
-	args = append(args, displayArgs(virt.Display)...)
+	args = append(args, displayArgs(virt.Display, virt.Vulkan)...)
 	args = append(args, audioArgs(cfg.AudioMeta)...)
 	return args
+}
+
+// sandboxArgs applies qemu's own seccomp jail. The host qemu process is the boundary
+// between a guest and this machine, so by default it gives up what it does not need:
+// spawning helpers, raising privileges, changing its own scheduling.
+//
+// Guest Vulkan cannot coexist with it. venus runs in a separate virgl_render_server process
+// that virglrenderer forks, and the sandbox both forbids the fork (spawn=deny) and kills the
+// child that inherits its filter - silently, with the only visible symptom being a generic
+// "virgl could not be initialized". So an app that asks for Vulkan runs qemu unsandboxed,
+// and validation warns about it: the guest gains GPU Vulkan, the host process loses its
+// syscall filter. That trade is the caller's to make, which is why Vulkan is opt-in.
+func sandboxArgs(vulkan bool) []string {
+	if vulkan {
+		return nil
+	}
+	return []string{"-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny"}
 }
 
 // diskArgs attaches the app's overlay and, when present, the cloud-init seed. The overlay
@@ -97,20 +116,18 @@ func netArgs(forwards []schema.PortForward) []string {
 // virtio-gpu-gl renders guest 3D on the host GPU and hands the result to the compositor
 // as a dmabuf, so frames never leave the machine and never get encoded - the difference
 // between a playable game and a slideshow.
-func displayArgs(mode schema.VMDisplay) []string {
+func displayArgs(mode schema.VMDisplay, vulkan bool) []string {
 	switch mode {
 	case schema.VMDisplayAccelerated:
-		// OpenGL only, through virgl. Guest VULKAN would need qemu's venus=on, which is
-		// deliberately NOT set here: it requires a host virglrenderer built with venus
-		// support, and where that is missing the renderer fails to initialize at all -
-		// taking working OpenGL down with it and leaving a guest with no display, rather
-		// than degrading to what it could still have done. Measured on Fedora 43, whose
-		// virglrenderer 1.2.0 ships with no venus support: "failed to initialize venus
-		// renderer / virgl could not be initialized".
-		//
-		// The consequence is worth stating plainly: a guest's Vulkan runs on llvmpipe,
-		// which is the CPU. See the README's known limits.
-		return append(inputArgs(), "-device", "virtio-gpu-gl-pci", "-display", "gtk,gl=on")
+		// virtio-gpu-gl gives the guest OpenGL through virgl either way. venus adds Vulkan,
+		// and needs blob resources plus a host memory window to share buffers through -
+		// hostmem reserves address space rather than committing RAM. Measured as the minimal
+		// set: neither max_hostmem nor a shared memory-backend was required.
+		device := "virtio-gpu-gl-pci"
+		if vulkan {
+			device += ",venus=on,blob=on,hostmem=" + strconv.Itoa(hostMemGiB) + "G"
+		}
+		return append(inputArgs(), "-device", device, "-display", "gtk,gl=on")
 	case schema.VMDisplayWindow:
 		return append(inputArgs(), "-device", "virtio-gpu-pci", "-display", "gtk")
 	default: // VMDisplayNone

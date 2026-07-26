@@ -68,43 +68,42 @@ accelerated window is the difference between a playable game and a slideshow:
 
 Accelerated 3D needs a guest with the virtio-gpu driver, which in practice means Linux.
 
-### OpenGL yes, Vulkan no
+### Vulkan (`VirtualizationMeta.Vulkan`)
 
-`Accelerated` gives the guest **OpenGL** through virgl. It does **not** give it Vulkan: a
-guest's Vulkan falls back to `llvmpipe`, which is software rasterisation on the CPU.
+`Accelerated` gives the guest **OpenGL** through virgl out of the box. Guest **Vulkan** is
+opt-in with `Vulkan: true`, and it matters because Proton, DXVK and vkd3d are all Vulkan -
+without it a game in a guest renders on the CPU however good the host GPU is.
 
-That matters more than it sounds, because Proton, DXVK and vkd3d are all Vulkan - so a
-Windows game running under Proton in a guest would be rendering on the CPU, however good the
-host GPU is.
+It costs two things, both stated rather than hidden:
 
-Guest Vulkan needs qemu's `venus=on`, which is deliberately not set here. It requires a host
-`virglrenderer` built with venus support, and where that is missing the renderer does not
-degrade to OpenGL - it fails outright, leaving the guest with no display at all. Measured on
-Fedora 43, whose `virglrenderer 1.2.0` ships without venus:
+- **A venus-capable virglrenderer.** Distributions ship virglrenderer built *without* venus
+  (Fedora 43's has no venus symbols at all), so one has to be built. `zvr` prints the recipe
+  if it cannot find one, and `ZVR_VIRGL_PREFIX` points at an existing build:
+
+  ```sh
+  git clone --depth 1 --branch virglrenderer-1.3.0 https://gitlab.freedesktop.org/virgl/virglrenderer.git
+  cd virglrenderer
+  meson setup build --prefix=~/.local/share/zinc/virgl-venus -Dvenus=true -Dbuildtype=release
+  ninja -C build && ninja -C build install
+  ```
+
+- **qemu's seccomp sandbox, for that app.** venus runs in a helper process that
+  virglrenderer forks, and the sandbox both forbids the fork and kills the child that
+  inherits its filter - silently, surfacing only as a generic "virgl could not be
+  initialized". So an app with `Vulkan: true` runs qemu unsandboxed, and `zc validate` warns
+  about it. The guest gains GPU Vulkan; the host process loses its syscall filter. That is
+  the caller's trade to make, which is why it is off by default.
+
+Verified on a host with the proprietary NVIDIA driver:
 
 ```
-failed to initialize venus renderer
-qemu: virgl could not be initialized: -1
+deviceName = Virtio-GPU Venus (NVIDIA GeForce RTX 5080)
+driverName = venus
+OpenGL core profile renderer: virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)
 ```
 
-Getting Vulkan therefore means building `virglrenderer` with `-Dvenus=true` on the host. Once
-there is a host to verify it against, enabling venus can become an opt-in per app; shipping it
-on by default would trade a working display for a broken one on every stock distro.
-
-## Known limits
-
-- **No egress filtering.** The container network model is nftables inside a container's own
-  netns and does not reach a guest, so rather than mis-enforce it a VM app gets user-mode
-  networking with explicit `ForwardPorts`, each bound to 127.0.0.1. `NetworkMeta` on a VM app
-  is a validation error.
-- **No host directory sharing.** That needs virtiofs, which this build does not implement, so
-  `Volumes`, `Configs`, `Keys` and `HostTheme` are refused on a VM app.
-- **x86_64 guests only.** A foreign architecture would run without KVM and be far too slow
-  for interactive use.
-- **`zvr console` prints the socket rather than attaching.** This build does not put the
-  terminal into raw mode, and a console that mangled keys would be worse than pointing at one
-  that works.
-- **No snapshots or managed save**, the things libvirt would have given us.
+Neither `max_hostmem` nor a shared `memory-backend-memfd` turned out to be necessary; the
+working set is `venus=on,blob=on,hostmem=8G` plus the two points above.
 
 ## Try it
 

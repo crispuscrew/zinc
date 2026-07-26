@@ -102,6 +102,14 @@ type VirtualizationMeta struct {
 
 	Display VMDisplay `yaml:"Display"`
 
+	// Vulkan passes the guest's Vulkan calls through to the host GPU (qemu's venus). It is
+	// off by default and must be asked for, because it costs real things: qemu's own seccomp
+	// sandbox has to be disabled (the venus renderer runs in a helper process that the
+	// sandbox kills), and the host needs a virglrenderer built with venus support, which
+	// distributions generally do not ship. Without it a guest still gets accelerated
+	// OpenGL, but its Vulkan runs on the CPU - which is what Proton, DXVK and vkd3d use.
+	Vulkan bool `yaml:"Vulkan"`
+
 	// ForwardPorts publishes a guest port on the host over user-mode networking. VM apps
 	// do not use NetworkMeta: that model is enforced by nftables inside a container's own
 	// network namespace and does not carry over to a guest, so rather than mis-enforce it
@@ -116,7 +124,7 @@ type VirtualizationMeta struct {
 func (virt VirtualizationMeta) IsZero() bool {
 	return virt.BaseDigest == "" &&
 		virt.DiskSizeGiB == 0 && virt.MemoryMiB == 0 && virt.VCPUs == 0 &&
-		virt.Display == "" &&
+		virt.Display == "" && !virt.Vulkan &&
 		len(virt.ForwardPorts) == 0 &&
 		virt.CloudInit == CloudInit{}
 }

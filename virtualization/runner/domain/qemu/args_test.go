@@ -262,3 +262,57 @@ func TestDisplay_QuotesWhitespace(t *testing.T) {
 		t.Errorf("Display() = %q, want the whitespace argument quoted", got)
 	}
 }
+
+// Guest Vulkan is opt-in and costs the qemu process its seccomp jail: venus runs in a
+// helper process that virglrenderer forks, and the sandbox both forbids the fork and kills
+// the child that inherits its filter - silently, reported only as a generic "virgl could
+// not be initialized". Measured on real hardware; this asserts the trade is made exactly
+// where it was asked for and nowhere else.
+func TestArgs_VulkanIsOptInAndDropsTheSandbox(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Display = schema.VMDisplayAccelerated
+
+	// Default: sandboxed, and no venus.
+	plain := Args(cfg, testLayout())
+	if len(pairs(plain, "-sandbox")) != 1 {
+		t.Error("an app that did not ask for Vulkan must keep qemu's seccomp sandbox")
+	}
+	for _, device := range pairs(plain, "-device") {
+		if strings.Contains(device, "venus") {
+			t.Errorf("venus must not appear without being asked for, got %q", device)
+		}
+	}
+
+	// Opted in: venus present, sandbox gone.
+	cfg.VirtualizationMeta.Vulkan = true
+	vulkan := Args(cfg, testLayout())
+	if len(pairs(vulkan, "-sandbox")) != 0 {
+		t.Error("Vulkan requires the sandbox to be dropped, or the venus helper is killed")
+	}
+	var gpu string
+	for _, device := range pairs(vulkan, "-device") {
+		if strings.HasPrefix(device, "virtio-gpu-gl-pci") {
+			gpu = device
+		}
+	}
+	for _, want := range []string{"venus=on", "blob=on", "hostmem="} {
+		if !strings.Contains(gpu, want) {
+			t.Errorf("gpu device %q must contain %q", gpu, want)
+		}
+	}
+}
+
+// Vulkan rides on the accelerated display's device, so it must not silently attach itself
+// to a mode that has no virtio-gpu-gl to carry it.
+func TestArgs_VulkanOnlyOnTheAcceleratedDevice(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Vulkan = true
+	for _, mode := range []schema.VMDisplay{schema.VMDisplayWindow, schema.VMDisplayNone} {
+		cfg.VirtualizationMeta.Display = mode
+		for _, device := range pairs(Args(cfg, testLayout()), "-device") {
+			if strings.Contains(device, "venus") {
+				t.Errorf("display %q should carry no venus, got %q", mode, device)
+			}
+		}
+	}
+}

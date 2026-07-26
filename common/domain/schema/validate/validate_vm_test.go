@@ -263,3 +263,39 @@ func TestType_UnknownRejected(t *testing.T) {
 		t.Fatalf("unknown type: want an error naming it, got: %v", err)
 	}
 }
+
+// Vulkan needs the accelerated display's virtio-gpu-gl device; asking for it in another
+// mode would be a setting that silently does nothing.
+func TestVM_VulkanRequiresTheAcceleratedDisplay(t *testing.T) {
+	cfg := baseVM()
+	cfg.VirtualizationMeta.Vulkan = true
+	cfg.VirtualizationMeta.Display = schema.VMDisplayWindow
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "Vulkan") {
+		t.Fatalf("Vulkan without the accelerated display: want a Vulkan error, got: %v", err)
+	}
+
+	cfg.VirtualizationMeta.Display = schema.VMDisplayAccelerated
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Vulkan with the accelerated display should validate, got: %v", err)
+	}
+}
+
+// Enabling Vulkan removes a boundary rather than adding one, so it must be surfaced as a
+// create-time advisory on a security tool.
+func TestVM_VulkanWarnsAboutTheSandbox(t *testing.T) {
+	cfg := baseVM()
+	cfg.VirtualizationMeta.Vulkan = true
+	warnings := Warnings(cfg)
+	found := false
+	for _, warning := range warnings {
+		if strings.Contains(warning, "sandbox") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("enabling Vulkan should warn that it disables qemu's sandbox, got %v", warnings)
+	}
+	if len(Warnings(baseVM())) != 0 {
+		t.Error("an app without Vulkan should not carry that warning")
+	}
+}

@@ -187,6 +187,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	ciUser := fset.String("ci-user", "", "VM only: account cloud-init creates in the guest")
 	ciKey := fset.String("ci-ssh-key", "", "VM only: path to a PUBLIC key authorised for that account")
 	forward := fset.String("forward", "", "VM only: publish a guest port as HOST:GUEST (e.g. 2222:22), repeatable with commas")
+	vulkan := fset.Bool("vulkan", false, "VM only: pass guest Vulkan through to the host GPU (needs a venus-capable virglrenderer; disables qemu's sandbox for this app)")
 	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
 	if err := fset.Parse(flags); err != nil {
 		return err
@@ -224,6 +225,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 			VCPUs:        *vcpus,
 			DiskSizeGiB:  *diskSize,
 			Display:      schema.VMDisplay(*display),
+			Vulkan:       *vulkan,
 			ForwardPorts: forwards,
 			CloudInit:    schema.CloudInit{UserName: *ciUser, SSHKeyPath: *ciKey},
 		}
@@ -278,7 +280,7 @@ func vmFlagUsed(fset *flag.FlagSet) bool {
 	used := false
 	fset.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward":
+		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward", "vulkan":
 			used = true
 		}
 	})

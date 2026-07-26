@@ -46,6 +46,14 @@ func checkVirtualization(cfg schema.AppConfig, add addFunc) {
 			virt.Display, schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated)
 	}
 
+	// Vulkan rides on the accelerated display's virtio-gpu-gl device; there is nothing for
+	// venus to attach to in the other modes, so asking for it there would be a setting that
+	// silently does nothing.
+	if virt.Vulkan && virt.Display != schema.VMDisplayAccelerated {
+		add("VirtualizationMeta.Vulkan: requires Display %s (venus rides on that device); this app is %q",
+			schema.VMDisplayAccelerated, virt.Display)
+	}
+
 	for index, forward := range virt.ForwardPorts {
 		checkForward(index, forward, add)
 	}

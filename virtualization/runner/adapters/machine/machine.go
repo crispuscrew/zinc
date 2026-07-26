@@ -48,7 +48,7 @@ type State struct {
 // Start launches a guest detached from the calling shell and confirms it survived. The
 // process is put in its own session so it outlives zvr - a launcher fires and forgets,
 // and the guest must not die with the hotkey that started it.
-func (runtime Runtime) Start(app string, args []string) error {
+func (runtime Runtime) Start(app string, args []string, extraEnv []string) error {
 	if state, _ := runtime.State(app); state.Alive {
 		return fmt.Errorf("%s is already running (pid %d)", app, state.PID)
 	}
@@ -64,6 +64,11 @@ func (runtime Runtime) Start(app string, args []string) error {
 	fmt.Fprintf(logFile, "\n=== %s starting ===\n", app)
 
 	command := exec.Command(args[0], args[1:]...)
+	if len(extraEnv) > 0 {
+		// Appended to the inherited environment rather than replacing it: qemu still needs
+		// the session's WAYLAND_DISPLAY and XDG_RUNTIME_DIR to open its window at all.
+		command.Env = append(os.Environ(), extraEnv...)
+	}
 	command.Stdout = logFile
 	command.Stderr = logFile
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

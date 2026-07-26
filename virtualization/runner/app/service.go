@@ -68,7 +68,18 @@ func (svc Service) Run(cfg schema.AppConfig) error {
 			return err
 		}
 	}
-	return svc.Runtime.Start(cfg.AppNameID, qemu.Args(cfg, svc.layout(cfg)))
+	// Guest Vulkan needs qemu pointed at a venus-capable virglrenderer. Resolved here so a
+	// missing one fails the launch with instructions, rather than qemu starting and the
+	// guest quietly getting software Vulkan.
+	var extraEnv []string
+	if cfg.VirtualizationMeta.Vulkan {
+		env, err := svc.Paths.VenusEnv()
+		if err != nil {
+			return err
+		}
+		extraEnv = env
+	}
+	return svc.Runtime.Start(cfg.AppNameID, qemu.Args(cfg, svc.layout(cfg)), extraEnv)
 }
 
 // Stop shuts a guest down, gracefully unless force is set.

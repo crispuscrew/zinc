@@ -49,7 +49,7 @@ demo: build
 		--image "$(IMAGE_DIR)/$(FEDORA_IMAGE)" \
 		--base-digest "$(FEDORA_DIGEST)" \
 		--memory 4096 --vcpus 4 --disk 20 \
-		--display Accelerated \
+		--display Accelerated --vulkan \
 		--ci-user zinc --ci-ssh-key "$(SSH_KEY)" \
 		--forward $(DEMO_PORT):22 \
 		--install 'dnf install -y -q mesa-demos glx-utils vulkan-tools mesa-vulkan-drivers glmark2 weston; echo zinc:$(DEMO_PASSWORD) | chpasswd' \
@@ -62,6 +62,9 @@ demo: build
 	@echo "Log in at that window as  zinc  /  $(DEMO_PASSWORD)  (demo only, and the guest is"
 	@echo "reachable on loopback only). Over ssh you need no password:"
 	@echo "  ssh -p $(DEMO_PORT) zinc@127.0.0.1"
+	@echo
+	@echo "Guest Vulkan is on, which needs a venus-capable virglrenderer and disables qemu's"
+	@echo "sandbox for this guest; zvr says how to build one if it is missing."
 	@echo
 	@echo "Then check whether the display path is really accelerated:"
 	@echo "  make -C virtualization/runner demo-gpu-check"

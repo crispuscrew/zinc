@@ -177,6 +177,14 @@ func checkResources(res schema.ResourcesMeta, add addFunc) {
 // (an Ingress list) is always surfaced, loudest when it reaches the LAN.
 func Warnings(cfg schema.AppConfig) []string {
 	var warns []string
+	if cfg.Type == schema.ZincVirtualization && cfg.VirtualizationMeta.Vulkan {
+		// Worth saying out loud on a security tool: this is the one VM setting that removes
+		// a boundary rather than adding one.
+		warns = append(warns,
+			"VirtualizationMeta.Vulkan: guest Vulkan requires disabling qemu's seccomp sandbox for this app, "+
+				"because the venus renderer runs in a helper process the sandbox would kill. The guest gains "+
+				"GPU-accelerated Vulkan; the qemu process loses its syscall filter.")
+	}
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		if netList.Ingress {
 			warns = append(warns, ingressWarnings(index, netList)...)

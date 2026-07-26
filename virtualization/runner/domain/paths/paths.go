@@ -94,3 +94,42 @@ func (paths Paths) EnsureDirs() error {
 	}
 	return nil
 }
+
+// VirglPrefix is where a venus-capable virglrenderer is expected to live. Distributions
+// ship virglrenderer built WITHOUT venus (Fedora 43's has no venus symbols at all), so a
+// guest that wants Vulkan needs one built with -Dvenus=true, and zvr has to point qemu at
+// it rather than at the system copy. ZVR_VIRGL_PREFIX overrides the default.
+func (paths Paths) VirglPrefix() string {
+	if override := os.Getenv("ZVR_VIRGL_PREFIX"); override != "" {
+		return override
+	}
+	return filepath.Join(filepath.Dir(paths.StateDir), "virgl-venus")
+}
+
+// VenusEnv returns the environment qemu needs to use that virglrenderer, and reports
+// whether it is actually installed. Two variables, because venus needs both halves: the
+// library qemu loads, and the helper binary it forks - whose path is compiled into the
+// library, so a venus-capable library would otherwise still exec the distro's venus-less
+// render server.
+func (paths Paths) VenusEnv() ([]string, error) {
+	prefix := paths.VirglPrefix()
+	library := filepath.Join(prefix, "lib64", "libvirglrenderer.so.1")
+	server := filepath.Join(prefix, "libexec", "virgl_render_server")
+	for _, required := range []string{library, server} {
+		if _, err := os.Stat(required); err != nil {
+			return nil, fmt.Errorf(
+				"guest Vulkan needs a virglrenderer built with venus support, which was not found at %s\n"+
+					"  missing: %s\n"+
+					"Distributions ship virglrenderer without venus. Build one:\n"+
+					"  git clone --depth 1 --branch virglrenderer-1.3.0 https://gitlab.freedesktop.org/virgl/virglrenderer.git\n"+
+					"  cd virglrenderer && meson setup build --prefix=%s -Dvenus=true -Dbuildtype=release\n"+
+					"  ninja -C build && ninja -C build install\n"+
+					"Or set ZVR_VIRGL_PREFIX to an existing one, or turn VirtualizationMeta.Vulkan off.",
+				prefix, required, prefix)
+		}
+	}
+	return []string{
+		"LD_LIBRARY_PATH=" + filepath.Join(prefix, "lib64"),
+		"RENDER_SERVER_EXEC_PATH=" + server,
+	}, nil
+}
