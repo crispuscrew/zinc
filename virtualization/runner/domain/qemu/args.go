@@ -102,12 +102,20 @@ func sandboxArgs(vulkan bool) []string {
 // so the authored image cannot drift from its digest.
 func diskArgs(layout Layout, devices schema.VMDevices) []string {
 	args := diskArgsFor(devices, layout.Overlay)
-	if layout.Seed != "" {
-		// Read-only and raw: cloud-init looks for a filesystem labelled cidata, and the
-		// guest has no business writing to its own seed.
-		args = append(args, "-drive", "file="+layout.Seed+",if=virtio,format=raw,readonly=on")
+	if layout.Seed == "" {
+		return args
 	}
-	return args
+	// Read-only and raw either way: cloud-init looks for a filesystem labelled cidata, and
+	// the guest has no business writing to its own seed.
+	if devices == schema.VMDevicesCompatible {
+		// On the compatible profile the seed rides the same controller as the disk. A
+		// virtio seed would be both unreadable to a guest with no virtio drivers and a
+		// piece of virtio hardware on a machine configured precisely because it has none.
+		return append(args,
+			"-drive", "file="+layout.Seed+",if=none,id=seed,format=raw,readonly=on",
+			"-device", "ide-cd,drive=seed,bus=ahci.1")
+	}
+	return append(args, "-drive", "file="+layout.Seed+",if=virtio,format=raw,readonly=on")
 }
 
 // netArgs gives the guest user-mode networking: outbound access through qemu's own NAT,

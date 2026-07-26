@@ -371,6 +371,14 @@ func TestArgs_WindowsClassMachine(t *testing.T) {
 			t.Errorf("a compatible-devices guest must carry no virtio hardware, got %q", device)
 		}
 	}
+	// Drives too, not only -device. `if=virtio` creates a virtio-blk controller without
+	// ever appearing in a -device argument, which is exactly how a virtio cloud-init seed
+	// slipped onto a machine configured for a guest with no virtio drivers.
+	for _, drive := range pairs(args, "-drive") {
+		if strings.Contains(drive, "if=virtio") {
+			t.Errorf("a compatible-devices guest must have no virtio drive, got %q", drive)
+		}
+	}
 	if got := pairs(args, "-display"); len(got) != 1 || got[0] != "gtk" {
 		t.Errorf("-display = %v, want plain gtk on VGA", got)
 	}
@@ -434,5 +442,47 @@ func TestArgs_InstallMediaOnlyWhenInstalling(t *testing.T) {
 	}
 	if got := pairs(installing, "-boot"); len(got) != 1 || !strings.Contains(got[0], "order=d") {
 		t.Errorf("-boot = %v, want the installer disc first", got)
+	}
+}
+
+// The cloud-init seed follows the machine's device profile. A virtio seed on a compatible
+// guest is doubly wrong: unreadable to a guest with no virtio drivers, and virtio hardware
+// on a machine configured precisely because it has none.
+func TestArgs_SeedFollowsTheDeviceProfile(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+	cfg.VirtualizationMeta.Display = schema.VMDisplayCompatible
+	args := Args(cfg, testLayout()) // testLayout carries a seed
+
+	seedAttached := false
+	for _, drive := range pairs(args, "-drive") {
+		if strings.Contains(drive, testLayout().Seed) {
+			seedAttached = true
+			if strings.Contains(drive, "if=virtio") {
+				t.Errorf("the seed should not be a virtio drive on a compatible guest: %q", drive)
+			}
+			if !strings.Contains(drive, "readonly=on") {
+				t.Errorf("the seed must stay read-only: %q", drive)
+			}
+		}
+	}
+	if !seedAttached {
+		t.Error("the seed should still be attached, just on a bus the guest can read")
+	}
+	if !has(pairs(args, "-device"), "ide-cd,drive=seed,bus=ahci.1") {
+		t.Error("the compatible seed should ride the same controller as the disk")
+	}
+
+	// A virtio guest keeps the virtio seed.
+	cfg.VirtualizationMeta.Devices = schema.VMDevicesVirtio
+	cfg.VirtualizationMeta.Display = schema.VMDisplayAccelerated
+	virtioSeed := false
+	for _, drive := range pairs(Args(cfg, testLayout()), "-drive") {
+		if strings.Contains(drive, testLayout().Seed) && strings.Contains(drive, "if=virtio") {
+			virtioSeed = true
+		}
+	}
+	if !virtioSeed {
+		t.Error("a virtio guest should keep its virtio seed drive")
 	}
 }

@@ -57,6 +57,13 @@ func (svc Service) start(cfg schema.AppConfig, installing bool) error {
 	if err := svc.check(cfg); err != nil {
 		return err
 	}
+	// Before anything else. The runtime refuses a second launch, but it does so at the very
+	// end, and everything between here and there has side effects on a guest that is
+	// already up: rebuilding its seed, and - worse - restarting the TPM emulator its
+	// running Windows believes is sealed to this machine.
+	if state, _ := svc.Runtime.State(cfg.AppNameID); state.Alive {
+		return fmt.Errorf("%s is already running (pid %d)", cfg.AppNameID, state.PID)
+	}
 	if err := svc.Paths.EnsureDirs(); err != nil {
 		return err
 	}

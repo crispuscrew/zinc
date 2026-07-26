@@ -125,13 +125,24 @@ func StartTPM(stateDir, socketPath, pidPath string) (*TPM, error) {
 // error.
 func StopTPM(socketPath, pidPath string) {
 	if data, err := os.ReadFile(pidPath); err == nil {
-		if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); convErr == nil && pid > 0 {
+		if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); convErr == nil && pid > 0 && isSwtpm(pid) {
 			_ = syscall.Kill(pid, syscall.SIGTERM)
 		}
 	}
 	_ = os.Remove(pidPath)
 	_ = os.Remove(socketPath)
 	_ = os.Remove(socketPath + ".ctrl")
+}
+
+// isSwtpm confirms a pid really is a TPM emulator before it is signalled. A stale pidfile
+// outlives the process it names, pids are recycled, and the guest supervisor already
+// refuses to signal on a pidfile alone - this is the same rule.
+func isSwtpm(pid int) bool {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ReplaceAll(string(data), "\x00", " "), "swtpm")
 }
 
 func fileExists(path string) bool {
