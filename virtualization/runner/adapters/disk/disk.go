@@ -169,10 +169,10 @@ func WriteSeed(path string, cfg schema.AppConfig) error {
 	}
 	defer os.RemoveAll(stage)
 
-	// instance-id is what cloud-init uses to decide whether it has already provisioned
-	// this guest; keeping it stable per app means a rebuilt seed does not re-run the
-	// first-boot steps on an existing disk.
-	metaData := fmt.Sprintf("instance-id: zinc-%s\nlocal-hostname: %s\n", cfg.AppNameID, cfg.AppNameID)
+	metaData, err := metaData(cfg)
+	if err != nil {
+		return err
+	}
 	for name, content := range map[string]string{"user-data": userData, "meta-data": metaData} {
 		if err := os.WriteFile(filepath.Join(stage, name), []byte(content), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", name, err)
@@ -191,6 +191,50 @@ func WriteSeed(path string, cfg schema.AppConfig) error {
 	return nil
 }
 
+// metaData renders the seed's meta-data document as JSON. cloud-init documents this file
+// as YAML, and JSON is valid YAML, so emitting JSON satisfies both the full implementation
+// and the cut-down ones: cirros parses meta-data strictly as JSON and rejects a plain
+// YAML mapping outright, which was found by booting one.
+//
+// instance-id is what cloud-init uses to decide whether it has already provisioned this
+// guest, so keeping it stable per app means a rebuilt seed does not re-run first-boot
+// steps on a disk that already has them. public-keys is the classic EC2-style field, read
+// by implementations that never look at user-data's users list.
+func metaData(cfg schema.AppConfig) (string, error) {
+	document := map[string]any{
+		"instance-id":    "zinc-" + cfg.AppNameID,
+		"local-hostname": cfg.AppNameID,
+	}
+	init := cfg.VirtualizationMeta.CloudInit
+	if init.SSHKeyPath != "" {
+		key, err := publicKey(init.SSHKeyPath)
+		if err != nil {
+			return "", err
+		}
+		document["public-keys"] = []string{key}
+	}
+	encoded, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(encoded) + "\n", nil
+}
+
+// publicKey reads an authorised key, refusing a private one. The config check screens the
+// path; this screens the bytes, because the file behind a .pub name is not guaranteed to
+// be what the name says - and the seed is handed to the guest.
+func publicKey(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read the public key %s: %w", path, err)
+	}
+	key := strings.TrimSpace(string(data))
+	if strings.Contains(key, "PRIVATE KEY") {
+		return "", fmt.Errorf("%s contains a PRIVATE key; VirtualizationMeta.CloudInit.SSHKeyPath must be a public key", path)
+	}
+	return key, nil
+}
+
 // userData renders the cloud-config document. The app's Install steps become runcmd
 // lines, which is the VM reading of the same field a container turns into its derived
 // image's RUN layer: what to add on top of the pinned base.
@@ -203,16 +247,11 @@ func userData(cfg schema.AppConfig) (string, error) {
 	if init.UserName != "" {
 		key := ""
 		if init.SSHKeyPath != "" {
-			data, err := os.ReadFile(init.SSHKeyPath)
+			authorised, err := publicKey(init.SSHKeyPath)
 			if err != nil {
-				return "", fmt.Errorf("read the public key %s: %w", init.SSHKeyPath, err)
+				return "", err
 			}
-			key = strings.TrimSpace(string(data))
-			if strings.Contains(key, "PRIVATE KEY") {
-				// The seed is handed to the guest, so this would be giving the key away. The
-				// config check screens the path; this screens the bytes actually read.
-				return "", fmt.Errorf("%s contains a PRIVATE key; VirtualizationMeta.CloudInit.SSHKeyPath must be a public key", init.SSHKeyPath)
-			}
+			key = authorised
 		}
 		doc.WriteString("users:\n")
 		doc.WriteString("  - name: " + init.UserName + "\n")
