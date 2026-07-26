@@ -32,6 +32,14 @@ Adds VM apps.
 - **Accelerated guest display** - `Display: Accelerated` attaches `virtio-gpu-gl` and a local
   window, so guest 3D runs on the host GPU and frames reach the compositor without leaving
   the machine or being encoded.
+- **`make -C virtualization/runner demo`** - downloads a Fedora Cloud image (verified against
+  the digest Fedora publishes), authors a VM app with an accelerated display and boots it, so
+  the whole path can be tried in one command.
+- **`make -C virtualization/e2e e2e`** - end-to-end tests that boot a real guest under qemu
+  and assert what unit tests cannot: that it boots and is reachable, that a base image
+  altered after authoring refuses to run, and that a graceful stop is graceful. Not a CI
+  gate - GitHub's runners have no `/dev/kvm` - so it is a local pre-release gate that skips
+  cleanly when qemu or KVM is missing.
 
 ### Changed
 

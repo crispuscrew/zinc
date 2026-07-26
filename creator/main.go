@@ -1,10 +1,12 @@
 // Command zc is Zinc's app-definition tool (docs/architecture.md section 9.1).
 //
 // It authors app files (~/.config/zinc/apps/<name>.yaml) and manages them: create, edit,
-// list, validate, delete, and a keyboard-first TUI. To RUN what it authors it shells out
-// to the `zcr` binary - Zinc's container runtime - so zc never imports the runner and
-// knows nothing about podman; the two meet only at the on-disk format and at that process
-// boundary. zcr must be on $PATH for the run/manage commands; authoring works without it.
+// list, validate, delete, and a keyboard-first TUI. Both app kinds are authored here - a
+// container app and a VM app are the same file with a different Type - and neither is run
+// here: to RUN what it authors zc shells out to the runtime that owns the app, `zcr` for
+// containers and `zvr` for VMs. So zc imports neither runner and knows nothing about podman
+// or qemu; they meet only at the on-disk format and at that process boundary. The relevant
+// runtime must be on $PATH for the run/manage commands; authoring works without it.
 //
 //	zc tui                             keyboard-first manager (create/edit/run/stop/logs)
 //	zc new <name> --image <img> [--desc d] [--icon i]
@@ -29,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -180,6 +183,9 @@ func cmdNew(svc backend.Service, argv []string) error {
 	diskSize := fset.Int64("disk", 0, "VM only: overlay size in GiB (0 keeps the base image's size)")
 	display := fset.String("display", string(schema.VMDisplayAccelerated),
 		"VM only: None (headless), Window (no 3D), or Accelerated (virtio-gpu-gl)")
+	ciUser := fset.String("ci-user", "", "VM only: account cloud-init creates in the guest")
+	ciKey := fset.String("ci-ssh-key", "", "VM only: path to a PUBLIC key authorised for that account")
+	forward := fset.String("forward", "", "VM only: publish a guest port as HOST:GUEST (e.g. 2222:22), repeatable with commas")
 	if err := fset.Parse(flags); err != nil {
 		return err
 	}
@@ -200,12 +206,18 @@ func cmdNew(svc backend.Service, argv []string) error {
 	cfg.ImageMeta.Image = *image
 	if *isVM {
 		cfg.Type = schema.ZincVirtualization
+		forwards, ferr := parseForwards(*forward)
+		if ferr != nil {
+			return ferr
+		}
 		cfg.VirtualizationMeta = schema.VirtualizationMeta{
-			BaseDigest:  *digest,
-			MemoryMiB:   *memory,
-			VCPUs:       *vcpus,
-			DiskSizeGiB: *diskSize,
-			Display:     schema.VMDisplay(*display),
+			BaseDigest:   *digest,
+			MemoryMiB:    *memory,
+			VCPUs:        *vcpus,
+			DiskSizeGiB:  *diskSize,
+			Display:      schema.VMDisplay(*display),
+			ForwardPorts: forwards,
+			CloudInit:    schema.CloudInit{UserName: *ciUser, SSHKeyPath: *ciKey},
 		}
 	} else if vmFlagUsed(fset) {
 		// Silently ignoring these would write a container app that looks configured for a
@@ -228,6 +240,29 @@ const newUsage = `usage:
   zc new <name> --vm --image <base.qcow2> --base-digest sha256:... \
                 [--memory MiB] [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]`
 
+// parseForwards reads "HOST:GUEST[,HOST:GUEST...]" into port forwards. Validation screens
+// the numbers themselves (range, and the privileged ports a rootless qemu cannot bind);
+// this only has to turn the text into fields.
+func parseForwards(spec string) ([]schema.PortForward, error) {
+	if strings.TrimSpace(spec) == "" {
+		return nil, nil
+	}
+	var forwards []schema.PortForward
+	for _, pair := range strings.Split(spec, ",") {
+		hostText, guestText, found := strings.Cut(strings.TrimSpace(pair), ":")
+		if !found {
+			return nil, fmt.Errorf("--forward %q: want HOST:GUEST, e.g. 2222:22", pair)
+		}
+		host, herr := strconv.Atoi(hostText)
+		guest, gerr := strconv.Atoi(guestText)
+		if herr != nil || gerr != nil {
+			return nil, fmt.Errorf("--forward %q: both ports must be numbers", pair)
+		}
+		forwards = append(forwards, schema.PortForward{HostPort: host, GuestPort: guest})
+	}
+	return forwards, nil
+}
+
 // vmFlagUsed reports whether any VM-only flag was set. Go's flag package records which
 // flags were actually passed, which is what distinguishes "left at its default" from
 // "explicitly set to the default".
@@ -235,7 +270,7 @@ func vmFlagUsed(fset *flag.FlagSet) bool {
 	used := false
 	fset.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "base-digest", "memory", "vcpus", "disk", "display":
+		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward":
 			used = true
 		}
 	})

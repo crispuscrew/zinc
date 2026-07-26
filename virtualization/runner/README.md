@@ -83,6 +83,24 @@ Accelerated 3D needs a guest with the virtio-gpu driver, which in practice means
   that works.
 - **No snapshots or managed save**, the things libvirt would have given us.
 
+## Try it
+
+```sh
+make -C virtualization/runner demo
+```
+
+Downloads a Fedora Cloud image once (~600 MB), verifies it against the digest Fedora
+publishes - refusing to boot if it does not match - authors a demo VM app with an
+accelerated display, and starts it. A qemu window opens on your compositor. To check the
+display path is really accelerated rather than falling back to software:
+
+```sh
+ssh -p 2222 -o StrictHostKeyChecking=no zinc@127.0.0.1 glxinfo -B
+```
+
+Look for `virgl` or `virtio_gpu` in the renderer line; `llvmpipe` means the guest fell back
+to software rendering.
+
 ## Build
 
 ```sh
