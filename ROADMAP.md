@@ -104,48 +104,37 @@ really is running on the host GPU. Guest **Vulkan is not** - it measures as `llv
 CPU. 0.4 therefore ships as a genuinely OpenGL-accelerated VM runner with software Vulkan;
 closing the Vulkan gap is 0.5 (below).
 
-## 0.5 - Guest GPU access - planned
+## 0.5 - Guest GPU access - done
 
 Make a guest's 3D actually reach the GPU, which is what turns a VM app from an isolation
 tool into somewhere a real workload can run.
 
-- **Vulkan through venus** - the whole of 0.5, and the half that matters for games, since
-  Proton, DXVK and vkd3d are all Vulkan.
+Delivered: a VM app's 3D reaches the host GPU for **both** APIs, measured by rendering real
+frames rather than by enumerating a device.
 
-  Investigated hard on 2026-07-26. Four separate blockers were found and cleared, one
-  remains, and the order matters because each was hiding the next:
+| | Renderer the guest reports | Benchmark |
+| --- | --- | --- |
+| Vulkan | `Virtio-GPU Venus (NVIDIA GeForce RTX 5080)` | vkmark **2243** |
+| OpenGL | `virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)` | glmark2 **3947** (software: 931) |
 
-  1. **Fedora's virglrenderer has no venus.** `nm -D /usr/lib64/libvirglrenderer.so.1 | grep
-     venus` returns nothing. Building 1.2.0 (and later 1.3.0) with `-Dvenus=true` into a
-     private prefix and pointing qemu at it with `LD_LIBRARY_PATH` fixes that; the library
-     really is loaded, confirmed in `/proc/<pid>/maps`.
-  2. **Venus does not run in qemu's process.** It runs in a forked `virgl_render_server`,
-     whose path is compiled in and overridable with `RENDER_SERVER_EXEC_PATH` - so a
-     venus-capable library still execs the distro's venus-less server unless told otherwise.
-  3. **qemu's own seccomp sandbox blocked the fork.** `-sandbox on,...,spawn=deny` exists to
-     forbid exactly that, and the only symptom was `proxy: failed to fork proxy server`
-     behind a generic "virgl could not be initialized". This is a real trade-off, not an
-     oversight to undo blindly: guest Vulkan costs the qemu process its spawn restriction,
-     so venus must be opt-in per app and say what it gives up.
-  4. **The NVIDIA driver was NOT the problem**, which was the leading theory and was wrong.
-     A direct Vulkan probe shows the 5080 (driver 580.692) exposing everything venus needs:
-     `VK_EXT_external_memory_dma_buf`, `VK_KHR_external_memory_fd`,
-     `VK_EXT_image_drm_format_modifier`, and the semaphore/fence fd extensions.
+Getting there meant clearing five blockers, each hiding the next, and the fourth is the one
+worth remembering:
 
-  With 1-3 cleared, venus initializes and the render server runs. What remains: inside the
-  guest, `vkCreateInstance` fails with `ERROR_OUT_OF_HOST_MEMORY`, and Mesa's venus driver
-  emits no `VN_DEBUG=init` output at all, so it is failing before it logs. The guest does
-  have the ICD (`/usr/lib64/libvulkan_virtio.so`). Adding a shared `memory-backend-memfd`
-  and wiring it into the machine did not change it, and neither did virglrenderer 1.3.0
-  over 1.2.0, so it is not simple version skew against the guest's Mesa 25.3.6.
+1. Distributions ship virglrenderer built **without venus** - Fedora 43's has no venus
+   symbols at all. `make -C virtualization/runner virgl-venus` now builds one.
+2. venus does not run in qemu's process. It runs in a forked `virgl_render_server` whose
+   path is compiled into the library, so a venus-capable library still execs the distro's
+   venus-less server unless `RENDER_SERVER_EXEC_PATH` says otherwise.
+3. qemu's `-sandbox spawn=deny` forbade that fork.
+4. **The rest of the seccomp filter killed the forked child anyway** - inherited, silent,
+   surfacing only as a generic "virgl could not be initialized". So the whole sandbox has to
+   go, not just `spawn=deny`. That is a real trade rather than a bug to paper over, which is
+   why Vulkan is opt-in per app and `zc validate` warns what it costs.
+5. The NVIDIA driver was innocent, contrary to the leading theory: a direct Vulkan probe
+   showed the 5080 exposing every extension venus needs.
 
-  Next things to try, in order: capture the render server's own stderr (it is a separate
-  process and its diagnostics are currently lost); check whether the guest's virtio-gpu is
-  advertising the venus capset at all (`VIRTGPU_CONTEXT_INIT` / capset probing); and vary
-  `hostmem` and `blob` sizing, since OUT_OF_HOST_MEMORY at instance creation points at the
-  shared-memory ring rather than at the GPU.
-- **A measurement target**, so the answer is a number rather than an impression, and a
-  regression is visible.
+Measured minimal set, so nothing is cargo cult: `venus=on,blob=on,hostmem=8G`. Neither
+`max_hostmem` nor a shared `memory-backend-memfd` was required.
 
 Honest boundary on this hardware: full GPU passthrough is not an option here at all. A
 single RTX 5080 with no integrated GPU means passing it through blinds the host.

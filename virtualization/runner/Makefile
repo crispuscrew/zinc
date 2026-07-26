@@ -74,6 +74,32 @@ demo: build
 	@echo "  make -C virtualization/runner demo-stop     shut it down (graceful, ACPI)"
 	@echo "  make -C virtualization/runner demo-reset    throw the disk away, back to the base"
 
+## virgl-venus: build the venus-capable virglrenderer that guest Vulkan needs
+# Distributions ship virglrenderer built WITHOUT venus (Fedora 43's has no venus symbols at
+# all), so an app with Vulkan: true needs one built here. It installs into the user's own
+# data directory and never touches the system copy, so nothing else on the machine changes.
+VIRGL_VERSION ?= 1.3.0
+VIRGL_PREFIX  ?= $(HOME)/.local/share/zinc/virgl-venus
+VIRGL_SRC     ?= $(HOME)/.cache/zinc/virglrenderer
+
+virgl-venus:
+	@for tool in git meson ninja pkg-config; do \
+		command -v $$tool >/dev/null || { echo "$$tool is required to build virglrenderer"; exit 1; }; \
+	done
+	@pkg-config --exists vulkan libdrm epoxy || { echo "missing dev headers: need vulkan, libdrm and epoxy"; exit 1; }
+	@if [ ! -d "$(VIRGL_SRC)/.git" ]; then \
+		mkdir -p "$$(dirname "$(VIRGL_SRC)")"; \
+		git clone --depth 1 --branch virglrenderer-$(VIRGL_VERSION) \
+			https://gitlab.freedesktop.org/virgl/virglrenderer.git "$(VIRGL_SRC)"; \
+	fi
+	@cd "$(VIRGL_SRC)" && rm -rf build && \
+		meson setup build --prefix="$(VIRGL_PREFIX)" -Dvenus=true -Dbuildtype=release >/dev/null && \
+		ninja -C build >/dev/null && ninja -C build install >/dev/null
+	@test -f "$(VIRGL_PREFIX)/lib64/libvirglrenderer.so.1" || { echo "build produced no library"; exit 1; }
+	@test -x "$(VIRGL_PREFIX)/libexec/virgl_render_server" || { echo "build produced no render server"; exit 1; }
+	@echo "venus-capable virglrenderer installed at $(VIRGL_PREFIX)"
+	@echo "zvr finds it there automatically; ZVR_VIRGL_PREFIX overrides it."
+
 ## demo-status: what the demo guest is doing
 demo-status: build
 	@./bin/zvr status $(DEMO_APP)
@@ -117,4 +143,4 @@ demo-gpu-check:
 	@echo "A Fedora Cloud image has no desktop of its own, which is why the window shows"
 	@echo "only a text console until you start one."
 
-.PHONY: demo demo-status demo-stop demo-reset demo-gpu-check
+.PHONY: demo demo-status demo-stop demo-reset demo-gpu-check virgl-venus

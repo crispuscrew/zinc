@@ -5,6 +5,44 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.5.0] - 2026-07-26
+
+Guest GPU access. A VM app's 3D now reaches the host GPU for both OpenGL and Vulkan.
+
+### Added
+
+- **Guest Vulkan** (`VirtualizationMeta.Vulkan`, `zc new --vulkan`) - passes the guest's
+  Vulkan through to the host GPU via qemu's venus. This is the half that matters for games,
+  since Proton, DXVK and vkd3d are all Vulkan; without it a guest's Vulkan runs on the CPU.
+  Measured on a host with the proprietary NVIDIA driver, rendering real frames: the guest
+  reports `Virtio-GPU Venus (NVIDIA GeForce RTX 5080)` and scores **2243** in vkmark, while
+  OpenGL reports `virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)` and scores **3947** in glmark2
+  against **931** for the software renderer.
+- **`make -C virtualization/runner virgl-venus`** - builds the venus-capable virglrenderer
+  that guest Vulkan requires, into the user's own data directory, never touching the system
+  copy. Distributions ship virglrenderer built *without* venus, so one has to be built;
+  `zvr` finds it automatically and `ZVR_VIRGL_PREFIX` overrides the location.
+
+### Changed
+
+- **Vulkan is opt-in, and says what it costs.** Enabling it disables qemu's seccomp sandbox
+  **for that app only**: venus runs in a helper process that virglrenderer forks, and the
+  sandbox both forbids the fork and kills the child that inherits its filter - silently,
+  surfacing only as a generic "virgl could not be initialized". `zc validate` warns that the
+  guest gains GPU Vulkan while the qemu process loses its syscall filter. An app that does
+  not ask keeps the sandbox and still gets accelerated OpenGL.
+- `zvr` refuses to launch a Vulkan app when no venus-capable virglrenderer is present,
+  printing how to build one, rather than starting qemu and letting the guest quietly fall
+  back to software rendering.
+
+### Known limitations
+
+- Guest Vulkan and qemu's seccomp sandbox are mutually exclusive; there is no way around it
+  today, because the venus helper process cannot survive the filter.
+- The venus virglrenderer has to be built locally until distributions ship one.
+- Everything else from 0.4 stands: no egress filtering for VM apps, no host directory
+  sharing, no snapshots, x86_64 guests only.
+
 ## [0.4.0] - 2026-07-26
 
 Adds VM apps. Guests boot, display and are managed; making their 3D actually reach the GPU
@@ -284,6 +322,7 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.5.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.5.0
 [0.4.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.4.0
 [0.3.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.1
 [0.3.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.0

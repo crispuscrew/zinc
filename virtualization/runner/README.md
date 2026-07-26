@@ -81,11 +81,11 @@ It costs two things, both stated rather than hidden:
   if it cannot find one, and `ZVR_VIRGL_PREFIX` points at an existing build:
 
   ```sh
-  git clone --depth 1 --branch virglrenderer-1.3.0 https://gitlab.freedesktop.org/virgl/virglrenderer.git
-  cd virglrenderer
-  meson setup build --prefix=~/.local/share/zinc/virgl-venus -Dvenus=true -Dbuildtype=release
-  ninja -C build && ninja -C build install
+  make -C virtualization/runner virgl-venus
   ```
+
+  It installs into your own data directory and never touches the system copy. `zvr` finds it
+  there automatically; `ZVR_VIRGL_PREFIX` points at a different build.
 
 - **qemu's seccomp sandbox, for that app.** venus runs in a helper process that
   virglrenderer forks, and the sandbox both forbids the fork and kills the child that
@@ -94,13 +94,17 @@ It costs two things, both stated rather than hidden:
   about it. The guest gains GPU Vulkan; the host process loses its syscall filter. That is
   the caller's trade to make, which is why it is off by default.
 
-Verified on a host with the proprietary NVIDIA driver:
+Measured on a host with the proprietary NVIDIA driver, rendering real frames rather than
+just enumerating a device:
 
-```
-deviceName = Virtio-GPU Venus (NVIDIA GeForce RTX 5080)
-driverName = venus
-OpenGL core profile renderer: virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)
-```
+| | Renderer the guest reports | Benchmark |
+| --- | --- | --- |
+| Vulkan | `Virtio-GPU Venus (NVIDIA GeForce RTX 5080)` | vkmark **2243** (2268 fps) |
+| OpenGL | `virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)` | glmark2 **3947** |
+
+The control that makes those numbers mean something: the same OpenGL benchmark against a
+software renderer scores **931**, so the accelerated path is about 4x faster on this
+workload and far more on anything heavier.
 
 Neither `max_hostmem` nor a shared `memory-backend-memfd` turned out to be necessary; the
 working set is `venus=on,blob=on,hostmem=8G` plus the two points above.
