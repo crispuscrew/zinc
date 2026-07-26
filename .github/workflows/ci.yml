@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [container/runner, container/creator, launcher/tui, launcher/gui]
+        module: [container/runner, container/creator, launcher/tui, launcher/gui, virtualization/runner]
     steps:
       - uses: actions/checkout@v4
       - name: Ensure podman
