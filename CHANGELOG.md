@@ -23,6 +23,11 @@ tracked in [RELEASES.md](RELEASES.md).
   line to author an app against it; from then on every run is an overlay, so `zvr reset`
   returns the app to its freshly installed state.
 - `zc new --firmware/--secure-boot/--tpm/--devices` to author all of the above.
+- **`make -C virtualization/runner windows-demo WIN_ISO=...`** - the whole Windows flow from
+  one argument. The Windows ISO is Microsoft's and cannot be fetched for you; everything
+  else is handled, including downloading the virtio-win driver disc (resumable, since it is
+  ~700 MB) and defaulting the machine to what Windows 11 requires. When Setup finishes it
+  pins the installed disk and authors an app against it.
 
 ### Known limitations
 

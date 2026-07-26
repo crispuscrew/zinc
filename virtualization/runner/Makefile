@@ -74,6 +74,64 @@ demo: build
 	@echo "  make -C virtualization/runner demo-stop     shut it down (graceful, ACPI)"
 	@echo "  make -C virtualization/runner demo-reset    throw the disk away, back to the base"
 
+## windows-demo: install Windows from an ISO and author an app for it (WIN_ISO=/path/to/Win11.iso)
+# The only thing you have to supply is the Windows ISO - Microsoft's, which cannot be
+# fetched for you. Everything else is defaulted to what Windows 11 requires: UEFI, Secure
+# Boot, a TPM 2.0, and devices whose drivers ship in the box, because Windows Setup has none
+# for virtio and reports finding no drives at all when pointed at a virtio disk.
+#
+# The install itself is interactive and takes a while; this target blocks until you finish
+# Setup and shut the guest down, then pins the disk and authors the app against it.
+WIN_ISO     ?=
+WIN_APP     ?= zinc-demo-win
+WIN_DISK    ?= $(IMAGE_DIR)/$(WIN_APP).qcow2
+WIN_SIZE    ?= 64
+WIN_MEMORY  ?= 8192
+WIN_VCPUS   ?= 4
+VIRTIO_WIN  := $(IMAGE_DIR)/virtio-win.iso
+VIRTIO_URL  := https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+
+windows-demo: build
+	@test -n "$(WIN_ISO)" || { \
+		echo "WIN_ISO is required - the Windows ISO is Microsoft's and cannot be fetched for you."; \
+		echo "Get one from https://www.microsoft.com/software-download/windows11 then:"; \
+		echo "  make -C virtualization/runner windows-demo WIN_ISO=~/Downloads/Win11.iso"; \
+		exit 1; }
+	@test -f "$(WIN_ISO)" || { echo "no such file: $(WIN_ISO)"; exit 1; }
+	@test -x "$(ZC)" || $(MAKE) -C ../../creator build
+	@mkdir -p "$(IMAGE_DIR)"
+	@if [ ! -f "$(VIRTIO_WIN)" ]; then \
+		echo "fetching the virtio-win driver ISO (~700 MB, once). It resumes if interrupted,"; \
+		echo "and is what lets the installed guest be switched to fast virtio disk and network."; \
+		curl -fSL -C - --progress-bar -o "$(VIRTIO_WIN).part" "$(VIRTIO_URL)"; \
+		mv "$(VIRTIO_WIN).part" "$(VIRTIO_WIN)"; \
+	fi
+	@echo
+	@echo "Starting Windows Setup in a qemu window: UEFI + Secure Boot + TPM 2.0,"
+	@echo "$(WIN_MEMORY) MiB, $(WIN_VCPUS) vCPU, a $(WIN_SIZE) GiB disk."
+	@echo "Install as usual, then shut the guest down from inside Windows."
+	@echo
+	./bin/zvr install --disk "$(WIN_DISK)" --size $(WIN_SIZE) \
+		--media "$(WIN_ISO)" --media "$(VIRTIO_WIN)" \
+		--firmware UEFI --secure-boot --tpm \
+		--memory $(WIN_MEMORY) --vcpus $(WIN_VCPUS)
+	@echo "=== authoring $(WIN_APP) against the installed disk ==="
+	@$(ZC) delete $(WIN_APP) >/dev/null 2>&1 || true
+	@digest="$$(./bin/zvr pin "$(WIN_DISK)")"; \
+	$(ZC) new $(WIN_APP) --vm \
+		--image "$(WIN_DISK)" --base-digest "$$digest" \
+		--memory $(WIN_MEMORY) --vcpus $(WIN_VCPUS) \
+		--display Compatible --devices Compatible \
+		--firmware UEFI --secure-boot --tpm \
+		--desc "Windows guest installed by windows-demo"
+	@echo
+	@echo "Done. The installed disk is now this app's pinned base, so:"
+	@echo "  ./bin/zvr run $(WIN_APP)      boot it (writes to its own overlay)"
+	@echo "  ./bin/zvr reset $(WIN_APP)    throw the overlay away, back to freshly installed"
+	@echo
+	@echo "No 3D acceleration: Windows has no virtio-gpu driver and passthrough needs a"
+	@echo "second GPU, so this is for software that must run on Windows, not for games."
+
 ## virgl-venus: build the venus-capable virglrenderer that guest Vulkan needs
 # Distributions ship virglrenderer built WITHOUT venus (Fedora 43's has no venus symbols at
 # all), so an app with Vulkan: true needs one built here. It installs into the user's own
@@ -143,4 +201,4 @@ demo-gpu-check:
 	@echo "A Fedora Cloud image has no desktop of its own, which is why the window shows"
 	@echo "only a text console until you start one."
 
-.PHONY: demo demo-status demo-stop demo-reset demo-gpu-check virgl-venus
+.PHONY: demo demo-status demo-stop demo-reset demo-gpu-check virgl-venus windows-demo
