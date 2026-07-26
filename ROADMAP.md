@@ -98,26 +98,38 @@ rather than a CI one - GitHub's runners have no `/dev/kvm`), and `make -C
 virtualization/runner demo`, which fetches a Fedora Cloud image, verifies it against
 Fedora's own published digest and boots it.
 
-**What 0.4 does NOT deliver, decided deliberately: a guest's GPU.** The display path works -
-a Fedora guest running Weston draws into the qemu window through virtio-gpu, on a host with
-the proprietary NVIDIA driver. But guest Vulkan measures as `llvmpipe`, which is the CPU,
-and OpenGL acceleration has not been confirmed by measurement either. 0.4 therefore ships as
-an OpenGL-class VM runner where 3D may be software; real GPU access is 0.5 (below).
+**GPU status, measured rather than assumed.** Guest **OpenGL is hardware-accelerated**: a
+Fedora guest reports `virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)` at GL 4.2 core, so guest GL
+really is running on the host GPU. Guest **Vulkan is not** - it measures as `llvmpipe`, the
+CPU. 0.4 therefore ships as a genuinely OpenGL-accelerated VM runner with software Vulkan;
+closing the Vulkan gap is 0.5 (below).
 
 ## 0.5 - Guest GPU access - planned
 
 Make a guest's 3D actually reach the GPU, which is what turns a VM app from an isolation
 tool into somewhere a real workload can run.
 
-- **Vulkan through venus.** qemu's `venus=on` carries guest Vulkan to the host GPU, and it
-  is the half that matters for games: Proton, DXVK and vkd3d are all Vulkan. It needs a host
-  `virglrenderer` built with `-Dvenus=true`; Fedora 43's is not, and enabling venus without
-  it fails the renderer outright and leaves the guest with no display at all. So this needs
-  a venus-capable host to verify against, and then becomes opt-in per app rather than a
-  default that breaks stock distros.
-- **Confirm OpenGL.** Read the renderer from inside a guest session and establish whether
-  virgl is genuinely accelerating, rather than assuming it from the fact that a compositor
-  drew something.
+- **Vulkan through venus** - the whole of 0.5, and the half that matters for games, since
+  Proton, DXVK and vkd3d are all Vulkan.
+
+  Investigated on 2026-07-26, and further than it first looked. Fedora 43's virglrenderer
+  1.2.0 has no venus support, so `venus=on` fails; building virglrenderer 1.2.0 with
+  `-Dvenus=true` into a private prefix and pointing qemu at it with `LD_LIBRARY_PATH` gets
+  the library loaded (confirmed in `/proc/<pid>/maps`) but venus **still** fails to
+  initialize. The failure is in `proxy_renderer_init`: venus does not run in qemu's process
+  at all, it runs in a separate `virgl_render_server` process that the library forks and
+  execs (overridable with `RENDER_SERVER_EXEC_PATH`). The exec is not the problem - no exec
+  error is logged and the server binary runs standalone - so the handshake between the two
+  is where it stops.
+
+  The most likely root cause to check next: venus requires the host Vulkan driver to export
+  dma-buf (`vkr_physical_device.c` probes `is_dma_buf_fd_export_supported`), and NVIDIA's
+  proprietary driver has long been weak there. If that is it, venus may be unreachable on
+  this hardware regardless of build flags, and the honest answer becomes "OpenGL guests
+  here, Vulkan needs different hardware or a Mesa-driven GPU".
+
+  Whatever the outcome, venus becomes opt-in per app rather than a default: enabling it
+  where the host cannot support it costs the guest its display entirely.
 - **A measurement target**, so the answer is a number rather than an impression, and a
   regression is visible.
 

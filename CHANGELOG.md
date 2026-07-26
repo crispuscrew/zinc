@@ -70,17 +70,16 @@ is 0.5 work, and the limits below say exactly where that line falls.
   explicit port forwards, each bound to 127.0.0.1. `NetworkMeta` on a VM app is an error.
 - **No host directory sharing** into a guest (that needs virtiofs), no snapshots, x86_64
   guests only, and `zvr console` prints the console socket rather than attaching to it.
-- The accelerated display path is **confirmed to display**: a Fedora guest running Weston
-  draws into the qemu window through virtio-gpu, on a host with the proprietary NVIDIA
-  driver.
-- **Guest Vulkan is not accelerated.** It falls back to llvmpipe, which is the CPU, so
-  anything using Proton, DXVK or vkd3d renders in software. Fixing it needs qemu's
-  `venus=on`, which in turn needs a host `virglrenderer` built with venus support - Fedora
-  43's is not, and enabling venus without it fails the whole renderer and leaves the guest
-  with no display at all rather than degrading to OpenGL. Verified by measurement, both
-  ways.
-- The **OpenGL** renderer string has not yet been read from inside a guest session, so
-  virgl acceleration is expected but not yet confirmed by measurement.
+- **OpenGL is hardware-accelerated, confirmed by measurement.** A Fedora guest reports
+  `OpenGL core profile renderer: virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)`, GL 4.2 core -
+  the guest's GL is running on the host GPU, not in software.
+- **Guest Vulkan is NOT accelerated.** It falls back to llvmpipe, which is the CPU, so
+  anything using Proton, DXVK or vkd3d renders in software. Vulkan needs qemu's `venus=on`,
+  which needs a host `virglrenderer` built with venus support; Fedora 43's is not, and
+  enabling venus without one fails the whole renderer and leaves the guest with no display
+  at all rather than degrading to OpenGL. Building a venus-capable virglrenderer is not by
+  itself sufficient either: venus runs in a separate render-server process, and its
+  handshake still fails on this host. Tracked for 0.5.
 
 ## [0.3.1] - 2026-07-25
 
