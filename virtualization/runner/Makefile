@@ -129,7 +129,9 @@ windows-demo: build
 	@echo
 	@echo "Starting Windows Setup in a qemu window: UEFI + Secure Boot + TPM 2.0,"
 	@echo "$(WIN_MEMORY) MiB, $(WIN_VCPUS) vCPU, a $(WIN_SIZE) GiB disk."
-	@echo "Install as usual, then shut the guest down from inside Windows."
+	@echo "Press a key at \"Press any key to boot from CD\" to start Setup. Windows reboots"
+	@echo "itself partway through - that reboot goes to the disk on its own, so leave it be."
+	@echo "When the install finishes, shut the guest down from inside Windows."
 	@echo
 	./bin/zvr install --disk "$(WIN_DISK)" --size $(WIN_SIZE) \
 		--media "$(WIN_ISO)" $$(test -z "$(SKIP_DRIVERS)" && $(MAKE) --no-print-directory check-virtio-win >/dev/null 2>&1 && echo --media "$(VIRTIO_WIN)") \

@@ -440,8 +440,14 @@ func TestArgs_InstallMediaOnlyWhenInstalling(t *testing.T) {
 	if cdroms != 2 {
 		t.Errorf("got %d cdroms, want both install ISOs", cdroms)
 	}
-	if got := pairs(installing, "-boot"); len(got) != 1 || !strings.Contains(got[0], "order=d") {
-		t.Errorf("-boot = %v, want the installer disc first", got)
+	// once=, not order=: an installer reboots itself partway through, and a permanently
+	// disc-first order lands that reboot back in the installer.
+	got := pairs(installing, "-boot")
+	if len(got) != 1 || !strings.Contains(got[0], "once=d") {
+		t.Errorf("-boot = %v, want a one-shot disc boot", got)
+	}
+	if strings.Contains(got[0], "order=d") {
+		t.Errorf("-boot = %v, a permanent disc-first order restarts the installer on its own reboot", got)
 	}
 }
 

@@ -72,8 +72,12 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 	args = append(args, diskArgs(layout, virt.Devices)...)
 	if layout.Installing {
 		args = append(args, mediaArgs(virt.InstallMedia)...)
-		// Boot the installer rather than the empty disk it is about to write to.
-		args = append(args, "-boot", "order=d,menu=on")
+		// once=d, not order=d: the installer boots from the disc, and every reboot after
+		// that goes to the disk. An installer reboots itself partway through, and with the
+		// disc permanently first that reboot lands back at "press any key to boot from CD"
+		// - press one and the install starts over from the beginning. A one-shot order
+		// takes that trap away instead of documenting it.
+		args = append(args, "-boot", "once=d,menu=on")
 	}
 	args = append(args, netArgs(virt.ForwardPorts, virt.Devices)...)
 	args = append(args, displayArgs(virt.Display, virt.Vulkan, virt.Devices)...)
