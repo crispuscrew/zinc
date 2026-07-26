@@ -1,4 +1,4 @@
-# Generic reproducible, hermetic build for any Zinc tool (zcc / zcr / ...).
+# Generic reproducible, hermetic build for any Zinc tool (zc / zcr / ...).
 #
 # Goal: the produced binary must not depend on the host's Go version or environment -
 # same inputs give the same bytes, on any machine (the "Stable" promise). Every input is

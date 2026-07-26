@@ -1,4 +1,4 @@
-# End-to-end tests. They drive the built zcc + zcr binaries against rootless podman, so
+# End-to-end tests. They drive the built zc + zcr binaries against rootless podman, so
 # unlike the per-tool `make check` they run on the HOST (the harness orchestrates real
 # containers via the host's podman) and need a host `go` toolchain. Guarded by the `e2e`
 # build tag, so an ordinary `go test` compiles nothing here. GOWORK=off because the dev

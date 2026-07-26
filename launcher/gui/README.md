@@ -19,7 +19,7 @@ To try it without installing anything or touching your real config:
 make -C launcher/gui demo    # builds zlg, opens it over the bundled demo apps
 ```
 
-Like `zcc` and `zlt`, `zlg` **never imports the runtime**: it lists what `zcc` authored and
+Like `zc` and `zlt`, `zlg` **never imports the runtime**: it lists what `zc` authored and
 shells out to the `zcr` binary to run the chosen app, so dependency auto-start, the network
 lock-down, and derived-image builds all stay `zcr`'s job.
 
@@ -76,7 +76,7 @@ make repro        # prove the build is byte-identical
 
 - The keymap is US-QWERTY; full keyboard-layout (xkb) support is future work (the keymap
   lives in `menu`).
-- It lists and launches; managing an app (stop, logs, edit) stays in `zcc`.
+- It lists and launches; managing an app (stop, logs, edit) stays in `zc`.
 - A launch cannot be **cancelled**. `zcr run` no longer blocks the overlay (it runs off the
   event loop, with a `launching <app>...` banner while it works), and Esc dismisses the window
   immediately, but the launch itself carries on to completion in the background - so an app

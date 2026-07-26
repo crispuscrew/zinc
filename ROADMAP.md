@@ -12,7 +12,7 @@ Legend: done, in progress, planned.
 
 ---
 
-## 0.1 - Containers (zcc + zcr) - done
+## 0.1 - Containers (zc + zcr) - done
 
 The two container tools reach MVP.
 
@@ -24,7 +24,7 @@ Delivered:
 - **zcr**: real rootless-container lifecycle (`run`/`stop`/`restart`/`inspect`/`logs`/
   `ps`), derived images (`FROM image` + the install layer), multiterminal apps, and a
   `--version` stamped from git.
-- **zcc**: a keyboard-first Bubbletea TUI plus a scriptable CLI; it authors app files and
+- **zc**: a keyboard-first Bubbletea TUI plus a scriptable CLI; it authors app files and
   shells out to `zcr` to run them.
 - **Network lock-down**, applied in the app's own netns by an nftables init step before the
   app starts, with no unfiltered window: isolated (localhost only), egress whitelist,
@@ -35,15 +35,15 @@ Known gaps (honest, tracked): the network model still rejects (does not run) hos
 egress, gateway / multi-homing, and combining a sibling link with other networking on one
 app; bundle-relative config mounts are deferred. Test coverage is partial away from the
 security path. (At 0.1 `launcher/` and `virtualization/creator/` did not compile either - they
-still referenced the removed `core` module. `launcher/` was rebuilt in 0.2 and 0.3;
-`virtualization/creator/` is still a skeleton, excluded from the build and CI until 0.4.)
+still referenced the removed `core` module. `launcher/` was rebuilt in 0.2 and 0.3; the
+virtualization skeleton was deleted in 0.4, when `zc` took over authoring both app types.)
 
 ## 0.2 - Launcher TUI (zlt) - done
 
 A fast, keyboard-driven picker (TUI) over the defined apps: fuzzy filter as you type,
 enter launches the selected app through `zcr` (which handles dependency auto-start), a
 running indicator from `zcr ps`, and a `zlt <app>` direct-launch form for a desktop
-hotkey. Like `zcc` it depends only on `common` and shells out to the `zcr` binary, so it
+hotkey. Like `zc` it depends only on `common` and shells out to the `zcr` binary, so it
 never imports the runtime. Lives at `launcher/tui`, leaving `launcher/gui` for `zlg`.
 
 ## 0.3 - Launcher GUI (zlg) - done
@@ -72,10 +72,57 @@ launch cannot be cancelled once started (Esc dismisses the overlay, the launch c
 grid thumbnails are decoded without prioritisation, so fast scrolling queues visible tiles
 behind ones already scrolled past.
 
-## 0.4 - Virtualization (zvc + zvr) - planned
+## 0.4 - Virtualization (zvr) - done
 
-VM apps as the container tools' sibling: a creator and a runner over rootless
-libvirt/qemu, sharing the same config library and format.
+VM apps as the container tools' sibling, sharing the same config library and format: one
+store holds both kinds, split by `Type`, and each runner refuses the other's apps by name.
+
+Delivered:
+- **zvr** at `virtualization/runner`: boots VM apps as qemu guests. Copy-on-write overlays
+  over a digest-pinned base (`zvr reset` returns an app to its authored image), a cloud-init
+  seed for first-boot identity, supervision by pidfile and QMP, and a graceful stop that
+  presses the guest's ACPI power button rather than killing it mid-write.
+- **Schema**: `Type: ZincVirtualization` plus a `VirtualizationMeta` group. The two kinds
+  reject each other's fields rather than ignoring them.
+- **zcc renamed to zc** (`zinc-creator`), moved to `creator/`, and taught to author both
+  kinds. There is no separate `zvc`; the old `virtualization/creator` skeleton was deleted.
+
+Deliberate departure from the original plan: **qemu is driven directly, not through
+libvirt.** libvirtd spawns the qemu process outside the user's session, so it cannot open an
+accelerated window on their compositor, and SPICE-plus-viewer adds a hop that defeats the
+point for anything interactive. The cost, accepted knowingly, is that zvr owns supervision
+and has no snapshots or managed save. See the architecture doc, Virtualization.
+
+Also delivered: an end-to-end suite against real qemu (`virtualization/e2e`, a local gate
+rather than a CI one - GitHub's runners have no `/dev/kvm`), and `make -C
+virtualization/runner demo`, which fetches a Fedora Cloud image, verifies it against
+Fedora's own published digest and boots it.
+
+**What 0.4 does NOT deliver, decided deliberately: a guest's GPU.** The display path works -
+a Fedora guest running Weston draws into the qemu window through virtio-gpu, on a host with
+the proprietary NVIDIA driver. But guest Vulkan measures as `llvmpipe`, which is the CPU,
+and OpenGL acceleration has not been confirmed by measurement either. 0.4 therefore ships as
+an OpenGL-class VM runner where 3D may be software; real GPU access is 0.5 (below).
+
+## 0.5 - Guest GPU access - planned
+
+Make a guest's 3D actually reach the GPU, which is what turns a VM app from an isolation
+tool into somewhere a real workload can run.
+
+- **Vulkan through venus.** qemu's `venus=on` carries guest Vulkan to the host GPU, and it
+  is the half that matters for games: Proton, DXVK and vkd3d are all Vulkan. It needs a host
+  `virglrenderer` built with `-Dvenus=true`; Fedora 43's is not, and enabling venus without
+  it fails the renderer outright and leaves the guest with no display at all. So this needs
+  a venus-capable host to verify against, and then becomes opt-in per app rather than a
+  default that breaks stock distros.
+- **Confirm OpenGL.** Read the renderer from inside a guest session and establish whether
+  virgl is genuinely accelerating, rather than assuming it from the fact that a compositor
+  drew something.
+- **A measurement target**, so the answer is a number rather than an impression, and a
+  regression is visible.
+
+Honest boundary on this hardware: full GPU passthrough is not an option here at all. A
+single RTX 5080 with no integrated GPU means passing it through blinds the host.
 
 **ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project in
 its own repository, layered on these tools; its milestones are tracked there, not in this

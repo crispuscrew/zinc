@@ -1,10 +1,10 @@
 // Package store reads app definitions from the shared config directory
-// (~/.config/zinc/apps) - the same <name>.yaml files zcc writes and zcr runs. The
+// (~/.config/zinc/apps) - the same <name>.yaml files zc writes and zcr runs. The
 // launcher only ever reads: it lists the defined apps and loads them for display, then
 // hands the chosen app to zcr to run. There is no write side here.
 //
 // It decodes the exact same layout as the other tools (the shared schema in common plus
-// a KnownFields YAML codec), so a file zcc wrote is one zlt lists verbatim.
+// a KnownFields YAML codec), so a file zc wrote is one zlt lists verbatim.
 package store
 
 import (
@@ -25,7 +25,7 @@ import (
 )
 
 // keyRE is the app-name charset the schema enforces (lowercase [a-z0-9._-], starting
-// alphanumeric). A file zcc wrote always matches it. List skips anything that does not,
+// alphanumeric). A file zc wrote always matches it. List skips anything that does not,
 // so a hand-dropped or shared file with a flag-like name (e.g. "--net=host.yaml") never
 // becomes a picker entry that could be launched as a zcr flag rather than an app.
 var keyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)

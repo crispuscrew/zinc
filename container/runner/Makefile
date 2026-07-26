@@ -1,6 +1,6 @@
 # zcr - Zinc's container runtime: it runs an app file via podman, applying the egress
 # lock-down before the app starts (docs/architecture.md section 5.3, section 9.1). The build logic is
-# shared with zcc via ../../tool.mk. Run from this directory: `make <target>`.
+# shared with zc via ../../tool.mk. Run from this directory: `make <target>`.
 
 TOOL := zcr
 

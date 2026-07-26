@@ -1,6 +1,6 @@
 // Package runner shells out to the `zcr` binary - Zinc's container runtime - so the
 // launcher (zlt) can run the apps it lists without importing the runner. This is the
-// same split zcc uses: zlt picks an app file, zcr reads that same file and runs it;
+// same split zc uses: zlt picks an app file, zcr reads that same file and runs it;
 // they meet only at the on-disk format and this process boundary.
 //
 // zcr is expected on $PATH (installed alongside zlt). If it is missing, launching fails

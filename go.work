@@ -8,7 +8,8 @@ go 1.24.2
 use (
 	./common
 	./container/runner
-	./container/creator
+	./creator
 	./launcher/common
 	./launcher/tui
+	./virtualization/runner
 )

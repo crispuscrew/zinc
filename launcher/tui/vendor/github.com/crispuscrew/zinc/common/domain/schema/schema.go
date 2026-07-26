@@ -6,8 +6,8 @@ const SchemaVersion = 2
 type Type string
 
 const (
-	ZincContainer Type = "ZincContainer"
-	//ZincVirtualization	Type	= "ZincVirtualization"
+	ZincContainer      Type = "ZincContainer"
+	ZincVirtualization Type = "ZincVirtualization"
 )
 
 // AppConfig is one app definition: ~/.config/zinc/apps/<name>.yaml
@@ -30,6 +30,11 @@ type AppConfig struct {
 	DisplayMeta      DisplayMeta      `yaml:"DisplayMeta"`
 	NetworkMeta      NetworkMeta      `yaml:"NetworkMeta"`
 	NotificationMeta NotificationMeta `yaml:"NotificationMeta"`
+
+	// VirtualizationMeta applies only to Type: ZincVirtualization. A container app must
+	// leave it at its zero value; validation rejects it rather than ignoring it, so a
+	// field can never look configured while doing nothing.
+	VirtualizationMeta VirtualizationMeta `yaml:"VirtualizationMeta"`
 
 	Configs      []Volume  `yaml:"Configs"` // Use host local path from app_name/configs/ folder
 	Volumes      []Volume  `yaml:"Volumes"` // extra host bind mounts can also be added for one run via `zcr run -v` (not persisted here)
@@ -69,8 +74,89 @@ type InternalUserMeta struct {
 }
 
 type ImageMeta struct {
-	Image   string   `yaml:"Image"`   // iso or container path
-	Install []string `yaml:"Install"` // RUN and etc commands in build
+	// Image is where the app comes from, read according to Type: a container reference for
+	// ZincContainer (digest-pinned unless localhost/), or the path of a base disk image for
+	// ZincVirtualization (pinned by VirtualizationMeta.BaseDigest, since a file's hash
+	// cannot ride inside its path).
+	Image string `yaml:"Image"`
+	// Install is the app's setup steps, one per entry. For a container they become the
+	// single RUN layer of the derived image; for a VM they become cloud-init runcmd lines
+	// on first boot. Same intent either way: what to add on top of the pinned base.
+	Install []string `yaml:"Install"`
+}
+
+// VirtualizationMeta configures a VM app: the guest's hardware, how you see it, and the
+// first-boot identity handed to it. The base disk named by ImageMeta.Image is never
+// written to - each app gets its own copy-on-write overlay - so deleting the overlay
+// resets the app to the authored base, which is the VM analogue of a fresh container.
+type VirtualizationMeta struct {
+	// BaseDigest is the sha256 the base disk image must hash to, as "sha256:<64 hex>". A
+	// VM base is a file rather than a registry reference, so the pin cannot ride inside
+	// the reference the way a container digest does - but the rule is the same one: what
+	// runs must be what was authorised.
+	BaseDigest string `yaml:"BaseDigest"`
+
+	DiskSizeGiB int64 `yaml:"DiskSizeGiB"` // virtual size of the app's overlay; 0 keeps the base image's size
+	MemoryMiB   int64 `yaml:"MemoryMiB"`   // guest RAM, allocated not capped
+	VCPUs       int   `yaml:"VCPUs"`       // guest CPUs
+
+	Display VMDisplay `yaml:"Display"`
+
+	// ForwardPorts publishes a guest port on the host over user-mode networking. VM apps
+	// do not use NetworkMeta: that model is enforced by nftables inside a container's own
+	// network namespace and does not carry over to a guest, so rather than mis-enforce it
+	// a VM app is limited to these explicit forwards.
+	ForwardPorts []PortForward `yaml:"ForwardPorts"`
+
+	CloudInit CloudInit `yaml:"CloudInit"`
+}
+
+// IsZero reports whether nothing in the VM group was set. Validation uses it to catch VM
+// fields left on a container app, where they would be inert.
+func (virt VirtualizationMeta) IsZero() bool {
+	return virt.BaseDigest == "" &&
+		virt.DiskSizeGiB == 0 && virt.MemoryMiB == 0 && virt.VCPUs == 0 &&
+		virt.Display == "" &&
+		len(virt.ForwardPorts) == 0 &&
+		virt.CloudInit == CloudInit{}
+}
+
+// VMDisplay is how a VM app is seen. It is explicit rather than inferred: whether a guest
+// gets an accelerated window is exactly the difference between a usable game and an
+// unusable one, so it is not something to guess from other fields.
+type VMDisplay string
+
+const (
+	// VMDisplayNone runs headless - no window, reachable over the serial console. The only
+	// mode that works without a display, so it is what a test or a server-ish guest uses.
+	VMDisplayNone VMDisplay = "None"
+	// VMDisplayWindow opens a local window with no 3D acceleration. The fallback when a
+	// guest or host lacks working virtio-gpu.
+	VMDisplayWindow VMDisplay = "Window"
+	// VMDisplayAccelerated opens a local window backed by virtio-gpu-gl, so guest 3D runs
+	// on the host GPU and frames reach the compositor without leaving the machine. Needs a
+	// guest with the virtio-gpu driver (Linux).
+	VMDisplayAccelerated VMDisplay = "Accelerated"
+)
+
+// PortForward publishes GuestPort inside the VM as HostPort on the host.
+type PortForward struct {
+	HostPort  int `yaml:"HostPort"`
+	GuestPort int `yaml:"GuestPort"`
+}
+
+// CloudInit is the first-boot identity written to a seed ISO and handed to the guest, so
+// a freshly created VM is reachable without an interactive install.
+type CloudInit struct {
+	// Disabled skips the seed ISO entirely, for a base image that provisions itself or
+	// one already configured.
+	Disabled bool `yaml:"Disabled"`
+
+	UserName string `yaml:"UserName"` // the account created in the guest; empty = the image's default
+	// SSHKeyPath is a host path to a PUBLIC key authorised for UserName. Public, never
+	// private: the seed ISO is readable by the guest, so a private key put here would be
+	// handed to it.
+	SSHKeyPath string `yaml:"SSHKeyPath"`
 }
 
 type DisplayMeta struct {

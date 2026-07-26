@@ -1,9 +1,8 @@
 # Zinc
 
 **Zinc** is a keyboard-first, security-focused **sandboxing core**. It runs user-facing
-apps in rootless Podman containers (primary runtime) or libvirt/qemu VMs (heavy
-isolation), each walled off from the rest of the desktop through the Wayland
-security-context protocol. Zinc is compositor-agnostic and installs cleanly on any
+apps in rootless Podman containers (primary runtime) or qemu VMs (heavy isolation), each
+walled off from the rest of the desktop through the Wayland security-context protocol. Zinc is compositor-agnostic and installs cleanly on any
 existing system.
 
 **ZDE** (Zinc Desktop Environment, `zde`) is a separate project built on Zinc - the full
@@ -18,16 +17,15 @@ home-manager flake, and developed in its own repository.
 
 ## Components
 
-Every tool is `zinc-<kind>-<role>`: `<kind>` is `container` or `virtualization`, `<role>`
-is `creator` or `runner`, plus the `zinc-launcher-<ui>` picker. The short code is the
-initials.
+Every runner is `zinc-<kind>-runner`, where `<kind>` is `container` or `virtualization`,
+plus the `zinc-launcher-<ui>` picker. One creator authors both app kinds, so it carries no
+kind at all. The short code is the initials.
 
 | Short | Tool                          | Role                                  | Status  |
 |-------|-------------------------------|---------------------------------------|---------|
-| `zcc` | `zinc-container-creator`      | define container apps (write configs) | 0.1     |
+| `zc`  | `zinc-creator`               | define apps, container or VM          | 0.1     |
 | `zcr` | `zinc-container-runner`       | launch + supervise a container app    | 0.1     |
-| `zvc` | `zinc-virtualization-creator` | define VM apps                        | planned |
-| `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app           | planned |
+| `zvr` | `zinc-virtualization-runner`  | launch + supervise a VM app           | 0.4     |
 | `zlg` | `zinc-launcher-gui`           | fast app launcher (GUI)               | 0.3     |
 | `zlt` | `zinc-launcher-tui`           | fast app launcher (TUI)               | 0.2     |
 
@@ -36,7 +34,7 @@ and owns its lifecycle; **launchers** are quick pickers over the defined apps. T
 one library, [`common/`](common) (the app schema + validation), so container and VM apps
 use the same config format.
 
-The creator carries no runtime: `zcc` authors app files and shells out to the `zcr` binary
+The creator carries no runtime: `zc` authors app files and shells out to the `zcr` binary
 to run them, so the two meet only at the on-disk YAML format and never share code.
 
 Layout: `common/`, `container/{creator,runner}`, `container/e2e` (end-to-end tests),
@@ -57,8 +55,12 @@ before it starts:
 - sibling link: a private internal bridge between two apps, gated per-port
 
 Not yet supported (rejected, not run): host-scoped egress, gateway / multi-homing, and
-combining a sibling link with other networking on one app. The launcher and virtualization
-tools are on the roadmap.
+combining a sibling link with other networking on one app.
+
+This is the container network model. A **VM app** does not get it - nftables in a container's
+own network namespace does not reach a guest kernel - so rather than mis-enforce it, a guest
+runs on user-mode networking with explicit port forwards bound to loopback, and
+`NetworkMeta` on a VM app is a validation error.
 
 ## Install
 
@@ -66,16 +68,16 @@ Podman-only, reproducible builds. Build the binaries and put them on your `$PATH
 
 ```sh
 make -C container/runner build     # produces container/runner/bin/zcr
-make -C container/creator build    # produces container/creator/bin/zcc
+make -C creator build    # produces creator/bin/zc
 make -C launcher/tui build         # produces launcher/tui/bin/zlt  (0.2)
 make -C launcher/gui build         # produces launcher/gui/bin/zlg  (0.3)
 install -Dm755 container/runner/bin/zcr  ~/.local/bin/zcr
-install -Dm755 container/creator/bin/zcc ~/.local/bin/zcc
+install -Dm755 creator/bin/zc ~/.local/bin/zc
 install -Dm755 launcher/tui/bin/zlt      ~/.local/bin/zlt
 install -Dm755 launcher/gui/bin/zlg      ~/.local/bin/zlg
 ```
 
-`zcc` needs `zcr` on `$PATH` to run apps (authoring works without it). To run
+`zc` needs `zcr` on `$PATH` to run apps (authoring works without it). To run
 egress-filtered apps, build the nft helper image once:
 
 ```sh
@@ -85,22 +87,22 @@ make -C container/runner netfilter-image
 ## Usage
 
 ```sh
-# author with zcc: a bare name resolves against ~/.config/zinc/apps; a path is read directly
-zcc new firefox --image docker.io/library/firefox@sha256:...
-zcc list
-zcc validate firefox
-zcc tui                        # keyboard-first manager: create / edit / run / stop / logs
+# author with zc: a bare name resolves against ~/.config/zinc/apps; a path is read directly
+zc new firefox --image docker.io/library/firefox@sha256:...
+zc list
+zc validate firefox
+zc tui                        # keyboard-first manager: create / edit / run / stop / logs
 
 # find and pin an image (third-party images must be digest-pinned)
-zcc image search alpine
-zcc image resolve alpine:3.20  # gives docker.io/library/alpine@sha256:... to paste in
+zc image search alpine
+zc image resolve alpine:3.20  # gives docker.io/library/alpine@sha256:... to paste in
 
-# run: zcc forwards these to zcr. run without --exec prints the podman plan first
-zcc run firefox --exec
-zcc logs firefox -f
-zcc stop firefox
+# run: zc forwards these to zcr. run without --exec prints the podman plan first
+zc run firefox --exec
+zc logs firefox -f
+zc stop firefox
 
-zcc version
+zc version
 
 # launch with zlt (0.2): a keyboard-first fuzzy picker over your apps
 zlt                            # open the picker: type to filter, enter launches, esc quits
@@ -127,16 +129,16 @@ In the TUI (default scheme): `n` new, `e` edit, `r` run, `s` stop, `l` logs, `d`
 `esc` cancels; the **advanced** row opens the full YAML in `$EDITOR` (where capabilities,
 network lists, volumes, and keys live).
 
-TUI keys are zcc's own (not desktop hotkeys); they resolve through a selectable scheme
-(`default`, `vim`, or a custom one under `~/.config/zinc/zcc`). Pick one with
-`zcc keys set`, or press `?` for the live picker.
+TUI keys are zc's own (not desktop hotkeys); they resolve through a selectable scheme
+(`default`, `vim`, or a custom one under `~/.config/zinc/zc`). Pick one with
+`zc keys set`, or press `?` for the live picker.
 
 ## Develop
 
 The container runtime is a **hexagon** (ports and adapters) in
 [`container/runner`](container/runner): `domain/` (schema-derived types), `ports/`
 (interfaces), `app/` (launch orchestration), `adapters/` (podman, the `netenforce`
-enforcers, fs, host), and `wire/` (composition). `zcc` depends only on `common` and shells
+enforcers, fs, host), and `wire/` (composition). `zc` depends only on `common` and shells
 out to the `zcr` binary, so it never imports the runtime.
 
 Podman-only: there is no host Go for the tool builds. Every Go command (test, vet, fmt,
@@ -144,7 +146,7 @@ vendor, build) runs inside a digest-pinned `golang` container via `make`. Work f
 module:
 
 ```sh
-cd container/runner            # or container/creator, common
+cd container/runner            # or creator, common
 make check                     # gofmt + vet + test in the pinned container
 make build                     # reproducible build, produces ./bin/<tool>
 make repro                     # prove the build is byte-identical across runs

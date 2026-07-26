@@ -1,7 +1,7 @@
 // Command zlg is the Zinc launcher (GUI): a graphical picker over the defined apps
-// (~/.config/zinc/apps). It is the point-and-click sibling of zlt - it lists what zcc
+// (~/.config/zinc/apps). It is the point-and-click sibling of zlt - it lists what zc
 // authored, filters as you type, and shells out to the `zcr` binary to run the chosen app.
-// Like zcc and zlt it never imports the runtime; it and zcr meet only at the on-disk YAML
+// Like zc and zlt it never imports the runtime; it and zcr meet only at the on-disk YAML
 // format and the process boundary. Run it two ways:
 //
 //	zlg            open the picker window (type to filter, enter launches, esc quits)

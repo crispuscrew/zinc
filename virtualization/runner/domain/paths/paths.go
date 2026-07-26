@@ -1,0 +1,96 @@
+// Package paths decides where a VM app's files live. It is pure string work over a
+// resolved home and runtime directory, so the layout is unit-testable and every command
+// agrees on where to look: `zvr run` creates the overlay the same place `zvr reset`
+// deletes it and `zvr ps` probes for a pid.
+package paths
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/crispuscrew/zinc/virtualization/runner/domain/qemu"
+)
+
+// Paths is the three directories a VM app touches. State and images persist; run holds
+// only what is meaningful while a guest is alive, which is why it sits in the runtime
+// directory the session cleans up rather than in the user's data.
+type Paths struct {
+	StateDir string // per-app overlays and seed ISOs
+	ImageDir string // base disk images, shared by every app that pins one
+	RunDir   string // pidfiles and control sockets for running guests
+}
+
+// Default resolves the layout from the XDG environment.
+func Default() (Paths, error) {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return Paths{}, fmt.Errorf("resolve home directory: %w", err)
+		}
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	runDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runDir == "" {
+		// Falling back to a world-writable /tmp path would put a guest's control socket
+		// somewhere another user could reach it, and that socket is a power button.
+		return Paths{}, fmt.Errorf("XDG_RUNTIME_DIR is not set; zvr needs a private runtime directory for guest control sockets")
+	}
+	return Paths{
+		StateDir: filepath.Join(dataHome, "zinc", "vms"),
+		ImageDir: filepath.Join(dataHome, "zinc", "images"),
+		RunDir:   filepath.Join(runDir, "zinc", "vm"),
+	}, nil
+}
+
+// Overlay is the app's own copy-on-write disk: everything the guest writes lands here,
+// never in the pinned base, so deleting this file resets the app to its authored image.
+func (paths Paths) Overlay(app string) string {
+	return filepath.Join(paths.StateDir, app+".qcow2")
+}
+
+// Seed is the app's cloud-init seed ISO.
+func (paths Paths) Seed(app string) string {
+	return filepath.Join(paths.StateDir, app+"-seed.iso")
+}
+
+// Log is where a guest's qemu process writes its own diagnostics (not the guest's console,
+// which goes to the serial socket).
+func (paths Paths) Log(app string) string {
+	return filepath.Join(paths.StateDir, app+".log")
+}
+
+func (paths Paths) PIDFile(app string) string { return filepath.Join(paths.RunDir, app+".pid") }
+func (paths Paths) QMP(app string) string     { return filepath.Join(paths.RunDir, app+".qmp") }
+func (paths Paths) Serial(app string) string  { return filepath.Join(paths.RunDir, app+".serial") }
+
+// Layout gathers the paths qemu itself needs. seeded is false for an app whose cloud-init
+// is disabled, which leaves the seed drive off the command line entirely.
+func (paths Paths) Layout(app string, seeded bool) qemu.Layout {
+	layout := qemu.Layout{
+		Overlay: paths.Overlay(app),
+		PIDFile: paths.PIDFile(app),
+		QMP:     paths.QMP(app),
+		Serial:  paths.Serial(app),
+	}
+	if seeded {
+		layout.Seed = paths.Seed(app)
+	}
+	return layout
+}
+
+// EnsureDirs creates the directories a launch writes into. The runtime directory is
+// created 0700: it holds the QMP sockets, and reaching one of those is reaching the
+// guest's power button and its memory.
+func (paths Paths) EnsureDirs() error {
+	for _, dir := range []string{paths.StateDir, paths.ImageDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+	}
+	if err := os.MkdirAll(paths.RunDir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", paths.RunDir, err)
+	}
+	return nil
+}

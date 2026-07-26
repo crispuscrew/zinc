@@ -1,0 +1,117 @@
+# Zinc Virtualization Runner (zvr). Build logic is shared with the other tools via
+# ../../tool.mk. Run from this directory: `make <target>`.
+
+TOOL := zvr
+
+include ../../tool.mk
+
+## demo: download a Fedora Cloud image, author a VM app, and boot it with an accelerated window
+# The counterpart to the launchers' `demo` targets. Unlike those it needs a real guest OS, so
+# it downloads one once (~600 MB) into the shared image directory and pins it by the digest
+# Fedora publishes - if the file does not hash to that, the demo stops rather than booting
+# something unverified.
+FEDORA_IMAGE   := Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2
+FEDORA_URL     := https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/$(FEDORA_IMAGE)
+FEDORA_DIGEST  := sha256:846574c8a97cd2d8dc1f231062d73107cc85cbbbda56335e264a46e3a6c8ab2f
+
+IMAGE_DIR ?= $(HOME)/.local/share/zinc/images
+DEMO_APP  ?= zinc-demo-vm
+DEMO_PORT ?= 2222
+# A console password for the demo guest only. The window shows a login prompt and ssh keys
+# do not help there, so without one the qemu window - the whole point of the demo - cannot
+# be used. The guest is reachable on loopback only.
+DEMO_PASSWORD ?= zinc
+SSH_KEY   ?= $(firstword $(wildcard $(HOME)/.ssh/id_ed25519.pub $(HOME)/.ssh/id_rsa.pub))
+ZC        ?= ../../creator/bin/zc
+
+demo: build
+	@test -n "$(SSH_KEY)" || { echo "no ssh public key in ~/.ssh; make one with: ssh-keygen -t ed25519"; exit 1; }
+	@test -x "$(ZC)" || $(MAKE) -C ../../creator build
+	@mkdir -p "$(IMAGE_DIR)"
+	@if [ ! -f "$(IMAGE_DIR)/$(FEDORA_IMAGE)" ]; then \
+		echo "downloading $(FEDORA_IMAGE) (~600 MB, once)"; \
+		curl -fSL --progress-bar -o "$(IMAGE_DIR)/$(FEDORA_IMAGE).part" "$(FEDORA_URL)"; \
+		mv "$(IMAGE_DIR)/$(FEDORA_IMAGE).part" "$(IMAGE_DIR)/$(FEDORA_IMAGE)"; \
+	fi
+	@got="$$(./bin/zvr pin "$(IMAGE_DIR)/$(FEDORA_IMAGE)")"; \
+	if [ "$$got" != "$(FEDORA_DIGEST)" ]; then \
+		echo "the downloaded image does not match the digest Fedora published:"; \
+		echo "  published: $(FEDORA_DIGEST)"; echo "  on disk:   $$got"; exit 1; \
+	fi; \
+	echo "base image verified against Fedora's published digest"
+	@./bin/zvr stop $(DEMO_APP) --force >/dev/null 2>&1 || true
+	@$(ZC) delete $(DEMO_APP) >/dev/null 2>&1 || true
+	@# A fresh disk every time. cloud-init keys its "already provisioned" decision on the
+	@# instance id, so re-authoring alone would leave an existing guest un-reprovisioned and
+	@# the setup steps below would silently never run.
+	@./bin/zvr reset $(DEMO_APP) >/dev/null 2>&1 || true
+	@$(ZC) new $(DEMO_APP) --vm \
+		--image "$(IMAGE_DIR)/$(FEDORA_IMAGE)" \
+		--base-digest "$(FEDORA_DIGEST)" \
+		--memory 4096 --vcpus 4 --disk 20 \
+		--display Accelerated \
+		--ci-user zinc --ci-ssh-key "$(SSH_KEY)" \
+		--forward $(DEMO_PORT):22 \
+		--install 'dnf install -y -q mesa-demos glx-utils vulkan-tools mesa-vulkan-drivers glmark2 weston; echo zinc:$(DEMO_PASSWORD) | chpasswd' \
+		--desc "0.4 demo guest: accelerated display smoke test"
+	@./bin/zvr run $(DEMO_APP)
+	@echo
+	@echo "A qemu window should now be open on your compositor, showing the guest boot."
+	@echo "First boot installs the 3D test tools, so give it a minute or two."
+	@echo
+	@echo "Log in at that window as  zinc  /  $(DEMO_PASSWORD)  (demo only, and the guest is"
+	@echo "reachable on loopback only). Over ssh you need no password:"
+	@echo "  ssh -p $(DEMO_PORT) zinc@127.0.0.1"
+	@echo
+	@echo "Then check whether the display path is really accelerated:"
+	@echo "  make -C virtualization/runner demo-gpu-check"
+	@echo
+	@echo "All of these work from anywhere in the repo:"
+	@echo "  make -C virtualization/runner demo-status   is it running"
+	@echo "  make -C virtualization/runner demo-stop     shut it down (graceful, ACPI)"
+	@echo "  make -C virtualization/runner demo-reset    throw the disk away, back to the base"
+
+## demo-status: what the demo guest is doing
+demo-status: build
+	@./bin/zvr status $(DEMO_APP)
+
+## demo-stop: shut the demo guest down, gracefully
+demo-stop: build
+	@./bin/zvr stop $(DEMO_APP)
+
+## demo-reset: delete the demo guest's disk, returning it to the pinned base image
+demo-reset: build
+	@./bin/zvr reset $(DEMO_APP)
+
+## demo-gpu-check: ask the demo guest whether its 3D is really accelerated
+# glxinfo alone cannot answer this on a cloud image: it needs a display server the guest
+# does not run. These checks work headless - the driver binding, the render node, and the
+# Vulkan driver name, which says "venus" when the guest is really talking to the host GPU.
+demo-gpu-check:
+	@echo "== guest kernel driver =="
+	@ssh -p $(DEMO_PORT) -o StrictHostKeyChecking=no -o LogLevel=ERROR zinc@127.0.0.1 \
+		'lsmod | grep -E "^virtio_gpu" || echo "virtio_gpu NOT loaded"'
+	@echo "== render node =="
+	@ssh -p $(DEMO_PORT) -o StrictHostKeyChecking=no -o LogLevel=ERROR zinc@127.0.0.1 \
+		'ls -1 /dev/dri/ 2>/dev/null || echo "no /dev/dri - the guest sees no GPU"'
+	@echo "== vulkan driver (venus = talking to the host GPU) =="
+	@ssh -p $(DEMO_PORT) -o StrictHostKeyChecking=no -o LogLevel=ERROR zinc@127.0.0.1 \
+		'vulkaninfo --summary 2>/dev/null | grep -iE "driverName|deviceName|driverInfo" || echo "vulkaninfo unavailable"'
+	@echo "== opengl renderer via EGL, no display server needed =="
+	@ssh -p $(DEMO_PORT) -o StrictHostKeyChecking=no -o LogLevel=ERROR zinc@127.0.0.1 \
+		'eglinfo -B 2>/dev/null | grep -iE "renderer|device" || echo "eglinfo unavailable"'
+	@echo "== actually rendering frames (offscreen, so no desktop is needed) =="
+	@ssh -p $(DEMO_PORT) -o StrictHostKeyChecking=no -o LogLevel=ERROR zinc@127.0.0.1 \
+		'glmark2 --off-screen -b build 2>&1 | tail -8 || echo "glmark2 unavailable"'
+	@echo
+	@echo "virgl / virtio_gpu / venus mean the accelerated path is live."
+	@echo "llvmpipe or software rasterizer means the guest fell back to CPU rendering,"
+	@echo "and the glmark2 score will be an order of magnitude lower."
+	@echo
+	@echo "To SEE 3D rather than measure it, log in at the qemu window and run:"
+	@echo "  weston --backend=drm-backend.so     # a compositor, drawn through virtio-gpu"
+	@echo "then inside it open weston-terminal and run  glmark2  or  glxgears."
+	@echo "A Fedora Cloud image has no desktop of its own, which is why the window shows"
+	@echo "only a text console until you start one."
+
+.PHONY: demo demo-status demo-stop demo-reset demo-gpu-check

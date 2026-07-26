@@ -2,7 +2,7 @@
 
 `zcr` is the Zinc container runtime. It reads an app file
 (`~/.config/zinc/apps/<name>.yaml`) and runs it as a rootless podman container, applying
-the network lock-down before the app starts. It is the binary `zcc` (the creator) shells
+the network lock-down before the app starts. It is the binary `zc` (the creator) shells
 out to; you can also drive it directly.
 
 ## Commands

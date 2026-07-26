@@ -1,5 +1,5 @@
 // Package validate holds the hard schema rules and create-time advisories for an
-// app config: a pure sibling of schema (no I/O), used by zcc (save) and zcr (launch).
+// app config: a pure sibling of schema (no I/O), used by zc (save) and zcr (launch).
 package validate
 
 import (
