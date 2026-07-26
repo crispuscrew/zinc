@@ -100,28 +100,46 @@ windows-demo: build
 	@test -f "$(WIN_ISO)" || { echo "no such file: $(WIN_ISO)"; exit 1; }
 	@test -x "$(ZC)" || $(MAKE) -C ../../creator build
 	@mkdir -p "$(IMAGE_DIR)"
+	@# The driver ISO is OPTIONAL: Windows installs onto the AHCI disk that Devices:
+	@# Compatible provides and never reads it. It only matters for switching the installed
+	@# guest to virtio afterwards, so a slow or failed download must not block an install.
 	@if [ ! -f "$(VIRTIO_WIN)" ]; then \
-		echo "fetching the virtio-win driver ISO (~950 MB, once). It resumes if interrupted,"; \
-		echo "and is what lets the installed guest be switched to fast virtio disk and network."; \
+		echo "fetching the virtio-win driver ISO (~790 MB, once, resumable)."; \
+		echo "It is optional - Windows installs without it - and only needed later to switch"; \
+		echo "the guest to virtio disk and network."; \
 		curl -fSL -C - --progress-bar -o "$(VIRTIO_WIN).part" "$(VIRTIO_URL)" \
 			&& mv "$(VIRTIO_WIN).part" "$(VIRTIO_WIN)" \
-			|| { echo; \
-			     echo "the virtio-win download did not finish. The partial file is kept, so"; \
-			     echo "running this again resumes it rather than starting over."; \
-			     exit 1; }; \
+			|| echo "the driver ISO did not download; continuing without it (the partial file is kept)"; \
 	fi
-	@xorriso -indev "$(VIRTIO_WIN)" -toc >/dev/null 2>&1 || { \
-		echo "the virtio-win ISO is not readable as an image - a resumed transfer can append"; \
-		echo "rather than resume when a server mishandles ranges. Delete it and fetch again:"; \
+	@if [ -f "$(VIRTIO_WIN)" ] && ! $(MAKE) --no-print-directory check-virtio-win >/dev/null 2>&1; then \
+		echo "the driver ISO on disk is damaged; continuing without it. Remove it to re-fetch:"; \
 		echo "  rm $(VIRTIO_WIN)"; \
-		exit 1; }
+		rm -f "$(VIRTIO_WIN)"; \
+	fi
+
+## check-virtio-win: verify the driver ISO is readable and its drivers are intact
+# Readability alone is not enough. An interrupted-and-resumed transfer can corrupt the
+# middle of the file while leaving the ISO metadata perfectly readable, so this extracts
+# two drivers Windows would actually load and checks they are real Windows binaries.
+check-virtio-win:
+	@test -f "$(VIRTIO_WIN)" || { echo "no driver ISO at $(VIRTIO_WIN)"; exit 1; }
+	@xorriso -indev "$(VIRTIO_WIN)" -toc >/dev/null 2>&1 || { echo "not readable as an image"; exit 1; }
+	@tmp="$$(mktemp -d)"; trap 'chmod -R u+w "$$tmp" 2>/dev/null; rm -rf "$$tmp"' EXIT; \
+	for drv in /viostor/w11/amd64/viostor.sys /NetKVM/w11/amd64/netkvm.sys; do \
+		xorriso -osirrox on -indev "$(VIRTIO_WIN)" -extract "$$drv" "$$tmp/d.sys" >/dev/null 2>&1; \
+		test "$$(head -c 2 "$$tmp/d.sys" | xxd -p)" = "4d5a" || { \
+			echo "$$drv is not a Windows binary - the image is corrupt"; exit 1; }; \
+		chmod u+w "$$tmp/d.sys" 2>/dev/null; rm -f "$$tmp/d.sys"; \
+	done
+	@echo "driver ISO verified: readable, and its drivers are real Windows binaries"
+
 	@echo
 	@echo "Starting Windows Setup in a qemu window: UEFI + Secure Boot + TPM 2.0,"
 	@echo "$(WIN_MEMORY) MiB, $(WIN_VCPUS) vCPU, a $(WIN_SIZE) GiB disk."
 	@echo "Install as usual, then shut the guest down from inside Windows."
 	@echo
 	./bin/zvr install --disk "$(WIN_DISK)" --size $(WIN_SIZE) \
-		--media "$(WIN_ISO)" --media "$(VIRTIO_WIN)" \
+		--media "$(WIN_ISO)" $$(test -f "$(VIRTIO_WIN)" && echo --media "$(VIRTIO_WIN)") \
 		--firmware UEFI --secure-boot --tpm \
 		--memory $(WIN_MEMORY) --vcpus $(WIN_VCPUS)
 	@echo "=== authoring $(WIN_APP) against the installed disk ==="
@@ -210,4 +228,4 @@ demo-gpu-check:
 	@echo "A Fedora Cloud image has no desktop of its own, which is why the window shows"
 	@echo "only a text console until you start one."
 
-.PHONY: demo demo-status demo-stop demo-reset demo-gpu-check virgl-venus windows-demo
+.PHONY: demo demo-status demo-stop demo-reset demo-gpu-check virgl-venus windows-demo check-virtio-win

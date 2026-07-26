@@ -138,14 +138,19 @@ make repro        # prove the build is byte-identical
 Running guests needs `qemu-system-x86_64`, `qemu-img` and `xorriso` on the host, plus
 `/dev/kvm`.
 
-### If the driver ISO download fails
+### The driver ISO is optional
 
-It is a ~700 MB fetch and it does sometimes drop. The partial file is kept, so re-running
-the target resumes it. A download that does not complete now fails the target rather than
-letting a truncated file take the finished name - an earlier version of this promoted the
-fragment, which then looked complete to every later run.
+`windows-demo` fetches the virtio-win driver ISO (~790 MB), but **a Windows install does not
+need it**: Setup boots from the Windows media and installs onto the AHCI disk that
+`Devices: Compatible` provides. It only matters for switching the installed guest to virtio
+disk and network afterwards, which is a worthwhile speed win but can be done any time.
 
-A Windows install does not need that ISO: Setup boots from the Windows media and installs
-onto the AHCI disk that `Devices: Compatible` provides. The driver disc only matters if you
-want to switch the installed guest to virtio disk and network afterwards, which is worth
-doing for the speed but can be done any time.
+So a slow or failed download never blocks an install - the target says so and carries on
+with just the Windows media.
+
+`make check-virtio-win` verifies the one on disk, and it does more than check that the file
+opens. An interrupted-and-resumed transfer can corrupt the middle of the image while leaving
+its ISO metadata perfectly readable: the volume mounts, the directory listing looks right,
+and a driver inside is silently garbage. The check therefore extracts two drivers Windows
+would actually load and confirms they are real Windows binaries. `windows-demo` runs it
+automatically and drops a damaged image rather than attaching it.
