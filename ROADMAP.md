@@ -112,24 +112,38 @@ tool into somewhere a real workload can run.
 - **Vulkan through venus** - the whole of 0.5, and the half that matters for games, since
   Proton, DXVK and vkd3d are all Vulkan.
 
-  Investigated on 2026-07-26, and further than it first looked. Fedora 43's virglrenderer
-  1.2.0 has no venus support, so `venus=on` fails; building virglrenderer 1.2.0 with
-  `-Dvenus=true` into a private prefix and pointing qemu at it with `LD_LIBRARY_PATH` gets
-  the library loaded (confirmed in `/proc/<pid>/maps`) but venus **still** fails to
-  initialize. The failure is in `proxy_renderer_init`: venus does not run in qemu's process
-  at all, it runs in a separate `virgl_render_server` process that the library forks and
-  execs (overridable with `RENDER_SERVER_EXEC_PATH`). The exec is not the problem - no exec
-  error is logged and the server binary runs standalone - so the handshake between the two
-  is where it stops.
+  Investigated hard on 2026-07-26. Four separate blockers were found and cleared, one
+  remains, and the order matters because each was hiding the next:
 
-  The most likely root cause to check next: venus requires the host Vulkan driver to export
-  dma-buf (`vkr_physical_device.c` probes `is_dma_buf_fd_export_supported`), and NVIDIA's
-  proprietary driver has long been weak there. If that is it, venus may be unreachable on
-  this hardware regardless of build flags, and the honest answer becomes "OpenGL guests
-  here, Vulkan needs different hardware or a Mesa-driven GPU".
+  1. **Fedora's virglrenderer has no venus.** `nm -D /usr/lib64/libvirglrenderer.so.1 | grep
+     venus` returns nothing. Building 1.2.0 (and later 1.3.0) with `-Dvenus=true` into a
+     private prefix and pointing qemu at it with `LD_LIBRARY_PATH` fixes that; the library
+     really is loaded, confirmed in `/proc/<pid>/maps`.
+  2. **Venus does not run in qemu's process.** It runs in a forked `virgl_render_server`,
+     whose path is compiled in and overridable with `RENDER_SERVER_EXEC_PATH` - so a
+     venus-capable library still execs the distro's venus-less server unless told otherwise.
+  3. **qemu's own seccomp sandbox blocked the fork.** `-sandbox on,...,spawn=deny` exists to
+     forbid exactly that, and the only symptom was `proxy: failed to fork proxy server`
+     behind a generic "virgl could not be initialized". This is a real trade-off, not an
+     oversight to undo blindly: guest Vulkan costs the qemu process its spawn restriction,
+     so venus must be opt-in per app and say what it gives up.
+  4. **The NVIDIA driver was NOT the problem**, which was the leading theory and was wrong.
+     A direct Vulkan probe shows the 5080 (driver 580.692) exposing everything venus needs:
+     `VK_EXT_external_memory_dma_buf`, `VK_KHR_external_memory_fd`,
+     `VK_EXT_image_drm_format_modifier`, and the semaphore/fence fd extensions.
 
-  Whatever the outcome, venus becomes opt-in per app rather than a default: enabling it
-  where the host cannot support it costs the guest its display entirely.
+  With 1-3 cleared, venus initializes and the render server runs. What remains: inside the
+  guest, `vkCreateInstance` fails with `ERROR_OUT_OF_HOST_MEMORY`, and Mesa's venus driver
+  emits no `VN_DEBUG=init` output at all, so it is failing before it logs. The guest does
+  have the ICD (`/usr/lib64/libvulkan_virtio.so`). Adding a shared `memory-backend-memfd`
+  and wiring it into the machine did not change it, and neither did virglrenderer 1.3.0
+  over 1.2.0, so it is not simple version skew against the guest's Mesa 25.3.6.
+
+  Next things to try, in order: capture the render server's own stderr (it is a separate
+  process and its diagnostics are currently lost); check whether the guest's virtio-gpu is
+  advertising the venus capset at all (`VIRTGPU_CONTEXT_INIT` / capset probing); and vary
+  `hostmem` and `blob` sizing, since OUT_OF_HOST_MEMORY at instance creation points at the
+  shared-memory ring rather than at the GPU.
 - **A measurement target**, so the answer is a number rather than an impression, and a
   regression is visible.
 
