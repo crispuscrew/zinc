@@ -15,9 +15,16 @@ import (
 	"time"
 )
 
-// dialTimeout bounds the connect. A socket that exists but never answers means a guest
-// that died without cleaning up, and zvr should say so rather than hang.
-const dialTimeout = 3 * time.Second
+const (
+	// dialTimeout bounds the connect. A socket that exists but never answers means a guest
+	// that died without cleaning up, and zvr should say so rather than hang.
+	dialTimeout = 3 * time.Second
+	// replyTimeout bounds every read. A guest can wedge with its socket still accepting
+	// connections - qemu's main loop blocked on stuck storage is the ordinary way - and
+	// without this `zvr ps` would hang forever on one sick guest rather than listing the
+	// healthy ones.
+	replyTimeout = 5 * time.Second
+)
 
 // Conn is one QMP session. Not safe for concurrent use: each command writes a request and
 // reads until its reply, so two callers would interleave.
@@ -35,6 +42,7 @@ func Dial(socketPath string) (*Conn, error) {
 		return nil, fmt.Errorf("connect to the guest's control socket: %w", err)
 	}
 	session := &Conn{conn: conn, decoder: json.NewDecoder(conn)}
+	session.extendDeadline()
 
 	var greeting struct {
 		QMP json.RawMessage `json:"QMP"`
@@ -51,6 +59,12 @@ func Dial(socketPath string) (*Conn, error) {
 }
 
 func (session *Conn) Close() error { return session.conn.Close() }
+
+// extendDeadline pushes the read/write deadline out. Every exchange is bounded, so a guest
+// that stops answering surfaces as an error on that guest instead of hanging the command.
+func (session *Conn) extendDeadline() {
+	_ = session.conn.SetDeadline(time.Now().Add(replyTimeout))
+}
 
 // reply is one QMP response: exactly one of return or error is set. Events can arrive
 // interleaved with replies, which is why Execute skips anything carrying neither.
@@ -69,6 +83,7 @@ func (session *Conn) Execute(command string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	session.extendDeadline()
 	if _, err := session.conn.Write(append(request, '\n')); err != nil {
 		return nil, fmt.Errorf("send %s: %w", command, err)
 	}
@@ -86,6 +101,9 @@ func (session *Conn) Execute(command string) (json.RawMessage, error) {
 		case response.Return != nil:
 			return response.Return, nil
 		case response.Event != "":
+			// Events arrive unprompted, so each one buys the reply more time rather than
+			// eating into the window the answer itself has.
+			session.extendDeadline()
 			continue
 		default:
 			return nil, fmt.Errorf("%s: unrecognised QMP reply", command)

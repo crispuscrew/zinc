@@ -36,7 +36,14 @@ var ovmfSecbootSearch = []struct{ code, vars string }{
 
 // Prepare resolves the firmware for an app, copying the variable store on first use. The
 // copy is what makes the guest's boot configuration persistent and its own.
-func Prepare(virt schema.VirtualizationMeta, varsPath string) (qemu.Firmware, error) {
+//
+// baseImage matters more than it looks. An OS installed under UEFI records its boot entry
+// in NVRAM, not only on disk - Windows Setup writes a "Windows Boot Manager" entry pointing
+// at bootmgfw.efi. `zvr install` leaves those variables beside the disk it produced, so
+// when an app is first run against that disk its variable store is seeded from them.
+// Copying the pristine OVMF template instead would throw the boot entry away and leave a
+// freshly installed guest sitting at the UEFI shell with no bootable device.
+func Prepare(virt schema.VirtualizationMeta, varsPath, baseImage string) (qemu.Firmware, error) {
 	if virt.Firmware != schema.VMFirmwareUEFI {
 		return qemu.Firmware{}, nil
 	}
@@ -63,6 +70,9 @@ func Prepare(virt schema.VirtualizationMeta, varsPath string) (qemu.Firmware, er
 		if err := os.MkdirAll(filepath.Dir(varsPath), 0o755); err != nil {
 			return qemu.Firmware{}, err
 		}
+		if installed := InstalledVars(baseImage); installed != "" && installed != varsPath {
+			template = installed
+		}
 		data, err := os.ReadFile(template)
 		if err != nil {
 			return qemu.Firmware{}, fmt.Errorf("read the UEFI variable template: %w", err)
@@ -72,6 +82,19 @@ func Prepare(virt schema.VirtualizationMeta, varsPath string) (qemu.Firmware, er
 		}
 	}
 	return qemu.Firmware{CodePath: code, VarsPath: varsPath}, nil
+}
+
+// InstalledVars is where `zvr install` leaves the UEFI variables belonging to a disk it
+// installed: beside the disk, so they travel with it. Empty when there are none.
+func InstalledVars(baseImage string) string {
+	if baseImage == "" {
+		return ""
+	}
+	candidate := baseImage + ".uefi-vars.fd"
+	if fileExists(candidate) {
+		return candidate
+	}
+	return ""
 }
 
 // TPM is a running swtpm process backing one guest's emulated TPM 2.0.

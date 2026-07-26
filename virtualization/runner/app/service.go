@@ -7,6 +7,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
@@ -107,7 +108,7 @@ func (svc Service) machineLayout(cfg schema.AppConfig, installing, startServices
 	layout := svc.layout(cfg)
 	layout.Installing = installing
 
-	prepared, err := firmware.Prepare(cfg.VirtualizationMeta, svc.Paths.UEFIVars(name))
+	prepared, err := firmware.Prepare(cfg.VirtualizationMeta, svc.Paths.UEFIVars(name), cfg.ImageMeta.Image)
 	if err != nil {
 		return qemu.Layout{}, err
 	}
@@ -151,11 +152,25 @@ func (svc Service) Reset(name string) error {
 	if state.Alive {
 		return fmt.Errorf("%s is running; stop it before resetting its disk", name)
 	}
-	overlay := svc.Paths.Overlay(name)
-	if err := removeIfPresent(overlay); err != nil {
-		return err
+	// Everything the guest accumulated, not just its disk. UEFI variables and TPM state are
+	// as much "what this guest became" as the filesystem is: leaving them would return a
+	// freshly installed disk to a firmware still holding boot entries for the old one, and
+	// a TPM holding keys sealed to a machine state that no longer exists. The next run
+	// re-seeds both - the firmware from the variables the install left beside the base
+	// image, so a reset lands exactly where the install did.
+	for _, path := range []string{
+		svc.Paths.Overlay(name),
+		svc.Paths.Seed(name),
+		svc.Paths.UEFIVars(name),
+	} {
+		if err := removeIfPresent(path); err != nil {
+			return err
+		}
 	}
-	return removeIfPresent(svc.Paths.Seed(name))
+	if err := os.RemoveAll(svc.Paths.TPMState(name)); err != nil {
+		return fmt.Errorf("remove the guest's TPM state: %w", err)
+	}
+	return nil
 }
 
 // check applies the shared schema rules and confirms the app is one zvr owns.

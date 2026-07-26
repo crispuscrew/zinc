@@ -180,7 +180,9 @@ func installLayout(cfg schema.AppConfig, diskPath string) (qemu.Layout, func(), 
 		Installing: true,
 	}
 
-	prepared, err := firmware.Prepare(cfg.VirtualizationMeta, diskPath+".uefi-vars.fd")
+	// The install's own variables live beside the disk it is creating, which is where a
+	// later app run looks for them.
+	prepared, err := firmware.Prepare(cfg.VirtualizationMeta, diskPath+".uefi-vars.fd", "")
 	if err != nil {
 		return qemu.Layout{}, nil, err
 	}

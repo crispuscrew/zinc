@@ -101,7 +101,7 @@ windows-demo: build
 	@test -x "$(ZC)" || $(MAKE) -C ../../creator build
 	@mkdir -p "$(IMAGE_DIR)"
 	@if [ ! -f "$(VIRTIO_WIN)" ]; then \
-		echo "fetching the virtio-win driver ISO (~700 MB, once). It resumes if interrupted,"; \
+		echo "fetching the virtio-win driver ISO (~950 MB, once). It resumes if interrupted,"; \
 		echo "and is what lets the installed guest be switched to fast virtio disk and network."; \
 		curl -fSL -C - --progress-bar -o "$(VIRTIO_WIN).part" "$(VIRTIO_URL)" \
 			&& mv "$(VIRTIO_WIN).part" "$(VIRTIO_WIN)" \
@@ -110,6 +110,11 @@ windows-demo: build
 			     echo "running this again resumes it rather than starting over."; \
 			     exit 1; }; \
 	fi
+	@xorriso -indev "$(VIRTIO_WIN)" -toc >/dev/null 2>&1 || { \
+		echo "the virtio-win ISO is not readable as an image - a resumed transfer can append"; \
+		echo "rather than resume when a server mishandles ranges. Delete it and fetch again:"; \
+		echo "  rm $(VIRTIO_WIN)"; \
+		exit 1; }
 	@echo
 	@echo "Starting Windows Setup in a qemu window: UEFI + Secure Boot + TPM 2.0,"
 	@echo "$(WIN_MEMORY) MiB, $(WIN_VCPUS) vCPU, a $(WIN_SIZE) GiB disk."
