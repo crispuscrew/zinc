@@ -139,13 +139,13 @@ Measured minimal set, so nothing is cargo cult: `venus=on,blob=on,hostmem=8G`. N
 Honest boundary on this hardware: full GPU passthrough is not an option here at all. A
 single RTX 5080 with no integrated GPU means passing it through blinds the host.
 
-## 0.6 - Windows-class guests - in progress
+## 0.6 - Windows-class guests - done
 
 Run a guest whose OS has never heard of virtio and refuses to install without hardware the
 previous releases did not model. The point is not Windows for its own sake: it is that the VM
 runner now describes a machine rather than assuming one.
 
-Delivered so far:
+Delivered:
 - **A machine Windows accepts**: UEFI with a per-app writable variable store, Secure Boot,
   an emulated TPM 2.0 over swtpm, and `Devices: Compatible` (AHCI, e1000e, USB tablet) for a
   guest whose installer has no virtio drivers at all.
@@ -157,6 +157,9 @@ Delivered so far:
   resize itself.
 - **`make -C virtualization/runner windows-demo WIN_ISO=...`**: the whole flow from one
   argument.
+- **`zinc-setup.cmd`**: a generated script on the guest's own provisioning disc that stages
+  the virtio drivers from the virtio-win disc. What the host cannot reach into the guest to
+  do, the guest is handed as something it can run.
 
 Three failures worth remembering, because all three are silent and none names its own cause:
 
