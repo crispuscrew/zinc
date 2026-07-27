@@ -116,6 +116,11 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Known limitations
 
+- **`zc tui` cannot author a Windows-class guest.** Its VM form covers the guest's sizing and
+  cloud-init identity, not the machine: firmware, Secure Boot, TPM, the device profile, the
+  fixed screen size, the MAC and the discs are `zc new` flags or advanced-editor fields. The
+  form does preserve all of them when an app authored elsewhere is edited and saved, so this
+  costs a round trip rather than a config.
 - **Windows guests get no 3D acceleration.** virtio-gpu's Windows driver is display-only -
   there is no virgl path, so guest OpenGL and Vulkan have nothing to run on and the desktop
   is an unaccelerated framebuffer. Passthrough, the usual answer, needs a second GPU. Windows
