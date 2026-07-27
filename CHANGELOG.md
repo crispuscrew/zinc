@@ -105,6 +105,15 @@ tracked in [RELEASES.md](RELEASES.md).
   ~700 MB) and defaulting the machine to what Windows 11 requires. When Setup finishes it
   pins the installed disk and authors an app against it.
 
+### Fixed
+
+- **`zc tui` could silently rewrite a Windows guest's display mode.** The form's display row
+  offered Accelerated, Window and None but not Compatible, and the enum treats a value it
+  does not recognise as "before the first" - so opening a guest that runs on Compatible and
+  pressing the cycle key once moved it to Accelerated. That is the pairing that boots to a
+  black screen. The row now offers every mode validation accepts, and a test fails if the
+  schema gains one the form has not been taught.
+
 ### Known limitations
 
 - **Windows guests get no 3D acceleration.** virtio-gpu's Windows driver is display-only -

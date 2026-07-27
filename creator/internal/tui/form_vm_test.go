@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,6 +139,46 @@ func TestNextValue(t *testing.T) {
 	}
 	if got := nextValue(values, "nonsense"); got != "A" {
 		t.Errorf("nextValue(unknown) = %q, want the first value", got)
+	}
+}
+
+// The display row must offer every mode validation accepts. The two rules combine badly if
+// it does not: nextValue lands an unrecognised value on the first in the list, so a mode
+// missing here is not merely unreachable - opening a guest that uses it and pressing the
+// cycle key rewrites its display to something else. A Windows guest is exactly that case; it
+// runs on Compatible, and being moved to Accelerated boots it to a black screen.
+func TestFormDisplayEnum_OffersEveryModeValidationAccepts(t *testing.T) {
+	frm := newForm(schema.AppConfig{}, true)
+	frm.draft.Type = schema.ZincVirtualization
+	frm.buildFields()
+
+	var values []string
+	for _, fld := range frm.fields {
+		if fld.label == "display" {
+			values = fld.values
+		}
+	}
+	if values == nil {
+		t.Fatal("no display row in the VM form")
+	}
+
+	// Listed here rather than derived, so adding a mode to the schema fails this test until
+	// the form is taught about it.
+	for _, mode := range []schema.VMDisplay{
+		schema.VMDisplayNone, schema.VMDisplayWindow,
+		schema.VMDisplayAccelerated, schema.VMDisplayCompatible,
+	} {
+		if !slices.Contains(values, string(mode)) {
+			t.Errorf("the display row does not offer %q; cycling would rewrite it to %q", mode, values[0])
+		}
+	}
+	if len(values) != 4 {
+		t.Errorf("display values = %q, want exactly the four modes", values)
+	}
+
+	// The specific regression: a Windows guest's mode must cycle to another real mode.
+	if got := nextValue(values, string(schema.VMDisplayCompatible)); got == string(schema.VMDisplayAccelerated) {
+		t.Errorf("Compatible cycled to %q, which is the not-found fallback rather than a step", got)
 	}
 }
 
