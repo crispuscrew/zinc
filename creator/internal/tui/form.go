@@ -225,9 +225,14 @@ func (frm *formModel) vmFields() []formField {
 		{label: "disk (GiB)", kind: kindText, input: &frm.diskSize},
 		{
 			label: "display", kind: kindEnum,
+			// Every mode validation accepts. A missing one is not an omission the user can
+			// work around: nextValue treats an unrecognised current value as the first in
+			// the list, so opening a guest whose mode is missing here and touching this row
+			// silently rewrites it to something else.
 			values: []string{
 				string(schema.VMDisplayAccelerated),
 				string(schema.VMDisplayWindow),
+				string(schema.VMDisplayCompatible),
 				string(schema.VMDisplayNone),
 			},
 			get: func() string { return string(frm.draft.VirtualizationMeta.Display) },

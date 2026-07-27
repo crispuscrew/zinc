@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -154,12 +156,16 @@ func fileDigest(path string) (string, error) {
 // into a config.
 func Digest(path string) (string, error) { return fileDigest(path) }
 
-// WriteSeed builds the cloud-init seed ISO for an app: a tiny read-only filesystem
-// labelled cidata that the guest's cloud-init finds on first boot and provisions itself
-// from. Rebuilt on every launch, so editing the config's identity fields takes effect
+// WriteSeed builds the app's provisioning disc: a tiny read-only filesystem the guest reads
+// on boot. Rebuilt on every launch, so editing the config's identity fields takes effect
 // without touching the guest's disk.
+//
+// What it carries depends on what the guest can read. cloud-init takes user-data and
+// meta-data; a guest on the compatible device profile has never heard of cloud-init, so it
+// also gets zinc-setup.cmd, which stages the virtio drivers from the virtio-win disc. The
+// alternative was a second disc for one text file.
 func WriteSeed(path string, cfg schema.AppConfig) error {
-	userData, err := userData(cfg)
+	files, err := seedFiles(cfg)
 	if err != nil {
 		return err
 	}
@@ -169,12 +175,10 @@ func WriteSeed(path string, cfg schema.AppConfig) error {
 	}
 	defer os.RemoveAll(stage)
 
-	metaData, err := metaData(cfg)
-	if err != nil {
-		return err
-	}
-	for name, content := range map[string]string{"user-data": userData, "meta-data": metaData} {
-		if err := os.WriteFile(filepath.Join(stage, name), []byte(content), 0o600); err != nil {
+	// Sorted, so the same config always builds the same image: map order is not.
+	names := slices.Sorted(maps.Keys(files))
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(stage, name), []byte(files[name]), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", name, err)
 		}
 	}
@@ -183,12 +187,35 @@ func WriteSeed(path string, cfg schema.AppConfig) error {
 	// with exactly that label. Joliet and Rock Ridge keep the names readable to any guest.
 	args := []string{
 		"-as", "mkisofs", "-output", path, "-volid", "cidata", "-joliet", "-rock",
-		filepath.Join(stage, "user-data"), filepath.Join(stage, "meta-data"),
+	}
+	for _, name := range names {
+		args = append(args, filepath.Join(stage, name))
 	}
 	if output, err := exec.Command("xorriso", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("build the cloud-init seed image: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// seedFiles decides what goes on the provisioning disc, by what the guest can read. A
+// cloud-init guest takes user-data and meta-data. A guest on the compatible device profile
+// has never heard of cloud-init, so it also gets zinc-setup.cmd - the only thing Zinc can
+// hand such a guest that it will actually run. Kept separate from writing them so the choice
+// can be tested without an ISO tool.
+func seedFiles(cfg schema.AppConfig) (map[string]string, error) {
+	userData, err := userData(cfg)
+	if err != nil {
+		return nil, err
+	}
+	metaData, err := metaData(cfg)
+	if err != nil {
+		return nil, err
+	}
+	files := map[string]string{"user-data": userData, "meta-data": metaData}
+	if cfg.VirtualizationMeta.Devices == schema.VMDevicesCompatible {
+		files["zinc-setup.cmd"] = windowsSetup()
+	}
+	return files, nil
 }
 
 // metaData renders the seed's meta-data document as JSON. cloud-init documents this file

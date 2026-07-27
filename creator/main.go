@@ -26,6 +26,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"os"
@@ -50,9 +51,10 @@ const usage = `usage: zc <command> [args]
   tui                               keyboard-first manager (create/edit/run/stop/logs)
   new <name> --image <img> [--desc d] [--icon i]
   new <name> --vm --image <base.qcow2> --base-digest sha256:... [--memory MiB]
-             [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]
+             [--vcpus N] [--disk GiB] [--display None|Window|Accelerated|Compatible]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
              [--firmware UEFI] [--secure-boot] [--tpm] [--devices Compatible] [--vulkan]
+             [--resolution WxH] [--mac ADDR] [--media disc.iso]
   list
   validate <name|app.yaml>
   delete <name>
@@ -184,7 +186,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	vcpus := fset.Int("vcpus", 2, "VM only: guest CPU count")
 	diskSize := fset.Int64("disk", 0, "VM only: overlay size in GiB (0 keeps the base image's size)")
 	display := fset.String("display", string(schema.VMDisplayAccelerated),
-		"VM only: None (headless), Window (no 3D), or Accelerated (virtio-gpu-gl)")
+		"VM only: None (headless), Window (no 3D), Accelerated (virtio-gpu-gl), or Compatible (plain VGA, for a guest with no virtio-gpu driver)")
 	ciUser := fset.String("ci-user", "", "VM only: account cloud-init creates in the guest")
 	ciKey := fset.String("ci-ssh-key", "", "VM only: path to a PUBLIC key authorised for that account")
 	forward := fset.String("forward", "", "VM only: publish a guest port as HOST:GUEST (e.g. 2222:22), repeatable with commas")
@@ -193,6 +195,9 @@ func cmdNew(svc backend.Service, argv []string) error {
 	tpmFlag := fset.Bool("tpm", false, "VM only: attach an emulated TPM 2.0 (Windows 11 requires one)")
 	devices := fset.String("devices", "", "VM only: Virtio (default) or Compatible (for guests without virtio drivers, e.g. Windows)")
 	vulkan := fset.Bool("vulkan", false, "VM only: pass guest Vulkan through to the host GPU (needs a venus-capable virglrenderer; disables qemu's sandbox for this app)")
+	resolution := fset.String("resolution", "", "VM only: fixed guest screen size as WxH (e.g. 1920x1080); for --display Compatible, whose guest has no driver to resize itself")
+	mac := fset.String("mac", "", "VM only: guest NIC address, or \"random\"; the default is derived per-app under QEMU's 52:54:00 prefix, so set this to present something that names no vendor")
+	media := fset.String("media", "", "VM only: ISO attached read-only as a CD-ROM on every run (e.g. a virtio-win driver disc), repeatable with commas")
 	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
 	if err := fset.Parse(flags); err != nil {
 		return err
@@ -224,19 +229,31 @@ func cmdNew(svc backend.Service, argv []string) error {
 		if ferr != nil {
 			return ferr
 		}
+		width, height, rerr := parseResolution(*resolution)
+		if rerr != nil {
+			return rerr
+		}
+		macAddress, merr := resolveMac(*mac)
+		if merr != nil {
+			return merr
+		}
 		cfg.VirtualizationMeta = schema.VirtualizationMeta{
-			BaseDigest:   *digest,
-			MemoryMiB:    *memory,
-			VCPUs:        *vcpus,
-			DiskSizeGiB:  *diskSize,
-			Display:      schema.VMDisplay(*display),
-			Vulkan:       *vulkan,
-			Firmware:     schema.VMFirmware(*firmware),
-			SecureBoot:   *secureBoot,
-			TPM:          *tpmFlag,
-			Devices:      schema.VMDevices(*devices),
-			ForwardPorts: forwards,
-			CloudInit:    schema.CloudInit{UserName: *ciUser, SSHKeyPath: *ciKey},
+			BaseDigest:    *digest,
+			MemoryMiB:     *memory,
+			VCPUs:         *vcpus,
+			DiskSizeGiB:   *diskSize,
+			Display:       schema.VMDisplay(*display),
+			DisplayWidth:  width,
+			DisplayHeight: height,
+			MacAddress:    macAddress,
+			Vulkan:        *vulkan,
+			Firmware:      schema.VMFirmware(*firmware),
+			SecureBoot:    *secureBoot,
+			TPM:           *tpmFlag,
+			Devices:       schema.VMDevices(*devices),
+			InstallMedia:  splitList(*media),
+			ForwardPorts:  forwards,
+			CloudInit:     schema.CloudInit{UserName: *ciUser, SSHKeyPath: *ciKey},
 		}
 	} else if vmFlagUsed(fset) {
 		// Silently ignoring these would write a container app that looks configured for a
@@ -251,6 +268,12 @@ func cmdNew(svc backend.Service, argv []string) error {
 		return err
 	}
 	fmt.Printf("created %s → %s\n", cfg.AppNameID, svc.Path(cfg.AppNameID))
+	// Same advisories `zc validate` prints. Authoring is when a valid-but-surprising choice
+	// is cheapest to change: the alternative is meeting it as a black screen or an open port
+	// at the first launch, with nothing on screen connecting the two.
+	for _, warn := range validate.Warnings(cfg) {
+		fmt.Println("warning: " + warn)
+	}
 	return nil
 }
 
@@ -258,6 +281,18 @@ const newUsage = `usage:
   zc new <name> --image <img> [--desc d] [--icon i]
   zc new <name> --vm --image <base.qcow2> --base-digest sha256:... \
                 [--memory MiB] [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]`
+
+// splitList reads a comma-separated flag into the entries it names, dropping the empty ones
+// so a trailing comma is not a path. What each entry has to be is validation's business.
+func splitList(spec string) []string {
+	var entries []string
+	for _, entry := range strings.Split(spec, ",") {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			entries = append(entries, trimmed)
+		}
+	}
+	return entries
+}
 
 // parseForwards reads "HOST:GUEST[,HOST:GUEST...]" into port forwards. Validation screens
 // the numbers themselves (range, and the privileged ports a rootless qemu cannot bind);
@@ -289,7 +324,7 @@ func vmFlagUsed(fset *flag.FlagSet) bool {
 	used := false
 	fset.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward", "vulkan", "firmware", "secure-boot", "tpm", "devices":
+		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward", "vulkan", "firmware", "secure-boot", "tpm", "devices", "resolution", "mac", "media":
 			used = true
 		}
 	})
@@ -512,4 +547,46 @@ func traitLabel(cfg schema.AppConfig) string {
 		return fmt.Sprintf("%dM/%dcpu", cfg.VirtualizationMeta.MemoryMiB, cfg.VirtualizationMeta.VCPUs)
 	}
 	return netLabel(cfg)
+}
+
+// parseResolution reads a "WxH" screen size. It is one flag rather than two because a width
+// without a height is not a screen, and a single value cannot be given by accident.
+func parseResolution(spec string) (int, int, error) {
+	if strings.TrimSpace(spec) == "" {
+		return 0, 0, nil
+	}
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(spec)), "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("--resolution %q: want WxH, e.g. 1920x1080", spec)
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("--resolution %q: width %q is not a number", spec, parts[0])
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("--resolution %q: height %q is not a number", spec, parts[1])
+	}
+	return width, height, nil
+}
+
+// resolveMac turns --mac into the address to store. "random" is drawn once, here, and the
+// literal result is written into the config: a config that said "random" would draw a new
+// address on every run, and a guest whose NIC changes underneath it loses its DHCP lease and
+// looks to Windows like swapped hardware.
+//
+// The address is locally administered (bit 1 of the first octet) and unicast (bit 0 clear),
+// which is the range set aside for exactly this - it belongs to no vendor, so unlike the
+// default it identifies nothing at all.
+func resolveMac(flag string) (string, error) {
+	if !strings.EqualFold(strings.TrimSpace(flag), "random") {
+		return flag, nil
+	}
+	var octets [6]byte
+	if _, err := rand.Read(octets[:]); err != nil {
+		return "", fmt.Errorf("draw a random MAC address: %w", err)
+	}
+	octets[0] = (octets[0] | 0x02) &^ 0x01
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x",
+		octets[0], octets[1], octets[2], octets[3], octets[4], octets[5]), nil
 }

@@ -139,6 +139,50 @@ Measured minimal set, so nothing is cargo cult: `venus=on,blob=on,hostmem=8G`. N
 Honest boundary on this hardware: full GPU passthrough is not an option here at all. A
 single RTX 5080 with no integrated GPU means passing it through blinds the host.
 
+## 0.6 - Windows-class guests - done
+
+Run a guest whose OS has never heard of virtio and refuses to install without hardware the
+previous releases did not model. The point is not Windows for its own sake: it is that the VM
+runner now describes a machine rather than assuming one.
+
+Delivered:
+- **A machine Windows accepts**: UEFI with a per-app writable variable store, Secure Boot,
+  an emulated TPM 2.0 over swtpm, and `Devices: Compatible` (AHCI, e1000e, USB tablet) for a
+  guest whose installer has no virtio drivers at all.
+- **`zvr install`**: runs an OS installer to produce a base disk, for guests with no cloud
+  image, then prints the digest and the `zc new` line to author an app against it.
+- **A machine identity per app**, because qemu's defaults are shared by every default guest
+  in the world and Windows Autopilot identifies a device by a hash over them.
+- **A fixed guest screen size** up to 3840x2400, for a guest with no display driver to
+  resize itself.
+- **`make -C virtualization/runner windows-demo WIN_ISO=...`**: the whole flow from one
+  argument.
+- **`zinc-setup.cmd`**: a generated script on the guest's own provisioning disc that stages
+  the virtio drivers from the virtio-win disc. What the host cannot reach into the guest to
+  do, the guest is handed as something it can run.
+
+Three failures worth remembering, because all three are silent and none names its own cause:
+
+1. **The legacy 2 MB OVMF build does not hand a TPM to the guest.** qemu publishes the TPM's
+   ACPI device itself, so the guest enumerates it and binds a driver to it; only Windows
+   notices nothing is behind it, and all it reports is that the PC does not meet its
+   requirements. The 4 MB build works. A Linux guest cannot catch this: its driver probes the
+   hardware directly and sees a working TPM on both.
+2. **Secure Boot without SMM runs but does not enforce**, so the guest reports it switched
+   off while the host shows it enabled.
+3. **A guest display falls back to 1280x800 without a word** when any of three separate
+   limits is exceeded: its framebuffer memory, the EDID pixel clock's 16-bit field, or the
+   12-bit active-pixel fields. Each was measured against real firmware rather than assumed,
+   and a size that cannot work is now refused at validation.
+
+Known limits: no 3D for Windows guests (virtio-gpu's Windows driver is display-only, and
+passthrough needs a second GPU); the screen size is fixed at boot because a driverless guest
+cannot be told about a new mode; and a driverless Windows desktop paints at most 1824x1080
+whatever the machine offers it, so a Windows app is authored at that size. The way off the
+fixed size is the guest's own display driver: `InstallMedia` discs are now attached on every
+run, not only the install, so an installed guest can still be handed the virtio-win disc,
+stage `viogpudo` from it and be re-authored with `--display Window`.
+
 **ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project in
 its own repository, layered on these tools; its milestones are tracked there, not in this
 plan. This repo ships only the Zinc core and its tools.

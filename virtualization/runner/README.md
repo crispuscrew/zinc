@@ -142,13 +142,50 @@ Running guests needs `qemu-system-x86_64`, `qemu-img` and `xorriso` on the host,
 
 `windows-demo` fetches the virtio-win driver ISO (~790 MB), but **a Windows install does not
 need it**: Setup boots from the Windows media and installs onto the AHCI disk that
-`Devices: Compatible` provides. It only matters for switching the installed guest to virtio
-disk and network afterwards, which is a worthwhile speed win but can be done any time.
+`Devices: Compatible` provides. It matters afterwards: switching the installed guest to a
+virtio disk and network is a worthwhile speed win, and its display driver is what lifts the
+guest off a fixed 1824x1080 framebuffer. Both can be done any time - see below.
 
 So a slow or failed download never blocks an install - the target says so and carries on
 with just the Windows media.
 
-`make check-virtio-win` verifies the one on disk, and it does more than check that the file
+### Giving an installed guest its drivers
+
+An installed Windows guest with no display driver paints at most 1824x1080 and cannot be told
+about a new mode, so its window scales rather than resizes. The drivers that fix that (and
+that make the disk and network fast) are on the virtio-win disc and can only be staged from
+inside Windows, by a user holding an administrator token. So Zinc writes the guest a script
+instead of writing the reader instructions.
+
+Attach the driver disc:
+
+```sh
+zc new mywin --vm ... --display Compatible --resolution 1824x1080 \
+    --media ~/.local/share/zinc/images/virtio-win.iso
+zvr run mywin
+```
+
+Inside Windows, open the small CD drive (volume label `cidata`) and run **`zinc-setup.cmd`**.
+It elevates itself, finds the driver disc by its contents rather than by a drive letter that
+depends on what else is attached, and stages the display, disk and network drivers with
+`pnputil`. Nothing it does changes the running machine, so it is safe to run twice.
+
+That script is generated per app by `zvr` and lands on the same disc a Linux guest gets its
+cloud-init from - a guest on `Devices: Compatible` has never heard of cloud-init, so the disc
+carries what that guest can actually read.
+
+Then shut the guest down and re-author it:
+
+- `--display Window` and no `--resolution` - the machine gets a `virtio-gpu-pci`
+  (`PCI\VEN_1AF4&DEV_1050`, the ID `viogpudo.inf` claims), Windows binds the staged driver,
+  and the desktop becomes a real driven display that resizes with the window.
+- `--devices Virtio` - a virtio disk and NIC. Only after `viostor` is staged: without it
+  Windows cannot see its own boot disk and stops with `INACCESSIBLE_BOOT_DEVICE`.
+
+Re-authoring in the other order is what the launch-time warning about a virtio display on a
+compatible guest is there to catch.
+
+`make check-virtio-win` verifies the ISO on disk, and it does more than check that the file
 opens. An interrupted-and-resumed transfer can corrupt the middle of the image while leaving
 its ISO metadata perfectly readable: the volume mounts, the directory listing looks right,
 and a driver inside is silently garbage. The check therefore extracts two drivers Windows

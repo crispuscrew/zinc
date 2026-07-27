@@ -2,6 +2,7 @@ package validate
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
@@ -45,6 +46,9 @@ func checkVirtualization(cfg schema.AppConfig, add addFunc) {
 		add("VirtualizationMeta.Display %q: must be one of %s, %s, %s, %s",
 			virt.Display, schema.VMDisplayNone, schema.VMDisplayWindow, schema.VMDisplayAccelerated, schema.VMDisplayCompatible)
 	}
+
+	checkResolution(virt, add)
+	checkMac(virt.MacAddress, add)
 
 	switch virt.Firmware {
 	case schema.VMFirmwareBIOS, schema.VMFirmwareUEFI, "":
@@ -221,4 +225,83 @@ func checkVirtualizationUnset(cfg schema.AppConfig, add addFunc) {
 	}
 	add("VirtualizationMeta: only applies to a VM app (Type: %s); this app is %s",
 		schema.ZincVirtualization, cfg.Type)
+}
+
+// checkResolution screens a fixed guest screen size. Both dimensions or neither: a width with
+// no height cannot be turned into a mode, and supplying the missing half would be inventing a
+// screen the author did not ask for.
+//
+// A guest with no display driver takes its resolution from the firmware at boot and keeps it,
+// and the device that carries one has no VGA compatibility - a BIOS guest given it produces no
+// picture at all. That is why the pairing is refused here rather than discovered as a blank
+// window.
+func checkResolution(virt schema.VirtualizationMeta, add addFunc) {
+	width, height := virt.DisplayWidth, virt.DisplayHeight
+	if width == 0 && height == 0 {
+		return
+	}
+	if width == 0 || height == 0 {
+		add("VirtualizationMeta.DisplayWidth/DisplayHeight %dx%d: set both or neither", width, height)
+		return
+	}
+	if width < 640 || height < 480 {
+		add("VirtualizationMeta.DisplayWidth/DisplayHeight %dx%d: must be at least 640x480", width, height)
+	}
+	// Refused rather than clamped: a size the emulated display cannot describe to the
+	// firmware does not degrade, it silently comes up at 1280x800 with nothing logged
+	// anywhere, which is indistinguishable from the setting being ignored.
+	if _, ok := schema.GuestDisplay(width, height); !ok && width >= 640 && height >= 480 {
+		add("VirtualizationMeta.DisplayWidth/DisplayHeight %dx%d: too large for the guest's display to describe "+
+			"(neither side may exceed %d, and the total is bounded by the EDID pixel clock); 3840x2160 works, 4096x2160 does not",
+			width, height, schema.GuestDisplayMaxPixels)
+	}
+	if width%2 != 0 {
+		add("VirtualizationMeta.DisplayWidth %d: must be even", width)
+	}
+	if virt.Display != schema.VMDisplayCompatible {
+		add("VirtualizationMeta.DisplayWidth/DisplayHeight: only Display: %s takes a fixed size; "+
+			"an accelerated guest resizes with its window", schema.VMDisplayCompatible)
+	}
+	if virt.Firmware != schema.VMFirmwareUEFI {
+		add("VirtualizationMeta.DisplayWidth/DisplayHeight: needs Firmware: %s "+
+			"(the display device that carries a fixed size has no BIOS-compatible mode)", schema.VMFirmwareUEFI)
+	}
+}
+
+// checkMac screens a NIC address override. It goes onto a qemu -device argument, so the shape
+// is pinned rather than trusted: a comma there would start a new property and a space would
+// split the argument.
+func checkMac(mac string, add addFunc) {
+	if mac == "" {
+		return
+	}
+	octets := strings.Split(mac, ":")
+	if len(octets) != 6 {
+		add("VirtualizationMeta.MacAddress %q: must be six colon-separated hex octets, e.g. 02:1a:2b:3c:4d:5e", mac)
+		return
+	}
+	var first uint64
+	for index, octet := range octets {
+		if len(octet) != 2 {
+			add("VirtualizationMeta.MacAddress %q: octet %d (%q) must be exactly two hex digits", mac, index+1, octet)
+			return
+		}
+		value, err := strconv.ParseUint(octet, 16, 8)
+		if err != nil {
+			add("VirtualizationMeta.MacAddress %q: octet %d (%q) is not hex", mac, index+1, octet)
+			return
+		}
+		if index == 0 {
+			first = value
+		}
+	}
+	// Bit 0 of the first octet marks a multicast address. A NIC given one cannot hold a normal
+	// conversation, and the guest's networking would fail looking like anything but a config error.
+	if first&0x01 != 0 {
+		add("VirtualizationMeta.MacAddress %q: %02x is a multicast address (its low bit is set); "+
+			"a NIC needs a unicast one", mac, first)
+	}
+	if strings.EqualFold(mac, "00:00:00:00:00:00") {
+		add("VirtualizationMeta.MacAddress %q: the all-zero address is not usable", mac)
+	}
 }

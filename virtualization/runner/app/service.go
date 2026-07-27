@@ -76,7 +76,7 @@ func (svc Service) start(cfg schema.AppConfig, installing bool) error {
 		svc.Paths.Overlay(cfg.AppNameID), virt.DiskSizeGiB); err != nil {
 		return err
 	}
-	if !virt.CloudInit.Disabled {
+	if needsProvisioningDisc(virt) {
 		// Rebuilt every launch, so an edited identity takes effect without touching the
 		// guest's own disk.
 		if err := disk.WriteSeed(svc.Paths.Seed(cfg.AppNameID), cfg); err != nil {
@@ -183,8 +183,18 @@ func (svc Service) check(cfg schema.AppConfig) error {
 	return validate.Validate(cfg)
 }
 
-// layout resolves where this app's files live, leaving the seed out when cloud-init is
-// disabled so no seed drive is attached.
+// layout resolves where this app's files live, leaving the provisioning disc out when the
+// guest has no use for it so no extra drive is attached.
 func (svc Service) layout(cfg schema.AppConfig) qemu.Layout {
-	return svc.Paths.Layout(cfg.AppNameID, !cfg.VirtualizationMeta.CloudInit.Disabled)
+	return svc.Paths.Layout(cfg.AppNameID, needsProvisioningDisc(cfg.VirtualizationMeta))
+}
+
+// needsProvisioningDisc reports whether this guest has anything to read off the disc. A
+// cloud-init guest reads its identity from it. A guest on the compatible device profile
+// reads zinc-setup.cmd from it, which is the only way Zinc can hand such a guest a driver -
+// so turning cloud-init off, which a Windows guest reasonably would, must not take the
+// script away with it. One predicate for both the build and the attach: two would drift into
+// building a disc nobody mounts, or attaching one nobody built.
+func needsProvisioningDisc(virt schema.VirtualizationMeta) bool {
+	return !virt.CloudInit.Disabled || virt.Devices == schema.VMDevicesCompatible
 }

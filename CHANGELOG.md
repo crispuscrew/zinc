@@ -5,7 +5,10 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
-## [Unreleased]
+## [0.6.0] - 2026-07-27
+
+Windows-class guests. The VM runner now describes a machine rather than assuming one, and
+what it cannot do from the host it hands to the guest as something the guest can run.
 
 ### Added
 
@@ -16,6 +19,57 @@ tracked in [RELEASES.md](RELEASES.md).
   virtio hardware and reports finding no drives at all when pointed at a virtio disk, which
   is why the device profile is a field rather than an assumption. `Display: Compatible` adds
   a plain-VGA mode for guests with no virtio-gpu driver.
+  A TPM guest needs the current 4 MB OVMF build (`edk2-ovmf` on Fedora 41+, `ovmf` on
+  Debian 12+), and Zinc prefers it wherever both generations are installed. The legacy 2 MB
+  build does not hand the TPM to the guest, and the failure is close to invisible: qemu
+  publishes the TPM's ACPI device itself, so the guest enumerates it and binds a driver to
+  it, and only Windows notices there is nothing behind it. It reads TPM version 0 and says
+  no more than "This PC doesn't currently meet Windows 11 system requirements". Zinc warns
+  when a TPM guest can only get the legacy build. Variable stores are not interchangeable
+  between the two generations, so one written by the other build is refused by name rather
+  than handed to qemu, which would boot it with a quietly wrong Secure Boot state.
+- **Every VM app gets its own machine identity.** qemu with no `-uuid` reports the SMBIOS UUID
+  `00000000-0000-0000-0000-000000000000` and gives the NIC the MAC `52:54:00:12:34:56`, both
+  shared with every other default qemu VM. Windows Autopilot identifies a device by a hash
+  over exactly those fields, so a guest with the defaults can match a stranger's corporate
+  enrolment: a fresh Windows 11 install here reached OOBE demanding a sign-in to SAP's tenant,
+  branded with their logo. Both are now derived from the app name, so they are unique per app
+  and stable across restarts and resets - a changing UUID would make Windows think the
+  hardware had been swapped and ask to be reactivated. An install has no app yet and runs
+  under a fixed placeholder name, so it seeds its identity from the disk's own path instead:
+  deriving from the placeholder would have given every install on every host the same UUID,
+  which is the collision this exists to prevent, at the one moment it matters most - OOBE runs
+  during an install, and OOBE is what reads it.
+- **A fixed guest screen size** - `DisplayWidth`/`DisplayHeight`, `zc new --resolution WxH`,
+  `zvr install --resolution WxH`. A guest with no display driver takes whatever mode the
+  firmware gave it at boot and cannot change it, so `Display: Compatible` was always exactly
+  1280x800 and resizing the window only scaled those pixels. That number comes from plain
+  VGA's built-in EDID; the device has no resolution property at all. Asking for a size
+  switches the guest to `bochs-display`, which the firmware does honour (measured: Windows
+  Setup rendering at a true 1920x1080). `virtio-vga` and `qxl-vga` accept the same properties
+  but are not used, because OVMF drives their VGA-compatible half and falls back to 1280x800.
+  The one cost is that `bochs-display` has no VGA-compatible mode, so a fixed size requires
+  UEFI; validation refuses the pairing rather than letting a BIOS guest boot to a blank
+  window, and a guest that asks for nothing keeps plain VGA exactly as before.
+  Sizes up to 3840x2400 work, 4K included. Getting there needed two more things, because the
+  display's own defaults break down above about 3200x1800 and both failures are silent - the
+  guest simply comes up at 1280x800 with nothing logged. Its framebuffer is now sized to the
+  screen (the 16 MiB default is less memory than a 4K screen needs), and the generated EDID's
+  refresh rate is lowered just enough for the mode to exist: that rate multiplies a pixel
+  clock stored in 16 bits, and at QEMU's default 75 Hz a 4K clock overflows the field. The
+  rate is close to cosmetic for a guest, whose framebuffer is virtual and whose presentation
+  the host compositor drives. Above that, the EDID's active-pixel fields are 12 bits wide, so
+  neither side may exceed 4095: 3840x2400 is fine and 4096x2160 is not. Validation refuses
+  what cannot work rather than letting it fall back without a word.
+- **`MacAddress` / `zc new --mac`** to set the guest NIC's address. The derived default sits
+  under QEMU's own `52:54:00` prefix, which says plainly that the machine is a QEMU guest; an
+  app that should not announce that can supply its own. A locally-administered address (first
+  octet `02`, `06`, `0a` or `0e`) belongs to no vendor and so identifies nothing. The value is
+  screened before it reaches qemu, where a comma would start a new device property.
+  `--mac random` draws one instead of making you invent it. It is drawn once, at authoring
+  time, and the literal address is written into the config: a config that said "random" would
+  draw a new address on every run, and a guest whose NIC changes underneath it loses its DHCP
+  lease and looks to Windows like swapped hardware.
 - **`zvr install`** - runs an OS installer to produce a base disk, for guests that have no
   cloud image. It takes flags rather than an app name deliberately: an app pins its base by
   digest and a disk that does not exist yet has no digest, so requiring one would be a
@@ -23,17 +77,76 @@ tracked in [RELEASES.md](RELEASES.md).
   line to author an app against it; from then on every run is an overlay, so `zvr reset`
   returns the app to its freshly installed state.
 - `zc new --firmware/--secure-boot/--tpm/--devices` to author all of the above.
+- **`InstallMedia` discs are attached on every run**, not only during the install, and
+  **`zc new --media`** authors them. An OS is only the first thing a guest wants from a CD:
+  the drivers its installer had no room for arrive the same way, and a guest whose network is
+  not up yet has no other route in - which is exactly the position a fresh Windows guest is
+  in, since the driver that would fix its display is on a disc it could no longer be handed.
+  Only the boot order stays the install's own, so an ordinary run boots the disk with the disc
+  simply present. The discs are read-only, so leaving one in a config costs a drive letter.
+- **`zinc-setup.cmd`, a script the guest can actually run.** Everything Zinc can do for a
+  Windows guest stops at the machine: the drivers that make that machine worth having are on
+  the virtio-win disc and can only be staged from inside Windows by a user holding an
+  administrator token. So `zvr` now writes the guest a script rather than writing the reader
+  instructions. It elevates itself (a double-clicked `.cmd` has no token, and without one
+  `pnputil` fails on every driver), finds the driver disc by looking for a file only it has
+  rather than by a drive letter that depends on what else is attached, falls back from `w11`
+  to `w10` folders for an older disc, and stages the display, disk and network drivers. All
+  three, not just the display one: switching an app to `Devices: Virtio` without `viostor`
+  already staged leaves Windows unable to see its own boot disk. Nothing it does changes the
+  running machine, so it is safe to run twice and safe to run early.
+  It rides the disc every VM app already gets - the one a Linux guest reads cloud-init from,
+  which a `Devices: Compatible` guest has never heard of. That disc is now also built when
+  cloud-init is disabled, which a Windows guest would reasonably do, so turning cloud-init
+  off no longer takes the script away with it.
+- `zc new` now prints the same advisories `zc validate` does. Authoring is when a
+  valid-but-surprising choice is cheapest to change; meeting it later as a black screen or an
+  open port gives nothing to connect it back to.
 - **`make -C virtualization/runner windows-demo WIN_ISO=...`** - the whole Windows flow from
   one argument. The Windows ISO is Microsoft's and cannot be fetched for you; everything
   else is handled, including downloading the virtio-win driver disc (resumable, since it is
   ~700 MB) and defaulting the machine to what Windows 11 requires. When Setup finishes it
   pins the installed disk and authors an app against it.
 
+### Fixed
+
+- **`zc tui` could silently rewrite a Windows guest's display mode.** The form's display row
+  offered Accelerated, Window and None but not Compatible, and the enum treats a value it
+  does not recognise as "before the first" - so opening a guest that runs on Compatible and
+  pressing the cycle key once moved it to Accelerated. That is the pairing that boots to a
+  black screen. The row now offers every mode validation accepts, and a test fails if the
+  schema gains one the form has not been taught.
+
 ### Known limitations
 
-- **Windows guests get no 3D acceleration.** There is no virtio-gpu driver for Windows, so
-  they run on plain VGA; passthrough, the usual answer, needs a second GPU. Windows guests
-  are for software that must run on Windows, not for games.
+- **`zc tui` cannot author a Windows-class guest.** Its VM form covers the guest's sizing and
+  cloud-init identity, not the machine: firmware, Secure Boot, TPM, the device profile, the
+  fixed screen size, the MAC and the discs are `zc new` flags or advanced-editor fields. The
+  form does preserve all of them when an app authored elsewhere is edited and saved, so this
+  costs a round trip rather than a config.
+- **Windows guests get no 3D acceleration.** virtio-gpu's Windows driver is display-only -
+  there is no virgl path, so guest OpenGL and Vulkan have nothing to run on and the desktop
+  is an unaccelerated framebuffer. Passthrough, the usual answer, needs a second GPU. Windows
+  guests are for software that must run on Windows, not for games.
+- **A guest's screen size is fixed at boot.** Resizing the window scales those pixels rather
+  than changing the guest's resolution, because a guest with no display driver cannot be told
+  about a new mode. The way off it is a real driver inside the guest: stage `viogpudo` from
+  the virtio-win disc, then re-author with `--display Window`. Do it in that order. Measured
+  on Windows 11: given a virtio-gpu with no driver staged, the firmware paints and then the
+  screen goes black the moment Windows starts, because the device is left with no active
+  scanout - qemu's window just reads "display output is not active". Authoring that pairing
+  now warns, at `zc new` and at every `zvr run`, rather than letting a black window be the
+  first news of it.
+- **An installed Windows desktop stops at 1824x1080** without a display driver, whatever the
+  machine gives it. Measured on a Windows 11 24H2 guest: at 1920x1080, 1920x1024 and 1920x1200
+  it painted 1824 columns and no more than 1080 rows, leaving the rest black; at 1824x1080
+  nothing was clipped. Past that it does not simply clip. Asked for 2560x1440 it painted
+  810 rows of sheared, repeating bands - and 810 x 2560 is exactly 1920 x 1080, so the desktop
+  is writing rows of its own width into a scanout with a wider stride, and every display row
+  swallows 1.33 guest rows. Windows Setup is not affected and uses whatever mode it is given,
+  so this is the installed desktop's own behaviour. Until a guest display driver is installed,
+  author a Windows app at `--resolution 1824x1080`: the largest desktop it will actually
+  paint, with nothing wasted.
 
 ## [0.5.0] - 2026-07-26
 
@@ -352,6 +465,7 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.6.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.6.0
 [0.5.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.5.0
 [0.4.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.4.0
 [0.3.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.3.1
