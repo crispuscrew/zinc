@@ -40,6 +40,13 @@ type Layout struct {
 	// Installing attaches VirtualizationMeta.InstallMedia and boots from it, which is how a
 	// guest with no cloud image (Windows) gets installed in the first place.
 	Installing bool
+
+	// Identity seeds the guest's SMBIOS UUID and MAC instead of the app name. An install has
+	// no app yet and runs under a fixed placeholder name, so deriving from that name would
+	// give every install on every host the same machine identity - the collision the
+	// identity exists to avoid, at the one moment it matters most, since OOBE runs here.
+	// Empty falls back to the app name.
+	Identity string
 }
 
 // Args returns the full argv for cfg. The caller has already validated cfg, so the sizing
@@ -64,6 +71,11 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		"-serial", "unix:" + layout.Serial + ",server=on,wait=off",
 	}
 
+	identity := cfg.AppNameID
+	if layout.Identity != "" {
+		identity = layout.Identity
+	}
+	args = append(args, identityArgs(identity)...)
 	args = append(args, secureBootArgs(virt)...)
 	args = append(args, rtcArgs(virt.Devices)...)
 	args = append(args, sandboxArgs(virt.Vulkan)...)
@@ -79,8 +91,8 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 		// takes that trap away instead of documenting it.
 		args = append(args, "-boot", "once=d,menu=on")
 	}
-	args = append(args, netArgs(virt.ForwardPorts, virt.Devices)...)
-	args = append(args, displayArgs(virt.Display, virt.Vulkan, virt.Devices)...)
+	args = append(args, netArgs(identity, virt)...)
+	args = append(args, displayArgs(virt)...)
 	args = append(args, audioArgs(cfg.AudioMeta)...)
 	return args
 }
@@ -127,14 +139,14 @@ func diskArgs(layout Layout, devices schema.VMDevices) []string {
 // with no host interface to attach to and nothing inbound except the forwards asked for.
 // Each forward binds 127.0.0.1 rather than every interface, so a forwarded guest port
 // reaches the host that started it and not the LAN.
-func netArgs(forwards []schema.PortForward, devices schema.VMDevices) []string {
+func netArgs(appName string, virt schema.VirtualizationMeta) []string {
 	netdev := "user,id=net0"
-	for _, forward := range forwards {
+	for _, forward := range virt.ForwardPorts {
 		netdev += fmt.Sprintf(",hostfwd=tcp:127.0.0.1:%d-:%d", forward.HostPort, forward.GuestPort)
 	}
 	return []string{
 		"-netdev", netdev,
-		"-device", netDeviceFor(devices),
+		"-device", netDeviceFor(virt.Devices) + ",mac=" + macFor(appName, virt.MacAddress),
 	}
 }
 
@@ -142,12 +154,13 @@ func netArgs(forwards []schema.PortForward, devices schema.VMDevices) []string {
 // virtio-gpu-gl renders guest 3D on the host GPU and hands the result to the compositor
 // as a dmabuf, so frames never leave the machine and never get encoded - the difference
 // between a playable game and a slideshow.
-func displayArgs(mode schema.VMDisplay, vulkan bool, devices schema.VMDevices) []string {
+func displayArgs(virt schema.VirtualizationMeta) []string {
+	mode, vulkan, devices := virt.Display, virt.Vulkan, virt.Devices
 	switch mode {
 	case schema.VMDisplayCompatible:
 		// Plain VGA: no acceleration at all, and the only thing a guest without a virtio-gpu
 		// driver can put on screen - which on this hardware means Windows.
-		return append(inputArgsFor(devices), "-device", "VGA,vgamem_mb=64", "-display", "gtk")
+		return append(inputArgsFor(devices), "-device", compatibleDisplayDevice(virt), "-display", "gtk")
 	case schema.VMDisplayAccelerated:
 		// virtio-gpu-gl gives the guest OpenGL through virgl either way. venus adds Vulkan,
 		// and needs blob resources plus a host memory window to share buffers through -

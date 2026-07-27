@@ -25,6 +25,48 @@ tracked in [RELEASES.md](RELEASES.md).
   when a TPM guest can only get the legacy build. Variable stores are not interchangeable
   between the two generations, so one written by the other build is refused by name rather
   than handed to qemu, which would boot it with a quietly wrong Secure Boot state.
+- **Every VM app gets its own machine identity.** qemu with no `-uuid` reports the SMBIOS UUID
+  `00000000-0000-0000-0000-000000000000` and gives the NIC the MAC `52:54:00:12:34:56`, both
+  shared with every other default qemu VM. Windows Autopilot identifies a device by a hash
+  over exactly those fields, so a guest with the defaults can match a stranger's corporate
+  enrolment: a fresh Windows 11 install here reached OOBE demanding a sign-in to SAP's tenant,
+  branded with their logo. Both are now derived from the app name, so they are unique per app
+  and stable across restarts and resets - a changing UUID would make Windows think the
+  hardware had been swapped and ask to be reactivated. An install has no app yet and runs
+  under a fixed placeholder name, so it seeds its identity from the disk's own path instead:
+  deriving from the placeholder would have given every install on every host the same UUID,
+  which is the collision this exists to prevent, at the one moment it matters most - OOBE runs
+  during an install, and OOBE is what reads it.
+- **A fixed guest screen size** - `DisplayWidth`/`DisplayHeight`, `zc new --resolution WxH`,
+  `zvr install --resolution WxH`. A guest with no display driver takes whatever mode the
+  firmware gave it at boot and cannot change it, so `Display: Compatible` was always exactly
+  1280x800 and resizing the window only scaled those pixels. That number comes from plain
+  VGA's built-in EDID; the device has no resolution property at all. Asking for a size
+  switches the guest to `bochs-display`, which the firmware does honour (measured: Windows
+  Setup rendering at a true 1920x1080). `virtio-vga` and `qxl-vga` accept the same properties
+  but are not used, because OVMF drives their VGA-compatible half and falls back to 1280x800.
+  The one cost is that `bochs-display` has no VGA-compatible mode, so a fixed size requires
+  UEFI; validation refuses the pairing rather than letting a BIOS guest boot to a blank
+  window, and a guest that asks for nothing keeps plain VGA exactly as before.
+  Sizes up to 3840x2400 work, 4K included. Getting there needed two more things, because the
+  display's own defaults break down above about 3200x1800 and both failures are silent - the
+  guest simply comes up at 1280x800 with nothing logged. Its framebuffer is now sized to the
+  screen (the 16 MiB default is less memory than a 4K screen needs), and the generated EDID's
+  refresh rate is lowered just enough for the mode to exist: that rate multiplies a pixel
+  clock stored in 16 bits, and at QEMU's default 75 Hz a 4K clock overflows the field. The
+  rate is close to cosmetic for a guest, whose framebuffer is virtual and whose presentation
+  the host compositor drives. Above that, the EDID's active-pixel fields are 12 bits wide, so
+  neither side may exceed 4095: 3840x2400 is fine and 4096x2160 is not. Validation refuses
+  what cannot work rather than letting it fall back without a word.
+- **`MacAddress` / `zc new --mac`** to set the guest NIC's address. The derived default sits
+  under QEMU's own `52:54:00` prefix, which says plainly that the machine is a QEMU guest; an
+  app that should not announce that can supply its own. A locally-administered address (first
+  octet `02`, `06`, `0a` or `0e`) belongs to no vendor and so identifies nothing. The value is
+  screened before it reaches qemu, where a comma would start a new device property.
+  `--mac random` draws one instead of making you invent it. It is drawn once, at authoring
+  time, and the literal address is written into the config: a config that said "random" would
+  draw a new address on every run, and a guest whose NIC changes underneath it loses its DHCP
+  lease and looks to Windows like swapped hardware.
 - **`zvr install`** - runs an OS installer to produce a base disk, for guests that have no
   cloud image. It takes flags rather than an app name deliberately: an app pins its base by
   digest and a disk that does not exist yet has no digest, so requiring one would be a
@@ -41,8 +83,20 @@ tracked in [RELEASES.md](RELEASES.md).
 ### Known limitations
 
 - **Windows guests get no 3D acceleration.** There is no virtio-gpu driver for Windows, so
-  they run on plain VGA; passthrough, the usual answer, needs a second GPU. Windows guests
-  are for software that must run on Windows, not for games.
+  they run on an unaccelerated framebuffer; passthrough, the usual answer, needs a second GPU.
+  Windows guests are for software that must run on Windows, not for games.
+- **A guest's screen size is fixed at boot.** Resizing the window scales those pixels rather
+  than changing the guest's resolution, because a guest with no display driver cannot be told
+  about a new mode. Making the window resize the guest needs a real driver inside it
+  (`viogpudo` from virtio-win, or QXL).
+- **An installed Windows desktop caps its width at 1728**, whatever it is given. Measured on a
+  Windows 11 24H2 guest with no display driver: asked for 1920x1080, 1920x1200 and 1920x1024
+  it painted 1728 columns and left the rest black, and at 1728x1080 it filled the screen
+  exactly. Height is honoured throughout, and the cap is on width rather than framebuffer
+  bytes - 1920x1024 is smaller than 1728x1080 and still got clipped. Windows Setup itself is
+  not affected and uses whatever mode it is given, so this is the installed desktop's own
+  behaviour. Until a guest display driver is installed, a Windows app is best authored at
+  `--resolution 1728x1080`, which is the same usable desktop with no wasted black.
 
 ## [0.5.0] - 2026-07-26
 

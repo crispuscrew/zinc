@@ -361,8 +361,9 @@ func TestArgs_WindowsClassMachine(t *testing.T) {
 
 	// Devices an installer without virtio drivers can actually see.
 	devices := pairs(args, "-device")
+	// Prefixes, not exact matches: the NIC also carries this app's own MAC.
 	for _, want := range []string{"ahci,id=ahci", "e1000e,netdev=net0", "usb-tablet,bus=usb.0"} {
-		if !has(devices, want) {
+		if !hasPrefix(devices, want) {
 			t.Errorf("a compatible-devices guest needs %q, got %v", want, devices)
 		}
 	}
@@ -403,7 +404,7 @@ func TestArgs_LinuxGuestUnchangedByWindowsSupport(t *testing.T) {
 	if got := pairs(args, "-rtc"); len(got) != 1 || got[0] != "base=utc" {
 		t.Errorf("-rtc = %v, want base=utc for a virtio guest", got)
 	}
-	if !has(pairs(args, "-device"), "virtio-net-pci,netdev=net0") {
+	if !hasPrefix(pairs(args, "-device"), "virtio-net-pci,netdev=net0") {
 		t.Error("a virtio guest should keep its virtio NIC")
 	}
 }
@@ -552,5 +553,182 @@ func TestFirmwareArgs_CarriesTheImageFormat(t *testing.T) {
 		if !strings.Contains(drive, "format=raw") {
 			t.Errorf("with no format set, pflash drive %q should default to raw", drive)
 		}
+	}
+}
+
+// Without -uuid every qemu guest reports the SMBIOS UUID 00000000-0000-0000-0000-000000000000
+// and the default NIC carries 52:54:00:12:34:56, both shared with every other default qemu VM.
+// Windows Autopilot identifies a device by a hash over exactly those fields, so a guest with
+// the defaults can match a stranger's corporate enrolment and come up at OOBE demanding a
+// sign-in to their tenant. One did: a fresh Windows 11 install landed on an SAP sign-in page.
+func TestArgs_GuestsGetTheirOwnMachineIdentity(t *testing.T) {
+	cfg := testCfg()
+	cfg.AppNameID = "first-vm"
+	first := Args(cfg, testLayout())
+
+	cfg.AppNameID = "second-vm"
+	second := Args(cfg, testLayout())
+
+	uuidOf := func(args []string) string {
+		got := pairs(args, "-uuid")
+		if len(got) != 1 {
+			t.Fatalf("-uuid = %v, want exactly one", got)
+		}
+		return got[0]
+	}
+	firstUUID, secondUUID := uuidOf(first), uuidOf(second)
+
+	if firstUUID == "00000000-0000-0000-0000-000000000000" {
+		t.Error("the guest got qemu's default all-zero SMBIOS UUID, which every default VM shares")
+	}
+	if firstUUID == secondUUID {
+		t.Errorf("two apps share the UUID %s; each app is a different machine", firstUUID)
+	}
+	// Stable across runs: Windows treats a machine whose UUID changed as different hardware
+	// and asks to be reactivated, so this must not be randomised.
+	cfg.AppNameID = "first-vm"
+	if again := uuidOf(Args(cfg, testLayout())); again != firstUUID {
+		t.Errorf("the same app got %s then %s; the identity has to survive a restart", firstUUID, again)
+	}
+
+	// The NIC feeds the same hardware hash, so it cannot stay on qemu's shared default.
+	nic := ""
+	for _, device := range pairs(first, "-device") {
+		if strings.Contains(device, "netdev=net0") {
+			nic = device
+		}
+	}
+	if !strings.Contains(nic, "mac=") {
+		t.Errorf("NIC %q should carry a per-app MAC, not qemu's shared default", nic)
+	}
+	if strings.Contains(nic, "mac=52:54:00:12:34:56") {
+		t.Errorf("NIC %q kept qemu's default MAC", nic)
+	}
+	if macFor("first-vm", "") == macFor("second-vm", "") {
+		t.Error("two apps derived the same MAC")
+	}
+}
+
+// hasPrefix is has() for arguments that carry per-app suffixes, such as the NIC's MAC.
+func hasPrefix(values []string, prefix string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// A guest whose NIC sits under QEMU's 52:54:00 prefix announces itself as a virtual machine
+// to anything that looks at the address. An app that must not can supply its own, and it has
+// to be used verbatim rather than mixed into the derivation.
+func TestArgs_MacAddressOverride(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.MacAddress = "02:1a:2b:3c:4d:5e"
+
+	nic := ""
+	for _, device := range pairs(Args(cfg, testLayout()), "-device") {
+		if strings.Contains(device, "netdev=net0") {
+			nic = device
+		}
+	}
+	if !strings.Contains(nic, "mac=02:1a:2b:3c:4d:5e") {
+		t.Errorf("NIC %q should carry the address the app asked for", nic)
+	}
+	if strings.Contains(nic, "52:54:00") {
+		t.Errorf("NIC %q still carries QEMU's prefix despite an override", nic)
+	}
+}
+
+// A guest with no display driver keeps whatever mode the firmware left it in, so its
+// resolution is fixed at boot and a window resize only scales those pixels. Plain VGA has no
+// xres/yres at all and its built-in EDID is 1280x800, which is why an unconfigured guest is
+// always exactly that. bochs-display takes a size and the firmware honours it; virtio-vga and
+// qxl-vga accept the properties but OVMF drives their VGA-compatible half and ignores them.
+func TestArgs_FixedGuestResolution(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Display = schema.VMDisplayCompatible
+	cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+	cfg.VirtualizationMeta.Firmware = schema.VMFirmwareUEFI
+	cfg.VirtualizationMeta.DisplayWidth = 1920
+	cfg.VirtualizationMeta.DisplayHeight = 1080
+
+	devices := pairs(Args(cfg, testLayout()), "-device")
+	if !hasPrefix(devices, "bochs-display,xres=1920,yres=1080") {
+		t.Errorf("a fixed size needs bochs-display, the only device the firmware takes a resolution from, got %v", devices)
+	}
+	if hasPrefix(devices, "VGA") {
+		t.Errorf("plain VGA cannot be given a resolution and should not be attached, got %v", devices)
+	}
+
+	// Asking for nothing must not change the machine: plain VGA is what a guest that never
+	// requested a size has always had, and it is the only one a BIOS guest can use.
+	cfg.VirtualizationMeta.DisplayWidth, cfg.VirtualizationMeta.DisplayHeight = 0, 0
+	if !hasPrefix(pairs(Args(cfg, testLayout()), "-device"), "VGA,vgamem_mb=64") {
+		t.Error("a guest with no fixed size should keep plain VGA")
+	}
+}
+
+// 4K needs more than the resolution: at the display's default 16 MiB it has less video memory
+// than its screen, and at QEMU's default 75 Hz its EDID pixel clock overflows a 16-bit field.
+// Either one alone drops the guest silently back to 1280x800, so both must be asked for.
+func TestArgs_FourKNeedsMemoryAndASlowerEdidClock(t *testing.T) {
+	cfg := testCfg()
+	cfg.VirtualizationMeta.Display = schema.VMDisplayCompatible
+	cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+	cfg.VirtualizationMeta.Firmware = schema.VMFirmwareUEFI
+	cfg.VirtualizationMeta.DisplayWidth = 3840
+	cfg.VirtualizationMeta.DisplayHeight = 2160
+
+	display := ""
+	for _, device := range pairs(Args(cfg, testLayout()), "-device") {
+		if strings.HasPrefix(device, "bochs-display") {
+			display = device
+		}
+	}
+	if display == "" {
+		t.Fatal("no bochs-display attached for a 4K guest")
+	}
+	if !strings.Contains(display, "xres=3840,yres=2160") {
+		t.Errorf("display %q should ask for 3840x2160", display)
+	}
+	// 3840*2160*4 is 31.6 MiB, so the 16 MiB default is not enough.
+	if !strings.Contains(display, "vgamem=33554432") {
+		t.Errorf("display %q should carry a framebuffer big enough for 4K", display)
+	}
+	if !strings.Contains(display, "refresh_rate=50000") {
+		t.Errorf("display %q should slow the EDID clock enough for 4K to fit its field", display)
+	}
+}
+
+// An install has no app yet, so it runs under a fixed placeholder name. Deriving the machine
+// identity from that name would give every install on every host the same UUID and MAC - the
+// collision the identity exists to prevent, at the one moment it matters most, because OOBE
+// runs during an install and is what reads them.
+func TestArgs_InstallIdentityIsNotSharedAcrossHosts(t *testing.T) {
+	cfg := testCfg()
+	cfg.AppNameID = "install"
+
+	byName := pairs(Args(cfg, testLayout()), "-uuid")
+
+	layout := testLayout()
+	layout.Identity = "/home/someone/.local/share/zinc/images/win11.qcow2"
+	seeded := pairs(Args(cfg, layout), "-uuid")
+
+	if len(byName) != 1 || len(seeded) != 1 {
+		t.Fatalf("want one -uuid each, got %v and %v", byName, seeded)
+	}
+	if byName[0] == seeded[0] {
+		t.Error("the identity seed was ignored; every install would share one machine identity")
+	}
+
+	other := testLayout()
+	other.Identity = "/home/nobody/images/win11.qcow2"
+	if same := pairs(Args(cfg, other), "-uuid"); same[0] == seeded[0] {
+		t.Error("two different disks produced the same identity")
+	}
+	// Deterministic: resuming a half-finished install must not change the hardware under it.
+	if again := pairs(Args(cfg, layout), "-uuid"); again[0] != seeded[0] {
+		t.Error("the same disk produced a different identity on a second run")
 	}
 }

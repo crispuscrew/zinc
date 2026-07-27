@@ -1,6 +1,8 @@
 package qemu
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"strconv"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
@@ -12,6 +14,77 @@ import (
 // nor a virtio NIC - pointed at one it reports finding no drives at all. So these are
 // separate, explicit fields rather than a "Windows" preset: the config says what the
 // machine has, and the guest either drives it or does not.
+
+// identityArgs gives the guest a machine identity of its own. Without -uuid every qemu
+// guest reports the SMBIOS UUID 00000000-0000-0000-0000-000000000000, and the default NIC
+// carries the MAC 52:54:00:12:34:56 - values shared with every other default qemu VM in the
+// world. That is not a cosmetic detail: Windows Autopilot identifies a device by a hash
+// built from exactly these fields, so a freshly installed guest can match a stranger's
+// corporate enrolment and come up at OOBE demanding a sign-in to their tenant, branded with
+// their logo. Observed here: a Windows 11 install landed on an SAP sign-in page.
+//
+// The identity is derived from the app name rather than randomised, so it survives a reset
+// and a reinstall. Windows treats a machine whose UUID changed as different hardware and
+// wants reactivating, which a randomised value would trigger on every boot.
+func identityArgs(appName string) []string {
+	sum := sha256.Sum256([]byte("zinc/vm/" + appName))
+
+	// RFC 4122 layout: version 4 in the high nibble of byte 6, variant 10 in byte 8. The
+	// bytes are a hash rather than random, but the shape has to be a well-formed UUID for
+	// firmware and guests to accept it.
+	var uuid [16]byte
+	copy(uuid[:], sum[:16])
+	uuid[6] = (uuid[6] & 0x0f) | 0x40
+	uuid[8] = (uuid[8] & 0x3f) | 0x80
+
+	return []string{"-uuid", fmt.Sprintf("%x-%x-%x-%x-%x",
+		uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])}
+}
+
+// macFor picks this app's NIC address. An override is used verbatim - validation has already
+// screened it - so an app that must not look like a QEMU guest can present something else.
+// Otherwise the address is derived under 52:54:00, QEMU's own assigned OUI, which keeps it
+// recognisably a virtual machine's while making the host part per-app; the same shape libvirt
+// uses.
+func macFor(appName, override string) string {
+	if override != "" {
+		return override
+	}
+	sum := sha256.Sum256([]byte("zinc/vm/mac/" + appName))
+	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
+}
+
+// compatibleDisplayDevice picks the graphics for a guest with no display driver of its own.
+// Such a guest keeps whatever mode the firmware left it in, so the resolution is decided here
+// and never changes: resizing the window only scales those pixels.
+//
+// Plain VGA cannot be told a resolution - it has no xres/yres, and its built-in EDID is
+// 1280x800, which is why an unconfigured guest is always exactly that size. bochs-display
+// takes one and the firmware honours it. virtio-vga and qxl-vga accept the same properties
+// but are no use here, because OVMF drives their VGA-compatible half and settles back to
+// 1280x800.
+//
+// The framebuffer size and EDID refresh rate come with the mode, and both are load-bearing:
+// left at the device's defaults a 4K guest has less video memory than its screen needs AND an
+// EDID pixel clock that overflows its own field, and either one alone drops it silently back
+// to 1280x800.
+//
+// The cost is that bochs-display has no VGA compatibility at all, so a BIOS guest given it
+// gets no picture. Validation requires UEFI alongside a fixed size; this keeps VGA for
+// everyone who did not ask for one.
+func compatibleDisplayDevice(virt schema.VirtualizationMeta) string {
+	if virt.Firmware != schema.VMFirmwareUEFI {
+		return "VGA,vgamem_mb=64"
+	}
+	mode, ok := schema.GuestDisplay(virt.DisplayWidth, virt.DisplayHeight)
+	if !ok {
+		// Unset, or a size validation would have refused. Either way plain VGA is what a
+		// guest that never asked for one has always had.
+		return "VGA,vgamem_mb=64"
+	}
+	return fmt.Sprintf("bochs-display,xres=%d,yres=%d,vgamem=%d,refresh_rate=%d",
+		virt.DisplayWidth, virt.DisplayHeight, mode.VideoMemBytes, mode.RefreshMilliHz)
+}
 
 // machineType builds the -machine argument. Secure Boot needs SMM: the firmware keeps its
 // signature database in memory that only System Management Mode may write, and without SMM

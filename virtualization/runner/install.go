@@ -37,7 +37,10 @@ const installUsage = `usage: zvr install --disk PATH --media ISO [--media ISO]..
   --secure-boot      enable UEFI Secure Boot (Windows 11 expects it)
   --tpm              attach an emulated TPM 2.0 (Windows 11 requires one)
   --devices D        Virtio or Compatible (default Compatible, which is what an
-                     installer without virtio drivers can actually see)`
+                     installer without virtio drivers can actually see)
+  --resolution WxH   fixed guest screen size, e.g. 1920x1080. A guest with no display
+                     driver keeps whatever the firmware gave it, which is 1280x800
+                     unless this says otherwise. Needs UEFI.`
 
 type mediaList []string
 
@@ -57,6 +60,7 @@ func cmdInstall(argv []string) error {
 	secureBoot := fset.Bool("secure-boot", false, "enable UEFI Secure Boot")
 	tpm := fset.Bool("tpm", false, "attach an emulated TPM 2.0")
 	devices := fset.String("devices", string(schema.VMDevicesCompatible), "Virtio or Compatible")
+	resolution := fset.String("resolution", "", "fixed guest screen size as WxH, e.g. 1920x1080 (UEFI only)")
 	var media mediaList
 	fset.Var(&media, "media", "installer ISO (repeatable)")
 	if err := fset.Parse(argv); err != nil {
@@ -65,6 +69,26 @@ func cmdInstall(argv []string) error {
 	if *disk == "" || len(media) == 0 {
 		return fmt.Errorf("%s", installUsage)
 	}
+	width, height, err := parseResolution(*resolution)
+	if err != nil {
+		return err
+	}
+	// `zvr install` builds its config by hand rather than loading a saved app, so nothing
+	// has validated this pairing. The device that carries a fixed size has no
+	// BIOS-compatible mode, so under BIOS the flag would be quietly dropped - and a flag
+	// that looks accepted and changes nothing is the trap this project refuses elsewhere.
+	if width > 0 {
+		if schema.VMFirmware(*firmwareKind) != schema.VMFirmwareUEFI {
+			return fmt.Errorf("--resolution needs --firmware %s: the display device that carries a fixed size has no BIOS-compatible mode",
+				schema.VMFirmwareUEFI)
+		}
+		if _, ok := schema.GuestDisplay(width, height); !ok {
+			return fmt.Errorf("--resolution %dx%d: too large for the guest's display to describe "+
+				"(neither side may exceed %d, and the total is bounded by the EDID pixel clock); "+
+				"3840x2160 works, 4096x2160 does not", width, height, schema.GuestDisplayMaxPixels)
+		}
+	}
+
 	diskPath, err := filepath.Abs(*disk)
 	if err != nil {
 		return err
@@ -102,14 +126,16 @@ func cmdInstall(argv []string) error {
 		Type:          schema.ZincVirtualization,
 		AppNameID:     "install",
 		VirtualizationMeta: schema.VirtualizationMeta{
-			MemoryMiB:    *memory,
-			VCPUs:        *vcpus,
-			Display:      schema.VMDisplayCompatible,
-			Firmware:     schema.VMFirmware(*firmwareKind),
-			SecureBoot:   *secureBoot,
-			TPM:          *tpm,
-			Devices:      schema.VMDevices(*devices),
-			InstallMedia: media,
+			MemoryMiB:     *memory,
+			VCPUs:         *vcpus,
+			Display:       schema.VMDisplayCompatible,
+			DisplayWidth:  width,
+			DisplayHeight: height,
+			Firmware:      schema.VMFirmware(*firmwareKind),
+			SecureBoot:    *secureBoot,
+			TPM:           *tpm,
+			Devices:       schema.VMDevices(*devices),
+			InstallMedia:  media,
 		},
 	}
 
@@ -140,6 +166,9 @@ func cmdInstall(argv []string) error {
 	fmt.Printf("  zc new <name> --vm --image %s \\\n", diskPath)
 	fmt.Printf("      --base-digest %s \\\n", digest)
 	fmt.Printf("      --memory %d --vcpus %d --devices %s --display Compatible", *memory, *vcpus, *devices)
+	if width > 0 {
+		fmt.Printf(" \\\n      --resolution %dx%d", width, height)
+	}
 	if *firmwareKind == string(schema.VMFirmwareUEFI) {
 		fmt.Print(" --firmware UEFI")
 	}
@@ -178,6 +207,10 @@ func installLayout(cfg schema.AppConfig, diskPath string) (qemu.Layout, func(), 
 		QMP:        layout.QMP(name),
 		Serial:     layout.Serial(name),
 		Installing: true,
+		// The disk's own path, not the placeholder app name: it is unique to this host, so
+		// the guest gets a machine identity no other install shares. Deterministic, so
+		// resuming a half-finished install does not change the hardware under it.
+		Identity: diskPath,
 	}
 
 	// The install's own variables live beside the disk it is creating, which is where a
@@ -208,4 +241,25 @@ func installedDigest(diskPath string) (string, error) {
 		return "", fmt.Errorf("hash the installed disk: %w", err)
 	}
 	return digest, nil
+}
+
+// parseResolution reads a "WxH" screen size. One flag rather than two: a width without a
+// height is not a screen.
+func parseResolution(spec string) (int, int, error) {
+	if strings.TrimSpace(spec) == "" {
+		return 0, 0, nil
+	}
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(spec)), "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("--resolution %q: want WxH, e.g. 1920x1080", spec)
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("--resolution %q: width %q is not a number", spec, parts[0])
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("--resolution %q: height %q is not a number", spec, parts[1])
+	}
+	return width, height, nil
 }

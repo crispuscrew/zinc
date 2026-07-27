@@ -26,6 +26,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"os"
@@ -53,6 +54,7 @@ const usage = `usage: zc <command> [args]
              [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
              [--firmware UEFI] [--secure-boot] [--tpm] [--devices Compatible] [--vulkan]
+             [--resolution WxH] [--mac ADDR]
   list
   validate <name|app.yaml>
   delete <name>
@@ -193,6 +195,8 @@ func cmdNew(svc backend.Service, argv []string) error {
 	tpmFlag := fset.Bool("tpm", false, "VM only: attach an emulated TPM 2.0 (Windows 11 requires one)")
 	devices := fset.String("devices", "", "VM only: Virtio (default) or Compatible (for guests without virtio drivers, e.g. Windows)")
 	vulkan := fset.Bool("vulkan", false, "VM only: pass guest Vulkan through to the host GPU (needs a venus-capable virglrenderer; disables qemu's sandbox for this app)")
+	resolution := fset.String("resolution", "", "VM only: fixed guest screen size as WxH (e.g. 1920x1080); for --display Compatible, whose guest has no driver to resize itself")
+	mac := fset.String("mac", "", "VM only: guest NIC address, or \"random\"; the default is derived per-app under QEMU's 52:54:00 prefix, so set this to present something that names no vendor")
 	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
 	if err := fset.Parse(flags); err != nil {
 		return err
@@ -224,19 +228,30 @@ func cmdNew(svc backend.Service, argv []string) error {
 		if ferr != nil {
 			return ferr
 		}
+		width, height, rerr := parseResolution(*resolution)
+		if rerr != nil {
+			return rerr
+		}
+		macAddress, merr := resolveMac(*mac)
+		if merr != nil {
+			return merr
+		}
 		cfg.VirtualizationMeta = schema.VirtualizationMeta{
-			BaseDigest:   *digest,
-			MemoryMiB:    *memory,
-			VCPUs:        *vcpus,
-			DiskSizeGiB:  *diskSize,
-			Display:      schema.VMDisplay(*display),
-			Vulkan:       *vulkan,
-			Firmware:     schema.VMFirmware(*firmware),
-			SecureBoot:   *secureBoot,
-			TPM:          *tpmFlag,
-			Devices:      schema.VMDevices(*devices),
-			ForwardPorts: forwards,
-			CloudInit:    schema.CloudInit{UserName: *ciUser, SSHKeyPath: *ciKey},
+			BaseDigest:    *digest,
+			MemoryMiB:     *memory,
+			VCPUs:         *vcpus,
+			DiskSizeGiB:   *diskSize,
+			Display:       schema.VMDisplay(*display),
+			DisplayWidth:  width,
+			DisplayHeight: height,
+			MacAddress:    macAddress,
+			Vulkan:        *vulkan,
+			Firmware:      schema.VMFirmware(*firmware),
+			SecureBoot:    *secureBoot,
+			TPM:           *tpmFlag,
+			Devices:       schema.VMDevices(*devices),
+			ForwardPorts:  forwards,
+			CloudInit:     schema.CloudInit{UserName: *ciUser, SSHKeyPath: *ciKey},
 		}
 	} else if vmFlagUsed(fset) {
 		// Silently ignoring these would write a container app that looks configured for a
@@ -289,7 +304,7 @@ func vmFlagUsed(fset *flag.FlagSet) bool {
 	used := false
 	fset.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward", "vulkan", "firmware", "secure-boot", "tpm", "devices":
+		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward", "vulkan", "firmware", "secure-boot", "tpm", "devices", "resolution", "mac":
 			used = true
 		}
 	})
@@ -512,4 +527,46 @@ func traitLabel(cfg schema.AppConfig) string {
 		return fmt.Sprintf("%dM/%dcpu", cfg.VirtualizationMeta.MemoryMiB, cfg.VirtualizationMeta.VCPUs)
 	}
 	return netLabel(cfg)
+}
+
+// parseResolution reads a "WxH" screen size. It is one flag rather than two because a width
+// without a height is not a screen, and a single value cannot be given by accident.
+func parseResolution(spec string) (int, int, error) {
+	if strings.TrimSpace(spec) == "" {
+		return 0, 0, nil
+	}
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(spec)), "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("--resolution %q: want WxH, e.g. 1920x1080", spec)
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("--resolution %q: width %q is not a number", spec, parts[0])
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("--resolution %q: height %q is not a number", spec, parts[1])
+	}
+	return width, height, nil
+}
+
+// resolveMac turns --mac into the address to store. "random" is drawn once, here, and the
+// literal result is written into the config: a config that said "random" would draw a new
+// address on every run, and a guest whose NIC changes underneath it loses its DHCP lease and
+// looks to Windows like swapped hardware.
+//
+// The address is locally administered (bit 1 of the first octet) and unicast (bit 0 clear),
+// which is the range set aside for exactly this - it belongs to no vendor, so unlike the
+// default it identifies nothing at all.
+func resolveMac(flag string) (string, error) {
+	if !strings.EqualFold(strings.TrimSpace(flag), "random") {
+		return flag, nil
+	}
+	var octets [6]byte
+	if _, err := rand.Read(octets[:]); err != nil {
+		return "", fmt.Errorf("draw a random MAC address: %w", err)
+	}
+	octets[0] = (octets[0] | 0x02) &^ 0x01
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x",
+		octets[0], octets[1], octets[2], octets[3], octets[4], octets[5]), nil
 }

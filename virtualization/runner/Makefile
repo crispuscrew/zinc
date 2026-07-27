@@ -88,6 +88,9 @@ WIN_DISK    ?= $(IMAGE_DIR)/$(WIN_APP).qcow2
 WIN_SIZE    ?= 64
 WIN_MEMORY  ?= 8192
 WIN_VCPUS   ?= 4
+# A guest with no display driver keeps whatever mode the firmware gave it, and left alone
+# that is 1280x800 for the whole life of the app. Set WIN_RES= (empty) to leave it there.
+WIN_RES     ?= 1920x1080
 VIRTIO_WIN  := $(IMAGE_DIR)/virtio-win.iso
 VIRTIO_URL  := https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
 
@@ -128,7 +131,7 @@ windows-demo: build
 
 	@echo
 	@echo "Starting Windows Setup in a qemu window: UEFI + Secure Boot + TPM 2.0,"
-	@echo "$(WIN_MEMORY) MiB, $(WIN_VCPUS) vCPU, a $(WIN_SIZE) GiB disk."
+	@echo "$(WIN_MEMORY) MiB, $(WIN_VCPUS) vCPU, a $(WIN_SIZE) GiB disk$(if $(WIN_RES), at $(WIN_RES))."
 	@echo "Press a key at \"Press any key to boot from CD\" to start Setup. Windows reboots"
 	@echo "itself partway through - that reboot goes to the disk on its own, so leave it be."
 	@echo "When the install finishes, shut the guest down from inside Windows."
@@ -136,6 +139,7 @@ windows-demo: build
 	./bin/zvr install --disk "$(WIN_DISK)" --size $(WIN_SIZE) \
 		--media "$(WIN_ISO)" $$(test -z "$(SKIP_DRIVERS)" && $(MAKE) --no-print-directory check-virtio-win >/dev/null 2>&1 && echo --media "$(VIRTIO_WIN)") \
 		--firmware UEFI --secure-boot --tpm \
+		$(if $(WIN_RES),--resolution $(WIN_RES)) \
 		--memory $(WIN_MEMORY) --vcpus $(WIN_VCPUS)
 	@echo "=== authoring $(WIN_APP) against the installed disk ==="
 	@$(ZC) delete $(WIN_APP) >/dev/null 2>&1 || true
@@ -145,6 +149,7 @@ windows-demo: build
 		--memory $(WIN_MEMORY) --vcpus $(WIN_VCPUS) \
 		--display Compatible --devices Compatible \
 		--firmware UEFI --secure-boot --tpm \
+		$(if $(WIN_RES),--resolution $(WIN_RES)) \
 		--desc "Windows guest installed by windows-demo"
 	@echo
 	@echo "Done. The installed disk is now this app's pinned base, so:"
@@ -153,6 +158,9 @@ windows-demo: build
 	@echo
 	@echo "No 3D acceleration: Windows has no virtio-gpu driver and passthrough needs a"
 	@echo "second GPU, so this is for software that must run on Windows, not for games."
+	@echo "Its screen is fixed at $(if $(WIN_RES),$(WIN_RES),1280x800) - a guest with no display driver cannot be"
+	@echo "told about a new mode, so resizing the window scales those pixels. Re-author with"
+	@echo "a different --resolution to change it (up to 3840x2400; the install stays)."
 
 
 ## virtio-win: fetch the driver ISO on its own (optional; only needed to switch a guest to virtio)

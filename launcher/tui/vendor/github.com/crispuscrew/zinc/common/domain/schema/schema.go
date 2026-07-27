@@ -102,6 +102,14 @@ type VirtualizationMeta struct {
 
 	Display VMDisplay `yaml:"Display"`
 
+	// DisplayWidth and DisplayHeight fix the guest's screen size. Both zero leaves it to
+	// the firmware, which settles on 1280x800 and stays there: a guest with no graphics
+	// driver takes the resolution UEFI hands it at boot and cannot change it afterwards,
+	// so resizing the window just scales those pixels. Setting them is what makes a
+	// driverless guest, Windows above all, come up at a usable size.
+	DisplayWidth  int `yaml:"DisplayWidth"`
+	DisplayHeight int `yaml:"DisplayHeight"`
+
 	// Vulkan passes the guest's Vulkan calls through to the host GPU (qemu's venus). It is
 	// off by default and must be asked for, because it costs real things: qemu's own seccomp
 	// sandbox has to be disabled (the venus renderer runs in a helper process that the
@@ -134,6 +142,13 @@ type VirtualizationMeta struct {
 	// a VM app is limited to these explicit forwards.
 	ForwardPorts []PortForward `yaml:"ForwardPorts"`
 
+	// MacAddress overrides the guest NIC's address. Left empty, Zinc derives one from the
+	// app name under QEMU's own 52:54:00 prefix, which is unique per app but says plainly
+	// that the machine is a QEMU guest. Set this to present something else - a
+	// locally-administered address (first octet 02, 06, 0a or 0e) belongs to no vendor and
+	// so identifies nothing.
+	MacAddress string `yaml:"MacAddress"`
+
 	CloudInit CloudInit `yaml:"CloudInit"`
 }
 
@@ -142,10 +157,10 @@ type VirtualizationMeta struct {
 func (virt VirtualizationMeta) IsZero() bool {
 	return virt.BaseDigest == "" &&
 		virt.DiskSizeGiB == 0 && virt.MemoryMiB == 0 && virt.VCPUs == 0 &&
-		virt.Display == "" && !virt.Vulkan &&
+		virt.Display == "" && virt.DisplayWidth == 0 && virt.DisplayHeight == 0 && !virt.Vulkan &&
 		virt.Firmware == "" && !virt.SecureBoot && !virt.TPM &&
 		virt.Devices == "" && len(virt.InstallMedia) == 0 &&
-		len(virt.ForwardPorts) == 0 &&
+		len(virt.ForwardPorts) == 0 && virt.MacAddress == "" &&
 		virt.CloudInit == CloudInit{}
 }
 

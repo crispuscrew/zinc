@@ -299,3 +299,102 @@ func TestVM_VulkanWarnsAboutTheSandbox(t *testing.T) {
 		t.Error("an app without Vulkan should not carry that warning")
 	}
 }
+
+// A fixed guest screen size is only meaningful for the one display mode whose guest has no
+// driver to resize itself, and it rides on a device with no BIOS-compatible mode. Accepting
+// it anywhere else would write a config that looks configured and changes nothing, or one
+// that boots to a blank window.
+func TestVM_FixedResolutionNeedsCompatibleDisplayAndUEFI(t *testing.T) {
+	compatible := func() schema.AppConfig {
+		cfg := baseVM()
+		cfg.VirtualizationMeta.Display = schema.VMDisplayCompatible
+		cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+		cfg.VirtualizationMeta.Firmware = schema.VMFirmwareUEFI
+		return cfg
+	}
+
+	// Sizes measured against real firmware, not assumed: each of these was confirmed to
+	// come up at the size asked for, and 4096x2160 to fall back to 1280x800.
+	for _, size := range [][2]int{{1920, 1080}, {2560, 1440}, {3840, 2160}, {3840, 2400}} {
+		cfg := compatible()
+		cfg.VirtualizationMeta.DisplayWidth, cfg.VirtualizationMeta.DisplayHeight = size[0], size[1]
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("%dx%d on a Compatible UEFI guest should validate, got: %v", size[0], size[1], err)
+		}
+	}
+
+	cases := []struct {
+		name          string
+		width, height int
+		mutate        func(*schema.AppConfig)
+		want          string
+	}{
+		{"width with no height", 1920, 0, nil, "both or neither"},
+		{"height with no width", 0, 1080, nil, "both or neither"},
+		{"below the smallest real mode", 320, 200, nil, "at least"},
+		{"a mistyped extra digit", 19200, 10800, nil, "too large"},
+		{"wider than the EDID can describe", 4096, 2160, nil, "too large"},
+		{"an odd width", 1921, 1080, nil, "even"},
+		{"an accelerated guest resizes with its window", 1920, 1080,
+			func(cfg *schema.AppConfig) { cfg.VirtualizationMeta.Display = schema.VMDisplayAccelerated },
+			"Compatible"},
+		{"BIOS cannot drive the device that carries it", 1920, 1080,
+			func(cfg *schema.AppConfig) { cfg.VirtualizationMeta.Firmware = schema.VMFirmwareBIOS },
+			"UEFI"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := compatible()
+			cfg.VirtualizationMeta.DisplayWidth = tc.width
+			cfg.VirtualizationMeta.DisplayHeight = tc.height
+			if tc.mutate != nil {
+				tc.mutate(&cfg)
+			}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("%dx%d should be refused", tc.width, tc.height)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q should mention %q", err, tc.want)
+			}
+		})
+	}
+
+	// Unset stays unset: a guest that never asked for a size must not acquire one.
+	if err := Validate(compatible()); err != nil {
+		t.Errorf("no fixed size should still validate, got: %v", err)
+	}
+}
+
+// The NIC address goes onto a qemu -device argument, where a comma starts a new property and
+// a space splits the argument, so the value is screened rather than trusted.
+func TestVM_MacAddressScreened(t *testing.T) {
+	cfg := baseVM()
+	cfg.VirtualizationMeta.MacAddress = "02:1a:2b:3c:4d:5e"
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("a locally-administered unicast address should validate, got: %v", err)
+	}
+
+	cases := []struct{ name, mac, want string }{
+		{"too few octets", "02:1a:2b:3c:4d", "six"},
+		{"not hex", "02:1a:2b:3c:4d:zz", "hex"},
+		{"single-digit octet", "2:1a:2b:3c:4d:5e", "two hex digits"},
+		{"multicast", "01:1a:2b:3c:4d:5e", "multicast"},
+		{"all zero", "00:00:00:00:00:00", "all-zero"},
+		{"property injection", "02:1a:2b:3c:4d:5e,mac=de:ad:be:ef:00:01", "octet"},
+		{"argument split", "02 1a 2b 3c 4d 5e", "six"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseVM()
+			cfg.VirtualizationMeta.MacAddress = tc.mac
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("%q should be refused", tc.mac)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q should mention %q", err, tc.want)
+			}
+		})
+	}
+}

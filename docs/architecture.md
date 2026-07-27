@@ -693,7 +693,8 @@ spawning and scheduling changes).
 `VirtualizationMeta.Display` is explicit, never inferred: `Accelerated` attaches
 `virtio-gpu-gl` and a local window, so guest 3D runs on the host GPU and reaches the
 compositor as a dmabuf; `Window` is the same without acceleration; `None` is headless with a
-serial console. Accelerated 3D needs a guest with the virtio-gpu driver, which in practice
+serial console; `Compatible` is an unaccelerated framebuffer for a guest that has no
+virtio-gpu driver at all. Accelerated 3D needs a guest with that driver, which in practice
 means Linux.
 
 Two container mechanisms deliberately do **not** carry over, and are rejected rather than
@@ -711,6 +712,56 @@ approximated:
 A field that looks configured while doing nothing is worse than one that refuses to save,
 because the author believes in a boundary that is not there. This is the same principle as
 the network model rejecting what it cannot enforce.
+
+### 10.4 A Windows-class guest
+
+Windows is not Linux with a flag flipped. It needs a different machine, and the fields that
+describe it are separate and explicit rather than a "Windows" preset, so the config says what
+the machine has and the guest either drives it or does not.
+
+**Devices the guest has drivers for.** `Devices: Compatible` gives an AHCI disk, an Intel
+e1000e NIC and a USB tablet. Windows Setup ships drivers for none of the virtio hardware, and
+pointed at a virtio disk it reports finding no drives at all, so this is a property of the
+machine rather than a performance preference.
+
+**Firmware, and a failure that is nearly invisible.** Windows 11 requires UEFI, Secure Boot
+and a TPM 2.0. Secure Boot needs SMM: the firmware keeps its signature database in memory only
+System Management Mode may write, and without it OVMF runs but does not enforce anything, so
+the guest reports Secure Boot switched off. The TPM is swtpm over its **control** socket, not
+its data socket; pointed at the wrong one qemu blocks forever before it opens a window.
+
+The sharpest edge is which OVMF build is used. Distributions ship two generations side by
+side, and only the current 4 MB build carries the TPM driver. QEMU publishes the TPM's ACPI
+device itself, so on the legacy 2 MB build a guest still enumerates it and still binds a
+driver to it. Only Windows notices there is nothing behind it, and all it says is that the PC
+does not meet its requirements. Zinc prefers builds that hand the TPM over, warns when only a
+legacy one exists, and refuses a variable store written by the other generation rather than
+letting qemu boot a quietly wrong Secure Boot state.
+
+**A machine identity of its own.** Left alone, every qemu guest reports the SMBIOS UUID
+`00000000-0000-0000-0000-000000000000` and the MAC `52:54:00:12:34:56`. Windows Autopilot
+identifies a device by a hash over those fields, so a guest with the defaults can match a
+stranger's corporate enrolment and reach OOBE demanding a sign-in to their tenant. Both are
+derived from the app name: unique per app, and stable, because Windows treats a changed UUID
+as swapped hardware and asks to be reactivated. `MacAddress` overrides the NIC's address for a
+guest that should not announce itself as a QEMU machine at all.
+
+**A screen size fixed at boot.** A guest with no display driver takes the mode the firmware
+gave it and cannot be told about another, so the resolution is chosen once and resizing the
+window only scales those pixels. Plain VGA cannot be given one, which is why an unconfigured
+guest is always 1280x800. `DisplayWidth`/`DisplayHeight` switch it to a display the firmware
+does take a size from, along with a framebuffer sized to the screen and an EDID refresh rate
+low enough that the mode's pixel clock fits its own field. Every one of those limits fails the
+same silent way, by coming up at 1280x800 with nothing logged, so a size that cannot work is
+refused at validation instead.
+
+**Installation is how the base comes into being.** A guest with no cloud image is installed by
+`zvr install`, which takes flags rather than an app name on purpose: an app pins its base by
+digest, and a disk that does not exist yet has no digest. Install first, pin the result, then
+author the app against it. That keeps the rule that a pinned base is never written to intact.
+The install seeds its machine identity from the disk's own path, because it has no app name
+yet and a shared placeholder would give every install on every host the same identity at the
+one moment it matters most.
 
 ## 11. Host Surface (minimal)
 
