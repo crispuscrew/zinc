@@ -57,10 +57,14 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 // (a producer's self-scoped ingress, a consumer's egress naming its AppName - a private
 // interface-gated bridge). Rejected so a config is stopped at launch rather than silently
 // mis-enforced: a routing gateway (multi-homing), an ingress list that targets an AppName
-// (contradictory), host-scoped egress, and mixing tier-2 links with any other networking
-// (the coexisting-egress design is deferred).
+// (contradictory), and host-scoped egress.
+//
+// Links may now coexist with other networking on one app. They could not before, because
+// the ruleset was one kind or the other and whichever ran ignored the other kind of list
+// outright - a linked app's address rules simply vanished. The renderer gates both at once
+// now, so the combination is enforceable and no longer refused: a gateway app needs a link
+// AND real egress to be worth routing through.
 func checkNetwork(cfg schema.AppConfig) error {
-	tier2 := hasSiblingLink(cfg)
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		appName := strings.TrimSpace(netList.AppName)
 		switch {
@@ -72,9 +76,6 @@ func checkNetwork(cfg schema.AppConfig) error {
 			return fmt.Errorf("%s: NetworkLists[%d]: host-scoped egress is not supported in this build yet", cfg.AppNameID, index)
 		case isLinkList(netList) && netList.Blacklist:
 			return fmt.Errorf("%s: NetworkLists[%d]: a sibling link list cannot be a blacklist - its Ports are the allowed set and a blacklist would open them instead of gating them", cfg.AppNameID, index)
-		}
-		if tier2 && !isLinkList(netList) {
-			return fmt.Errorf("%s: NetworkLists[%d]: combining sibling links with other networking (egress rules or LAN publish) is not supported in this build yet", cfg.AppNameID, index)
 		}
 	}
 	return nil
@@ -88,15 +89,4 @@ func isLinkList(netList schema.NetworkList) bool {
 	producer := netList.Ingress && !netList.Host && appName == ""
 	consumer := !netList.Ingress && !netList.Host && appName != ""
 	return producer || consumer
-}
-
-// hasSiblingLink reports whether any list makes cfg a tier-2 participant (producer or
-// consumer), which requires the app to be link-only.
-func hasSiblingLink(cfg schema.AppConfig) bool {
-	for _, netList := range cfg.NetworkMeta.NetworkLists {
-		if isLinkList(netList) {
-			return true
-		}
-	}
-	return false
 }

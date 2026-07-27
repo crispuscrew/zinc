@@ -30,6 +30,21 @@ tracked in [RELEASES.md](RELEASES.md).
   existing: rootless podman needs cgroup v2 delegation for any of it to be real, and a host
   without it would grant nothing and say nothing.
 
+- **A sibling link may coexist with other networking on one app.** It could not before: the
+  ruleset was interface-gated or address-gated, never both, and whichever ran ignored the
+  other kind of list outright - so a linked app's egress rules simply vanished, which is why
+  the combination was rejected at launch rather than mis-enforced. The renderer now gates both
+  at once. This is the prerequisite for routing through a sibling: a gateway app has to serve
+  its siblings over a private link *and* reach the outside to be worth routing through.
+  Chain policy is taken from the non-link lists alone. A link list is structurally a whitelist,
+  so counting it would flip an app that pairs a link with an all-blacklist egress to
+  default-drop and silently deny everything the blacklist meant to leave open.
+  Such an app also cannot use pasta - podman refuses more than one network outside bridge mode
+  ("cannot set multiple networks without bridge network mode") - so it gets `zinc-egress-<app>`,
+  a routable bridge of its own. Its own, rather than the shared default one: apps on a single
+  bridge can reach each other over L2, which would leave isolation resting on the nft rules,
+  and an all-blacklist app runs default-accept. Link-only and ordinary apps are untouched.
+
 ### Changed
 
 - **`NotificationMeta` is refused instead of ignored.** Nothing in Zinc proxies, silences or

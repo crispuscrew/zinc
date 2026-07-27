@@ -188,16 +188,18 @@ func TestCheckNetwork_Tier2ConsumerAllowed(t *testing.T) {
 	}
 }
 
-// A tier-2 app may not also carry other networking - coexistence is deferred, fail closed.
-func TestCheckNetwork_Tier2MixRejected(t *testing.T) {
+// A tier-2 app may now also carry other networking. It could not before, because the
+// ruleset was one kind or the other and whichever ran ignored the other kind of list
+// outright. An app that serves siblings AND reaches the outside is the whole point of a
+// gateway, so refusing it refused the feature.
+func TestCheckNetwork_Tier2MayAlsoReachOut(t *testing.T) {
 	cfg := depApp("db")
 	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{
 		{Ingress: true, Ports: []int{5432}},
 		{IPv4CIDR: []string{"1.1.1.1/32"}, Ports: []int{443}},
 	}}
-	err := checkNetwork(cfg)
-	if err == nil || !strings.Contains(err.Error(), "not supported in this build yet") {
-		t.Fatalf("mixing links with other networking should fail closed, got: %v", err)
+	if err := checkNetwork(cfg); err != nil {
+		t.Fatalf("a link plus egress is enforceable now, got: %v", err)
 	}
 }
 

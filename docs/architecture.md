@@ -360,6 +360,17 @@ The producer accepts only its published `Ports` inbound on that link interface; 
 else default-drops. The consumer accepts nothing new inbound. The bridge is `--internal`, so
 neither app reaches anything else through it.
 
+**A linked app may also reach the outside.** One app is gated both ways at once: the `zlink*`
+bridges by interface, everything else by address and port. Chain policy comes from the
+non-link lists alone - a link list is structurally a whitelist, so counting it would flip an
+app that pairs a link with an all-blacklist egress to default-drop and silently deny what the
+blacklist meant to leave open. Such an app cannot use pasta: podman refuses more than one
+network unless it is in bridge mode, so it gets `zinc-egress-<app>` instead, a routable bridge
+of **its own**. Not the shared default bridge - apps on one bridge can reach each other over
+L2, which would leave isolation resting on the nft rules, and an app whose egress list is an
+all-blacklist runs default-accept. A link-only app is unchanged and stays on its private
+bridges alone.
+
 ### 6.3 The nftables ruleset
 
 The ruleset is a pure function of the validated config, rendered as `table inet zinc`. A
@@ -399,8 +410,6 @@ never silently mis-enforced. Rejected in this build:
   but a config using them is rejected.
 - **An ingress list that targets an `AppName`** - contradictory (a producer publishes to any
   sibling that joins its link; the consumer names the producer).
-- **Combining a sibling link with any other networking on the same app** - a tier-2 app must
-  be link-only for now.
 
 Also deferred at the mount layer: bundle-relative `Configs` mounts and anonymous/size-limited
 volumes; only explicit host bind mounts are wired (section 3).

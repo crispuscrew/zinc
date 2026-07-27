@@ -304,3 +304,104 @@ func assertContainsSeq(t *testing.T, args []string, first, second string) {
 	}
 	t.Fatalf("expected adjacent %q %q in %v", first, second, args)
 }
+
+// gatewayApp is the shape the whole vpn-routing feature is for: an app that serves its
+// siblings over a private link AND reaches the outside itself. Refused until now.
+func gatewayApp() schema.AppConfig {
+	cfg := pastaApp()
+	cfg.AppNameID = "vpn"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{
+		{Ingress: true, Ports: []int{1080}},                         // serves siblings on its link
+		{IPv4CIDR: []string{"203.0.113.7/32"}, Ports: []int{51820}}, // reaches its tunnel endpoint
+	}
+	return cfg
+}
+
+// One app, gated both ways at once: the private bridge by interface, the outside world by
+// address. Whichever ruleset ran before ignored the other kind of list outright, which is
+// why the combination was rejected rather than rendered.
+func TestNFTRuleset_LinkAndEgressTogether(t *testing.T) {
+	got := NFTRuleset(gatewayApp())
+
+	for _, want := range []string{
+		`oifname "zlink0" accept`,                                // the link, by interface
+		`ip daddr { 203.0.113.7/32 } tcp dport { 51820 } accept`, // the tunnel, by address
+		`iifname "zlink0" tcp dport { 1080 } accept`,             // siblings reaching its published port
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ruleset missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// The subtle one. A link list is structurally a whitelist, so folding it into the policy
+// decision would flip an app that pairs a link with an all-blacklist egress to default-drop
+// and silently deny everything the blacklist meant to leave open. Policy comes from the
+// non-link lists alone.
+func TestNFTRuleset_LinkDoesNotFlipABlacklistPolicy(t *testing.T) {
+	cfg := pastaApp()
+	cfg.AppNameID = "client"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{
+		{AppName: "vpn"}, // a link: always a whitelist
+		{Blacklist: true, IPv4CIDR: []string{"0.0.0.0/0"}, Ports: []int{53}}, // all but DNS
+	}
+	got := NFTRuleset(cfg)
+	if !strings.Contains(got, "hook output priority 0; policy accept;") {
+		t.Errorf("an all-blacklist egress must stay default-accept beside a link:\n%s", got)
+	}
+
+	// With no non-link egress at all, the app is link-only and default-drop as before.
+	linkOnly := pastaApp()
+	linkOnly.AppNameID = "client"
+	linkOnly.NetworkMeta.NetworkLists = []schema.NetworkList{{AppName: "vpn"}}
+	if !strings.Contains(NFTRuleset(linkOnly), "hook output priority 0; policy drop;") {
+		t.Error("a link-only app must stay default-drop")
+	}
+}
+
+// pasta cannot hold a second network - podman refuses outright - so an app with both gets a
+// bridge instead. Its OWN bridge: apps sharing one can reach each other over L2, which
+// would leave isolation resting on the nft rules, and an all-blacklist app runs
+// default-accept.
+func TestPodCreate_GatewayGetsItsOwnEgressBridge(t *testing.T) {
+	steps := Enforcer{}.Prepare(gatewayApp(), options.HostOptions{})
+
+	if !slices.Contains(steps[0].Args, "zinc-egress-vpn") {
+		t.Fatalf("the egress bridge should be created first, got %v", steps[0].Args)
+	}
+	if slices.Contains(steps[0].Args, "--internal") {
+		t.Error("the egress bridge is the way out and must not be --internal")
+	}
+
+	var podArgs []string
+	for _, step := range steps {
+		if slices.Contains(step.Args, "pod") {
+			podArgs = step.Args
+		}
+	}
+	if !slices.Contains(podArgs, "zinc-egress-vpn:interface_name=zegress0") {
+		t.Errorf("pod should attach its own egress bridge, got %v", podArgs)
+	}
+	if !slices.Contains(podArgs, "zinc-link-vpn:interface_name=zlink0,alias=vpn") {
+		t.Errorf("pod should still attach its link, got %v", podArgs)
+	}
+	if slices.Contains(podArgs, "pasta") {
+		t.Errorf("podman refuses pasta alongside a bridge, got %v", podArgs)
+	}
+}
+
+// A link-only app must not gain a bridge to the outside just because the combination is now
+// allowed - that would hand every existing tier-2 app egress it never asked for.
+func TestPodCreate_LinkOnlyAppGetsNoEgressBridge(t *testing.T) {
+	cfg := pastaApp()
+	cfg.AppNameID = "db"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
+
+	for _, step := range (Enforcer{}).Prepare(cfg, options.HostOptions{}) {
+		for _, arg := range step.Args {
+			if strings.Contains(arg, "zinc-egress-") {
+				t.Fatalf("a link-only app must stay on its private bridges alone, got %v", step.Args)
+			}
+		}
+	}
+}

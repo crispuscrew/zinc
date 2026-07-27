@@ -50,6 +50,15 @@ func PodName(app string) string { return app + "-pod" }
 // producer's. The name is deterministic so both sides agree without coordination.
 func LinkNetwork(producer string) string { return "zinc-link-" + producer }
 
+// EgressNetwork is an app's own bridge to the outside, used only when it has both sibling
+// links and networking that must leave them. One per app rather than the shared default
+// bridge, so two apps are never on the same L2 segment.
+func EgressNetwork(app string) string { return "zinc-egress-" + app }
+
+// egressIface is the fixed in-container name of that bridge, so the ruleset and the pod
+// attach agree on it the way they do for zlink0..N.
+const egressIface = "zegress0"
+
 // linkEntry is one bridge a tier-2 app attaches to, paired with the fixed in-container
 // interface name (zlink0, zlink1, ...) used both for `--network name:interface_name=` and
 // for the nft rules that gate that interface (validated: podman names it exactly that).
@@ -129,6 +138,13 @@ func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.C
 		image = DefaultNetfilterImage
 	}
 	var steps []ports.Command
+	if entries := links(cfg); len(entries) > 0 && needsOwnEgress(cfg) {
+		// Not --internal: this is the one bridge such an app reaches the outside through.
+		steps = append(steps, ports.Command{
+			Args: []string{"network", "create", "--ignore", EgressNetwork(cfg.AppNameID)},
+			Desc: "ensure egress network " + EgressNetwork(cfg.AppNameID),
+		})
+	}
 	for _, entry := range links(cfg) {
 		steps = append(steps, ports.Command{
 			Args: []string{"network", "create", "--ignore", "--internal", entry.network},
@@ -151,82 +167,45 @@ func (Enforcer) Teardown(cfg schema.AppConfig) []string {
 	return []string{"stop", cfg.AppNameID}
 }
 
+// isLinkList reports whether a list is a tier-2 sibling link: a producer's self-scoped
+// ingress, or a consumer's egress naming a sibling. Mirrors app.isLinkList; the two live
+// apart because the app layer decides what is allowed and this layer decides what is
+// rendered.
+func isLinkList(netList schema.NetworkList) bool {
+	appName := strings.TrimSpace(netList.AppName)
+	producer := netList.Ingress && !netList.Host && appName == ""
+	consumer := !netList.Ingress && !netList.Host && appName != ""
+	return producer || consumer
+}
+
 // NFTRuleset renders the nftables ruleset locked into an app's netns before it starts
-// (section 5.3). Pure over the validated config. A tier-2 app (private sibling links) is gated
-// per interface; every other filtered app (egress and/or tier-3 LAN publish) is gated by
-// address and port. checkNetwork forbids mixing the two, so this dispatch is total.
+// (section 5.3). Pure over the validated config.
+//
+// One app can now be gated both ways at once, which is what routing through a sibling
+// needs: the private zlink* bridges are accepted by INTERFACE, and everything else is
+// gated by ADDRESS and port. Before, an app was one or the other and mixing them was
+// rejected at launch, because whichever ruleset ran would have ignored the other kind of
+// list entirely - the address rules of a linked app simply vanished.
+//
+// Chain policy comes from the NON-link lists alone. A link list is structurally a
+// whitelist (validation refuses a blacklist one), so folding it into the policy decision
+// would flip an app that pairs a link with an all-blacklist egress from default-accept to
+// default-drop and silently deny everything the blacklist meant to leave open. With no
+// non-link lists in a direction the policy stays drop, which is what a link-only app has
+// always had.
 func NFTRuleset(cfg schema.AppConfig) string {
-	if len(links(cfg)) > 0 {
-		return linkRuleset(cfg)
-	}
-	return standardRuleset(cfg)
-}
-
-// linkRuleset gates a tier-2 app by interface: the private zlink* bridges are always
-// accepted (a consumer reaches its producer, a producer replies over the established
-// rule), and a producer's own published Ports are accepted inbound on its own link
-// interface - nothing else. Both chains default-drop, so an app with only sibling links
-// has no other connectivity; a consumer accepts nothing new inbound.
-func linkRuleset(cfg schema.AppConfig) string {
-	var bld strings.Builder
-	bld.WriteString("table inet zinc {\n")
-
-	bld.WriteString("\tchain output {\n")
-	bld.WriteString("\t\ttype filter hook output priority 0; policy drop;\n")
-	bld.WriteString("\t\toif \"lo\" accept\n")
-	bld.WriteString("\t\tct state established,related accept\n")
-	for _, entry := range links(cfg) {
-		fmt.Fprintf(&bld, "\t\toifname %q accept\n", entry.iface)
-	}
-	bld.WriteString("\t}\n")
-
-	bld.WriteString("\tchain input {\n")
-	bld.WriteString("\t\ttype filter hook input priority 0; policy drop;\n")
-	bld.WriteString("\t\tiif \"lo\" accept\n")
-	bld.WriteString("\t\tct state established,related accept\n")
-	if own := ownLinkIface(cfg); own != "" {
-		for _, netList := range cfg.NetworkMeta.NetworkLists {
-			if netList.Ingress && !netList.Host && strings.TrimSpace(netList.AppName) == "" && len(netList.Ports) > 0 {
-				fmt.Fprintf(&bld, "\t\tiifname %q tcp dport { %s } accept\n", own, portList(netList.Ports))
-				fmt.Fprintf(&bld, "\t\tiifname %q udp dport { %s } accept\n", own, portList(netList.Ports))
-			}
-		}
-	}
-	bld.WriteString("\t}\n")
-
-	bld.WriteString("}\n")
-	return bld.String()
-}
-
-// standardRuleset renders the address/port ruleset for an egress and/or tier-3 app
-// (section 5.3), loaded into the pod's netns by the netfilter init step before the app starts.
-//
-// A list's direction picks its chain: an egress list (Ingress=false) becomes an output
-// rule (where the app may connect to - daddr), an ingress list (Ingress=true) becomes
-// an input rule (who may connect in to the app's published ports - saddr). Egress lists
-// build the output chain, ingress lists the input chain; each is sized independently.
-//
-// Per-direction chain policy follows that direction's lists: a whitelist ("only these")
-// means default-drop (fail-closed); an all-blacklist direction ("all but these") means
-// default-accept. A single whitelist present flips the direction to restrictive
-// default-drop (see chainPolicy/allBlacklist), so it never silently opens. A direction
-// with no lists is default-drop - a pure publisher gets no egress, an egress-only app
-// gets no input chain at all.
-//
-// Loopback and established/related traffic are always accepted (a server's reply rides
-// the established output rule). Then each list contributes rules in priority order,
-// first match wins. Blocking DNS is just an egress blacklist for ports 53/853 (validate
-// rejects a port rule with no CIDR, so it cannot silently no-op), ordered ahead of any
-// broad allow so it wins.
-func standardRuleset(cfg schema.AppConfig) string {
 	var egress, ingress []schema.NetworkList
 	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if isLinkList(netList) {
+			continue // gated by interface below, not by address
+		}
 		if netList.Ingress {
 			ingress = append(ingress, netList)
 		} else {
 			egress = append(egress, netList)
 		}
 	}
+	linkEntries := links(cfg)
 
 	var bld strings.Builder
 	bld.WriteString("table inet zinc {\n")
@@ -236,6 +215,11 @@ func standardRuleset(cfg schema.AppConfig) string {
 	fmt.Fprintf(&bld, "\t\ttype filter hook output priority 0; policy %s;\n", chainPolicy(egress))
 	bld.WriteString("\t\toif \"lo\" accept\n")
 	bld.WriteString("\t\tct state established,related accept\n")
+	// The link bridges are accepted whole: they are private and --internal, so what rides
+	// them can only reach the siblings attached to them.
+	for _, entry := range linkEntries {
+		fmt.Fprintf(&bld, "\t\toifname %q accept\n", entry.iface)
+	}
 	for _, netList := range egress {
 		verdict := verdictFor(netList)
 		writeRules(&bld, "ip", netList.IPv4CIDR, netList.Ports, verdict)
@@ -243,13 +227,23 @@ func standardRuleset(cfg schema.AppConfig) string {
 	}
 	bld.WriteString("\t}\n")
 
-	// input (ingress): who may reach the app's published ports. Emitted only when the
-	// app publishes; without it there is no input base chain, so ingress stays closed.
-	if len(ingress) > 0 {
+	// input (ingress): who may reach the app's published ports. Emitted when the app
+	// publishes to the LAN or serves siblings on its own link; without either there is no
+	// input base chain at all, so ingress stays closed.
+	own := ownLinkIface(cfg)
+	if len(ingress) > 0 || own != "" {
 		bld.WriteString("\tchain input {\n")
 		fmt.Fprintf(&bld, "\t\ttype filter hook input priority 0; policy %s;\n", chainPolicy(ingress))
 		bld.WriteString("\t\tiif \"lo\" accept\n")
 		bld.WriteString("\t\tct state established,related accept\n")
+		if own != "" {
+			for _, netList := range cfg.NetworkMeta.NetworkLists {
+				if isLinkList(netList) && netList.Ingress && len(netList.Ports) > 0 {
+					fmt.Fprintf(&bld, "\t\tiifname %q tcp dport { %s } accept\n", own, portList(netList.Ports))
+					fmt.Fprintf(&bld, "\t\tiifname %q udp dport { %s } accept\n", own, portList(netList.Ports))
+				}
+			}
+		}
 		for _, netList := range ingress {
 			writeIngressRules(&bld, netList, verdictFor(netList))
 		}
@@ -357,21 +351,47 @@ func portList(ports []int) string {
 // their ports as `-p` forwards here (pod ports live on the pod, not the container).
 func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	args := []string{"pod", "create", "--name", pod}
-	if entries := links(cfg); len(entries) > 0 {
-		// alias=<AppNameID>: podman resolves the network alias but NOT the pod's app
-		// container name, so this makes each app reachable on the link at its AppNameID
-		// (a consumer connects to "<producer>:<port>") instead of the pod name.
-		for _, entry := range entries {
-			args = append(args, "--network", entry.network+":interface_name="+entry.iface+",alias="+cfg.AppNameID)
+	entries := links(cfg)
+	if len(entries) == 0 {
+		netspec := "pasta"
+		if iface := firstInterface(cfg); iface != "" {
+			netspec = "pasta:--interface," + iface
 		}
-		return args
+		args = append(args, "--network", netspec)
+		return append(args, publishArgs(cfg)...)
 	}
-	netspec := "pasta"
-	if iface := firstInterface(cfg); iface != "" {
-		netspec = "pasta:--interface," + iface
+
+	// A linked app needs its own egress too when it has non-link lists - a gateway app has
+	// to reach the outside to be worth routing through, and a client that sends only some
+	// destinations through a sibling still goes direct with the rest. pasta cannot do this:
+	// podman refuses outright ("cannot set multiple networks without bridge network mode"),
+	// so such an app is put on a bridge instead.
+	//
+	// Its OWN bridge, not the default one. Apps sharing a bridge can reach each other over
+	// L2, which would leave isolation resting on the nft rules alone - and an app whose
+	// egress list is an all-blacklist runs default-accept, so it would reach every other
+	// app on that bridge. A bridge per app keeps them apart whatever their rules say.
+	if needsOwnEgress(cfg) {
+		args = append(args, "--network", EgressNetwork(cfg.AppNameID)+":interface_name="+egressIface)
 	}
-	args = append(args, "--network", netspec)
+	// alias=<AppNameID>: podman resolves the network alias but NOT the pod's app
+	// container name, so this makes each app reachable on the link at its AppNameID
+	// (a consumer connects to "<producer>:<port>") instead of the pod name.
+	for _, entry := range entries {
+		args = append(args, "--network", entry.network+":interface_name="+entry.iface+",alias="+cfg.AppNameID)
+	}
 	return append(args, publishArgs(cfg)...)
+}
+
+// needsOwnEgress reports whether a linked app also carries networking that has to leave the
+// private bridges - any list that is not itself a link.
+func needsOwnEgress(cfg schema.AppConfig) bool {
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if !isLinkList(netList) {
+			return true
+		}
+	}
+	return false
 }
 
 // publishArgs maps tier-3 (LAN) ingress lists - Ingress && Host - onto pod `-p` port
