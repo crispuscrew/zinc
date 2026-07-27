@@ -150,6 +150,7 @@ windows-demo: build
 		--display Compatible --devices Compatible \
 		--firmware UEFI --secure-boot --tpm \
 		$(if $(WIN_RES),--resolution $(WIN_RES)) \
+		$$(test -z "$(SKIP_DRIVERS)" && $(MAKE) --no-print-directory check-virtio-win >/dev/null 2>&1 && echo --media "$(VIRTIO_WIN)") \
 		--desc "Windows guest installed by windows-demo"
 	@echo
 	@echo "Done. The installed disk is now this app's pinned base, so:"

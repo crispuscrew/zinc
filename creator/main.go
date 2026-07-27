@@ -54,7 +54,7 @@ const usage = `usage: zc <command> [args]
              [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
              [--firmware UEFI] [--secure-boot] [--tpm] [--devices Compatible] [--vulkan]
-             [--resolution WxH] [--mac ADDR]
+             [--resolution WxH] [--mac ADDR] [--media disc.iso]
   list
   validate <name|app.yaml>
   delete <name>
@@ -197,6 +197,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	vulkan := fset.Bool("vulkan", false, "VM only: pass guest Vulkan through to the host GPU (needs a venus-capable virglrenderer; disables qemu's sandbox for this app)")
 	resolution := fset.String("resolution", "", "VM only: fixed guest screen size as WxH (e.g. 1920x1080); for --display Compatible, whose guest has no driver to resize itself")
 	mac := fset.String("mac", "", "VM only: guest NIC address, or \"random\"; the default is derived per-app under QEMU's 52:54:00 prefix, so set this to present something that names no vendor")
+	media := fset.String("media", "", "VM only: ISO attached read-only as a CD-ROM on every run (e.g. a virtio-win driver disc), repeatable with commas")
 	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
 	if err := fset.Parse(flags); err != nil {
 		return err
@@ -250,6 +251,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 			SecureBoot:    *secureBoot,
 			TPM:           *tpmFlag,
 			Devices:       schema.VMDevices(*devices),
+			InstallMedia:  splitList(*media),
 			ForwardPorts:  forwards,
 			CloudInit:     schema.CloudInit{UserName: *ciUser, SSHKeyPath: *ciKey},
 		}
@@ -273,6 +275,18 @@ const newUsage = `usage:
   zc new <name> --image <img> [--desc d] [--icon i]
   zc new <name> --vm --image <base.qcow2> --base-digest sha256:... \
                 [--memory MiB] [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]`
+
+// splitList reads a comma-separated flag into the entries it names, dropping the empty ones
+// so a trailing comma is not a path. What each entry has to be is validation's business.
+func splitList(spec string) []string {
+	var entries []string
+	for _, entry := range strings.Split(spec, ",") {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			entries = append(entries, trimmed)
+		}
+	}
+	return entries
+}
 
 // parseForwards reads "HOST:GUEST[,HOST:GUEST...]" into port forwards. Validation screens
 // the numbers themselves (range, and the privileged ports a rootless qemu cannot bind);
@@ -304,7 +318,7 @@ func vmFlagUsed(fset *flag.FlagSet) bool {
 	used := false
 	fset.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward", "vulkan", "firmware", "secure-boot", "tpm", "devices", "resolution", "mac":
+		case "base-digest", "memory", "vcpus", "disk", "display", "ci-user", "ci-ssh-key", "forward", "vulkan", "firmware", "secure-boot", "tpm", "devices", "resolution", "mac", "media":
 			used = true
 		}
 	})

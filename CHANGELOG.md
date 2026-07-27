@@ -74,6 +74,13 @@ tracked in [RELEASES.md](RELEASES.md).
   line to author an app against it; from then on every run is an overlay, so `zvr reset`
   returns the app to its freshly installed state.
 - `zc new --firmware/--secure-boot/--tpm/--devices` to author all of the above.
+- **`InstallMedia` discs are attached on every run**, not only during the install, and
+  **`zc new --media`** authors them. An OS is only the first thing a guest wants from a CD:
+  the drivers its installer had no room for arrive the same way, and a guest whose network is
+  not up yet has no other route in - which is exactly the position a fresh Windows guest is
+  in, since the driver that would fix its display is on a disc it could no longer be handed.
+  Only the boot order stays the install's own, so an ordinary run boots the disk with the disc
+  simply present. The discs are read-only, so leaving one in a config costs a drive letter.
 - **`make -C virtualization/runner windows-demo WIN_ISO=...`** - the whole Windows flow from
   one argument. The Windows ISO is Microsoft's and cannot be fetched for you; everything
   else is handled, including downloading the virtio-win driver disc (resumable, since it is

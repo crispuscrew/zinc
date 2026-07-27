@@ -409,21 +409,30 @@ func TestArgs_LinuxGuestUnchangedByWindowsSupport(t *testing.T) {
 	}
 }
 
-// Install media is attached only for an install, and read-only: the installer boots from
-// the disc, and a normal run of the same app must not see it at all.
-func TestArgs_InstallMediaOnlyWhenInstalling(t *testing.T) {
+// The discs are attached on every run, read-only; only the boot order is the install's own.
+// A guest needs a CD after its OS is installed as much as during it - that is how the
+// drivers the installer had no room for get in, virtio-win's display driver among them - so
+// attaching them only while installing would leave no way to hand an installed guest a file.
+func TestArgs_InstallMediaAttachedOnEveryRun(t *testing.T) {
 	cfg := testCfg()
 	cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
 	cfg.VirtualizationMeta.InstallMedia = []string{"/iso/win11.iso", "/iso/virtio-win.iso"}
 
 	normal := Args(cfg, testLayout())
+	attached := 0
 	for _, drive := range pairs(normal, "-drive") {
-		if strings.Contains(drive, "cdrom") {
-			t.Errorf("a normal run must not attach install media, got %q", drive)
+		if strings.Contains(drive, "media=cdrom") {
+			attached++
+			if !strings.Contains(drive, "readonly=on") {
+				t.Errorf("a disc must be read-only, got %q", drive)
+			}
 		}
 	}
+	if attached != 2 {
+		t.Errorf("a normal run attached %d discs, want both", attached)
+	}
 	if len(pairs(normal, "-boot")) != 0 {
-		t.Error("a normal run should not override the boot order")
+		t.Error("a normal run should not override the boot order: the disk boots, the disc is just there")
 	}
 
 	layout := testLayout()

@@ -37,8 +37,9 @@ type Layout struct {
 	// variable store. TPMSocket is empty unless an emulated TPM is attached.
 	Firmware  Firmware
 	TPMSocket string
-	// Installing attaches VirtualizationMeta.InstallMedia and boots from it, which is how a
-	// guest with no cloud image (Windows) gets installed in the first place.
+	// Installing boots from VirtualizationMeta.InstallMedia rather than the disk, which is
+	// how a guest with no cloud image (Windows) gets installed in the first place. The discs
+	// themselves are attached on every run, not only this one.
 	Installing bool
 
 	// Identity seeds the guest's SMBIOS UUID and MAC instead of the app name. An install has
@@ -82,8 +83,12 @@ func Args(cfg schema.AppConfig, layout Layout) []string {
 	args = append(args, firmwareArgs(layout.Firmware)...)
 	args = append(args, tpmArgs(layout.TPMSocket)...)
 	args = append(args, diskArgs(layout, virt.Devices)...)
+	// The discs are attached on every run, not just the install. An OS is only the first
+	// thing a guest needs from a CD: the drivers its installer had no room for arrive the
+	// same way, and a guest with no network yet has no other way to be handed a file.
+	// Read-only, so leaving one in the config costs nothing but a drive letter.
+	args = append(args, mediaArgs(virt.InstallMedia)...)
 	if layout.Installing {
-		args = append(args, mediaArgs(virt.InstallMedia)...)
 		// once=d, not order=d: the installer boots from the disc, and every reboot after
 		// that goes to the disk. An installer reboots itself partway through, and with the
 		// disc permanently first that reboot lands back at "press any key to boot from CD"

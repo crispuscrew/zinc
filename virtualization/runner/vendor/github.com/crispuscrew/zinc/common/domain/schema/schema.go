@@ -131,9 +131,11 @@ type VirtualizationMeta struct {
 	// virtio disk it reports finding no drives at all.
 	Devices VMDevices `yaml:"Devices"`
 
-	// InstallMedia are ISO images attached read-only as CD-ROMs. A Windows guest is
-	// installed from one rather than started from a cloud image; `zvr install` boots with
-	// these attached, and a normal run ignores them.
+	// InstallMedia are ISO images attached read-only as CD-ROMs, on every run. A Windows
+	// guest is installed from one rather than started from a cloud image, which is where the
+	// name comes from, but the discs stay attached afterwards: guest drivers the installer
+	// had no room for (virtio-win) are handed over the same way, and a guest whose network
+	// is not up yet has no other route in. `zvr install` additionally boots from them.
 	InstallMedia []string `yaml:"InstallMedia"`
 
 	// ForwardPorts publishes a guest port on the host over user-mode networking. VM apps

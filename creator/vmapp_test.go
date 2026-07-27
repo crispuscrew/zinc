@@ -252,3 +252,32 @@ func TestResolveMac_RandomPassesValidation(t *testing.T) {
 		}
 	}
 }
+
+// --media is how a guest is handed a disc it will need after the OS is on it: virtio-win's
+// display driver, a tools ISO. A trailing comma is a typo, not a path, so it does not become
+// an empty entry validation would then reject.
+func TestNewVM_MediaDiscs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	quiet(t)
+
+	if err := run([]string{"new", "guest", "--vm",
+		"--image", "/var/lib/zinc/images/windows.qcow2",
+		"--base-digest", testDigest,
+		"--memory", "4096", "--vcpus", "2", "--display", "Compatible",
+		"--media", "/iso/virtio-win.iso, /iso/tools.iso,"}); err != nil {
+		t.Fatalf("new --vm --media: %v", err)
+	}
+
+	sto, err := store.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := sto.Load("guest")
+	if err != nil {
+		t.Fatalf("load the written app: %v", err)
+	}
+	got := cfg.VirtualizationMeta.InstallMedia
+	if len(got) != 2 || got[0] != "/iso/virtio-win.iso" || got[1] != "/iso/tools.iso" {
+		t.Errorf("InstallMedia = %q, want both discs trimmed and the empty entry dropped", got)
+	}
+}
