@@ -16,6 +16,15 @@ tracked in [RELEASES.md](RELEASES.md).
   virtio hardware and reports finding no drives at all when pointed at a virtio disk, which
   is why the device profile is a field rather than an assumption. `Display: Compatible` adds
   a plain-VGA mode for guests with no virtio-gpu driver.
+  A TPM guest needs the current 4 MB OVMF build (`edk2-ovmf` on Fedora 41+, `ovmf` on
+  Debian 12+), and Zinc prefers it wherever both generations are installed. The legacy 2 MB
+  build does not hand the TPM to the guest, and the failure is close to invisible: qemu
+  publishes the TPM's ACPI device itself, so the guest enumerates it and binds a driver to
+  it, and only Windows notices there is nothing behind it. It reads TPM version 0 and says
+  no more than "This PC doesn't currently meet Windows 11 system requirements". Zinc warns
+  when a TPM guest can only get the legacy build. Variable stores are not interchangeable
+  between the two generations, so one written by the other build is refused by name rather
+  than handed to qemu, which would boot it with a quietly wrong Secure Boot state.
 - **`zvr install`** - runs an OS installer to produce a base disk, for guests that have no
   cloud image. It takes flags rather than an app name deliberately: an app pins its base by
   digest and a disk that does not exist yet has no digest, so requiring one would be a

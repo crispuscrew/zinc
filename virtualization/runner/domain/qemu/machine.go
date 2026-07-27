@@ -46,17 +46,26 @@ func secureBootArgs(virt schema.VirtualizationMeta) []string {
 type Firmware struct {
 	CodePath string // read-only OVMF code
 	VarsPath string // this app's writable variable store
+	Format   string // pflash image format, "raw" or "qcow2"; empty means raw
 }
 
 // firmwareArgs attaches OVMF as a pair of pflash drives. The code half is read-only, so a
 // guest cannot rewrite the firmware it booted from.
+//
+// The format is not always raw. Fedora ships its current 4 MB build as a pair of qcow2
+// images and keeps only the legacy 2 MB build as raw .fd files, so the format travels with
+// the paths rather than being assumed.
 func firmwareArgs(firmware Firmware) []string {
 	if firmware.CodePath == "" {
 		return nil // BIOS: qemu's built-in SeaBIOS needs nothing said about it
 	}
+	format := firmware.Format
+	if format == "" {
+		format = "raw"
+	}
 	return []string{
-		"-drive", "if=pflash,format=raw,unit=0,readonly=on,file=" + firmware.CodePath,
-		"-drive", "if=pflash,format=raw,unit=1,file=" + firmware.VarsPath,
+		"-drive", "if=pflash,format=" + format + ",unit=0,readonly=on,file=" + firmware.CodePath,
+		"-drive", "if=pflash,format=" + format + ",unit=1,file=" + firmware.VarsPath,
 	}
 }
 

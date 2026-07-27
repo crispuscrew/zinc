@@ -527,3 +527,30 @@ func TestArgs_SecureBootRequiresSMM(t *testing.T) {
 		t.Error("a guest without Secure Boot should carry no secure-boot globals")
 	}
 }
+
+// Fedora ships its current 4 MB OVMF build as a pair of qcow2 images and keeps only the
+// legacy 2 MB build as raw .fd files. Hardcoding format=raw makes qemu read a qcow2 header
+// as if it were firmware, so the format has to travel with the paths.
+func TestFirmwareArgs_CarriesTheImageFormat(t *testing.T) {
+	qcow := firmwareArgs(Firmware{
+		CodePath: "/usr/share/edk2/ovmf/OVMF_CODE_4M.secboot.qcow2",
+		VarsPath: "/data/guest-uefi-vars.qcow2",
+		Format:   "qcow2",
+	})
+	for _, drive := range pairs(qcow, "-drive") {
+		if !strings.Contains(drive, "format=qcow2") {
+			t.Errorf("pflash drive %q should declare format=qcow2", drive)
+		}
+	}
+
+	// An unset format still has to produce a working machine: raw is what every .fd is.
+	raw := firmwareArgs(Firmware{
+		CodePath: "/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd",
+		VarsPath: "/data/guest-uefi-vars.fd",
+	})
+	for _, drive := range pairs(raw, "-drive") {
+		if !strings.Contains(drive, "format=raw") {
+			t.Errorf("with no format set, pflash drive %q should default to raw", drive)
+		}
+	}
+}

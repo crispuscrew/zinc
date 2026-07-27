@@ -7,7 +7,9 @@
 package firmware
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,18 +22,41 @@ import (
 	"github.com/crispuscrew/zinc/virtualization/runner/domain/qemu"
 )
 
-// OVMF images, in the order distributions put them. Secure Boot needs the matching pair:
-// the code half carries the signature database, so a secboot VARS with plain CODE boots
-// into an unusable state rather than a secured one.
-var ovmfSearch = []struct{ code, vars string }{
-	{"/usr/share/edk2/ovmf/OVMF_CODE.fd", "/usr/share/edk2/ovmf/OVMF_VARS.fd"},
-	{"/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd"},
-	{"/usr/share/qemu/ovmf-x86_64-code.bin", "/usr/share/qemu/ovmf-x86_64-vars.bin"},
+// An OVMF build on the host. Secure Boot needs the matching pair: the code half carries the
+// signature database, so a secboot VARS with plain CODE boots into an unusable state rather
+// than a secured one.
+//
+// tpm records whether the build hands an attached TPM over to the guest, and it is the whole
+// reason this is a table of builds rather than a list of paths. Distributions ship two
+// generations side by side: a current 4 MB build, and a legacy 2 MB build kept for machines
+// created before the variable store grew. Only the 4 MB build carries the TPM (Tcg2) driver.
+// QEMU publishes the TPM's ACPI device by itself, so a guest on the legacy build still
+// enumerates it and still binds a driver to it - it just never gets a working TPM behind it.
+// Windows 11 reads version 0 from that and refuses to install, reporting only that the PC
+// does not meet its requirements. Measured on Fedora 43 with edk2-ovmf 20260508: the 2 MB
+// build reports TPMVersion 0 and a hard block, the 4 MB build reports 2 and no issue.
+type ovmfBuild struct {
+	code, vars string
+	format     string // pflash image format: the 4 MB Fedora build is qcow2, the rest raw
+	tpm        bool
 }
 
-var ovmfSecbootSearch = []struct{ code, vars string }{
-	{"/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd", "/usr/share/edk2/ovmf/OVMF_VARS.secboot.fd"},
-	{"/usr/share/OVMF/OVMF_CODE.secboot.fd", "/usr/share/OVMF/OVMF_VARS.secboot.fd"},
+// Newest first, so a host that has both generations gets the one that works.
+var ovmfSearch = []ovmfBuild{
+	{"/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2", "/usr/share/edk2/ovmf/OVMF_VARS_4M.qcow2", "qcow2", true},
+	{"/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd", "raw", true},
+	{"/usr/share/edk2/x64/OVMF_CODE.4m.fd", "/usr/share/edk2/x64/OVMF_VARS.4m.fd", "raw", true},
+	{"/usr/share/edk2/ovmf/OVMF_CODE.fd", "/usr/share/edk2/ovmf/OVMF_VARS.fd", "raw", false},
+	{"/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd", "raw", false},
+	{"/usr/share/qemu/ovmf-x86_64-code.bin", "/usr/share/qemu/ovmf-x86_64-vars.bin", "raw", false},
+}
+
+var ovmfSecbootSearch = []ovmfBuild{
+	{"/usr/share/edk2/ovmf/OVMF_CODE_4M.secboot.qcow2", "/usr/share/edk2/ovmf/OVMF_VARS_4M.secboot.qcow2", "qcow2", true},
+	{"/usr/share/OVMF/OVMF_CODE_4M.secboot.fd", "/usr/share/OVMF/OVMF_VARS_4M.ms.fd", "raw", true},
+	{"/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd", "/usr/share/edk2/x64/OVMF_VARS.4m.fd", "raw", true},
+	{"/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd", "/usr/share/edk2/ovmf/OVMF_VARS.secboot.fd", "raw", false},
+	{"/usr/share/OVMF/OVMF_CODE.secboot.fd", "/usr/share/OVMF/OVMF_VARS.secboot.fd", "raw", false},
 }
 
 // Prepare resolves the firmware for an app, copying the variable store on first use. The
@@ -53,19 +78,30 @@ func Prepare(virt schema.VirtualizationMeta, varsPath, baseImage string) (qemu.F
 	if virt.SecureBoot {
 		search, kind = ovmfSecbootSearch, "UEFI Secure Boot"
 	}
-	var code, template string
+	var build ovmfBuild
 	for _, candidate := range search {
 		if fileExists(candidate.code) && fileExists(candidate.vars) {
-			code, template = candidate.code, candidate.vars
+			build = candidate
 			break
 		}
 	}
-	if code == "" {
+	if build.code == "" {
 		return qemu.Firmware{}, fmt.Errorf(
 			"%s firmware (OVMF) not found on this host; install the edk2-ovmf package (Fedora) or ovmf (Debian), "+
 				"or set Firmware: BIOS if the guest can boot that way", kind)
 	}
+	if virt.TPM && !build.tpm {
+		// Not fatal: a Linux guest drives the TPM through its own MMIO probe and works on
+		// this build regardless. Windows does not, so say which one it is now rather than
+		// leave the operator with an installer that only says the PC is unsupported.
+		fmt.Fprintf(os.Stderr,
+			"warning: the only OVMF build on this host is the legacy %s, which does not hand the TPM to the guest.\n"+
+				"         a Linux guest is unaffected; Windows will report that this PC does not meet its requirements.\n"+
+				"         install the 4 MB build (edk2-ovmf on Fedora 41+, ovmf on Debian 12+) to fix it.\n",
+			filepath.Base(build.code))
+	}
 
+	template := build.vars
 	if !fileExists(varsPath) {
 		if err := os.MkdirAll(filepath.Dir(varsPath), 0o755); err != nil {
 			return qemu.Firmware{}, err
@@ -80,8 +116,65 @@ func Prepare(virt schema.VirtualizationMeta, varsPath, baseImage string) (qemu.F
 		if err := os.WriteFile(varsPath, data, 0o600); err != nil {
 			return qemu.Firmware{}, fmt.Errorf("create this app's UEFI variable store: %w", err)
 		}
+	} else if err := matchesBuild(varsPath, template); err != nil {
+		return qemu.Firmware{}, err
 	}
-	return qemu.Firmware{CodePath: code, VarsPath: varsPath}, nil
+	return qemu.Firmware{CodePath: build.code, VarsPath: varsPath, Format: build.format}, nil
+}
+
+// matchesBuild rejects a variable store that belongs to a different OVMF build. The two
+// generations disagree on both format and size - 2 MB code pairs with a 128 KiB store, 4 MB
+// code with a 512 KiB one - and qemu handed a mismatched pair does not fail cleanly: it warns
+// about the size and boots into a guest whose Secure Boot state is quietly wrong. A store
+// written before this host gained the 4 MB build is exactly that case, so it is named and
+// refused instead.
+func matchesBuild(varsPath, template string) error {
+	haveFormat, haveSize, err := pflashShape(varsPath)
+	if err != nil {
+		return fmt.Errorf("inspect this app's UEFI variable store: %w", err)
+	}
+	wantFormat, wantSize, err := pflashShape(template)
+	if err != nil {
+		return fmt.Errorf("inspect the UEFI variable template: %w", err)
+	}
+	if haveFormat != wantFormat || haveSize != wantSize {
+		return fmt.Errorf(
+			"the UEFI variable store %s is %s/%d bytes but this host's firmware needs %s/%d bytes: "+
+				"it was created by a different OVMF build. delete it (or `zvr reset` the app) to have it recreated; "+
+				"a guest installed against the old firmware has to be reinstalled",
+			varsPath, haveFormat, haveSize, wantFormat, wantSize)
+	}
+	return nil
+}
+
+// pflashShape reports a pflash image's format and the size the firmware sees. For qcow2 that
+// is the virtual size from the header, not the file size, because qemu grows the file as the
+// guest writes variables into it.
+func pflashShape(path string) (string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+
+	var header [32]byte
+	read, err := io.ReadFull(file, header[:])
+	if err != nil && read < len(header) {
+		// Too short to be qcow2, so it can only be a raw image.
+		info, statErr := file.Stat()
+		if statErr != nil {
+			return "", 0, statErr
+		}
+		return "raw", info.Size(), nil
+	}
+	if string(header[:4]) == "QFI\xfb" {
+		return "qcow2", int64(binary.BigEndian.Uint64(header[24:32])), nil
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	return "raw", info.Size(), nil
 }
 
 // InstalledVars is where `zvr install` leaves the UEFI variables belonging to a disk it

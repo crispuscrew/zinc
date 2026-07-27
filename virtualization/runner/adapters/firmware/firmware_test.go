@@ -1,6 +1,7 @@
 package firmware
 
 import (
+	"encoding/binary"
 	"net"
 	"os"
 	"os/exec"
@@ -77,4 +78,92 @@ func TestStartTPM_GivesQemuTheControlSocket(t *testing.T) {
 		t.Fatalf("the control socket does not accept connections: %v", err)
 	}
 	conn.Close()
+}
+
+// The legacy 2 MB OVMF build does not hand an attached TPM to the guest, and the failure is
+// almost invisible: qemu publishes the TPM's ACPI device by itself, so the guest enumerates
+// it and binds a driver to it, and only Windows notices there is nothing behind it - it reads
+// TPMVersion 0 and reports that the PC does not meet Windows 11's requirements, naming no
+// cause. Measured on Fedora 43: OVMF_CODE.secboot.fd gives TPMVersion 0 and a hard block,
+// OVMF_CODE_4M.secboot.qcow2 gives 2 and no issue. So a host carrying both generations must
+// never be handed the older one.
+func TestOvmfSearch_PrefersBuildsThatHandOverTheTPM(t *testing.T) {
+	for name, search := range map[string][]ovmfBuild{"UEFI": ovmfSearch, "Secure Boot": ovmfSecbootSearch} {
+		seenLegacy := ""
+		for _, build := range search {
+			if !build.tpm {
+				seenLegacy = build.code
+				continue
+			}
+			if seenLegacy != "" {
+				t.Errorf("%s search: %s hands over the TPM but is listed after %s, which does not",
+					name, build.code, seenLegacy)
+			}
+		}
+		if len(search) == 0 {
+			t.Errorf("%s search list is empty", name)
+		}
+	}
+}
+
+// The two OVMF generations disagree on the size of the variable store - 2 MB code pairs with
+// 128 KiB, 4 MB code with 512 KiB - and qemu handed a mismatched pair does not fail cleanly:
+// it warns about the size and boots a guest whose Secure Boot state is quietly wrong. A store
+// created before this host gained the 4 MB build is exactly that case.
+func TestMatchesBuild_RejectsAStoreFromAnotherBuild(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "legacy-vars.fd")
+	current := filepath.Join(dir, "current-vars.fd")
+	if err := os.WriteFile(legacy, make([]byte, 128*1024), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current, make([]byte, 512*1024), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := matchesBuild(legacy, current); err == nil {
+		t.Error("a 128 KiB store against a 512 KiB template should be refused, not silently used")
+	}
+	if err := matchesBuild(current, current); err != nil {
+		t.Errorf("a store matching its own template should be accepted, got %v", err)
+	}
+}
+
+// qemu grows a qcow2 variable store as the guest writes to it, so the file size says nothing
+// about what the firmware sees. Comparing file sizes would reject a perfectly good store as
+// soon as the guest had booted once.
+func TestPflashShape_ReportsTheQcow2VirtualSize(t *testing.T) {
+	dir := t.TempDir()
+	image := filepath.Join(dir, "vars.qcow2")
+
+	const virtualSize = 540672
+	header := make([]byte, 512) // deliberately smaller than the virtual size it declares
+	copy(header, "QFI\xfb")
+	binary.BigEndian.PutUint64(header[24:32], virtualSize)
+	if err := os.WriteFile(image, header, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	format, size, err := pflashShape(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if format != "qcow2" {
+		t.Errorf("format = %q, want qcow2", format)
+	}
+	if size != virtualSize {
+		t.Errorf("size = %d, want the declared virtual size %d, not the file size %d", size, virtualSize, len(header))
+	}
+
+	raw := filepath.Join(dir, "vars.fd")
+	if err := os.WriteFile(raw, make([]byte, 131072), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	format, size, err = pflashShape(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if format != "raw" || size != 131072 {
+		t.Errorf("pflashShape(raw) = %q/%d, want raw/131072", format, size)
+	}
 }
