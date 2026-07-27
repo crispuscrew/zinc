@@ -360,6 +360,17 @@ The producer accepts only its published `Ports` inbound on that link interface; 
 else default-drops. The consumer accepts nothing new inbound. The bridge is `--internal`, so
 neither app reaches anything else through it.
 
+**DNS for a routed app.** `NetworkMeta.DNSServers`, required once a list sets `Via`. podman
+writes a container's `resolv.conf` and points it at the network's own resolver; on an
+`--internal` bridge that resolver answers sibling names and forwards nothing, so a routed app
+gets NXDOMAIN for anything external. `--dns` on the pod is accepted and then ignored in favour
+of the network's. Zinc therefore redirects the query in the app's netns instead: DNS to any
+address is rewritten (`nat` `output`, `dstnat` priority, so the filter hook then sees the new
+address) to the declared resolver, which is routed through the sibling like anything else - it
+travels inside the tunnel and stops with it. Whatever is not redirected is dropped. Only a
+routed app is redirected: for an ordinary one the network's resolver works and is the only
+thing that knows its siblings' names.
+
 **Routing through a sibling.** An egress list that names an `AppName` and sets `Via: true`
 sends its CIDRs to that sibling over their private link instead of out this app's own egress -
 how an app is put behind a VPN container. It is per list, so one app can pick a different

@@ -52,6 +52,32 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 	checkGateway(index, netList, self, add)
 }
 
+// checkDNS screens the app's resolvers, and requires them where the app cannot otherwise
+// resolve anything.
+//
+// An app routed through a sibling is that case. Its link is an --internal bridge, and the
+// resolver podman puts on one answers sibling names but forwards nothing - measured, an
+// external name comes back NXDOMAIN. So a routed app with no DNSServers cannot resolve at
+// all, and would meet that as every lookup failing rather than as a missing setting. Naming
+// a resolver gives it one reachable through the sibling, so the queries travel inside the
+// tunnel and stop with it.
+func checkDNS(netMeta schema.NetworkMeta, add addFunc) {
+	for index, server := range netMeta.DNSServers {
+		if net.ParseIP(strings.TrimSpace(server)) == nil {
+			add("NetworkMeta.DNSServers[%d] %q: not a valid IP address", index, server)
+		}
+	}
+	if len(netMeta.DNSServers) > 0 {
+		return
+	}
+	for index, netList := range netMeta.NetworkLists {
+		if netList.Via {
+			add("NetworkLists[%d].Via: needs NetworkMeta.DNSServers - a routed app's link is an internal bridge whose resolver answers only sibling names, so without one it cannot resolve anything external at all", index)
+			return
+		}
+	}
+}
+
 // checkRouting screens the two halves of routing through a sibling. Each is refused in the
 // shapes where it would describe something the launch cannot do, because the whole value of
 // the feature is that a client cannot reach its destinations any other way - a half-stated

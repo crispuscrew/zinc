@@ -242,6 +242,19 @@ type DisplayMeta struct {
 type NetworkMeta struct {
 	// The first entry is priority
 	NetworkLists []NetworkList `yaml:"NetworkLists"`
+
+	// DNSServers are the resolvers the app is given, and the only ones it may reach.
+	//
+	// An app routed through a sibling needs them. Its own link is an --internal bridge, and
+	// the resolver podman puts on one answers sibling names but cannot forward anything
+	// else - measured: an external name comes back NXDOMAIN. Naming a resolver here gives
+	// the app one it can reach, and because the address is routed through the sibling like
+	// any other destination, the queries travel inside the tunnel and stop with it.
+	//
+	// They are also the only resolvers permitted: DNS to anything else is dropped, so an app
+	// that carries a hardcoded resolver cannot step around them when it also has direct
+	// egress of its own.
+	DNSServers []string `yaml:"DNSServers"`
 }
 
 type NetworkList struct {

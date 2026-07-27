@@ -34,6 +34,7 @@ func Validate(cfg schema.AppConfig) error {
 	checkInternalUser(cfg.InternalUserMeta, add)
 	checkNotifications(cfg.NotificationMeta, add)
 
+	checkDNS(cfg.NetworkMeta, add)
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		checkNetworkList(index, netList, add)
 	}

@@ -300,6 +300,11 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	fmt.Fprintf(&bld, "\t\ttype filter hook output priority 0; policy %s;\n", chainPolicy(egress))
 	bld.WriteString("\t\toif \"lo\" accept\n")
 	bld.WriteString("\t\tct state established,related accept\n")
+	// DNS first, so it is decided before the broad accepts below can let a query past.
+	// The declared resolvers are reachable and every other one is not, which is what stops
+	// an app that carries a hardcoded resolver from stepping around them - it matters once
+	// an app has direct egress of its own alongside a routed link.
+	writeDNSRules(&bld, cfg.NetworkMeta.DNSServers)
 	// The link bridges are accepted whole: they are private and --internal, so what rides
 	// them can only reach the siblings attached to them.
 	for _, entry := range linkEntries {
@@ -350,15 +355,84 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	}
 	bld.WriteString("}\n")
 
-	if forwards(cfg) {
+	if forwards(cfg) || dnsRedirect(cfg) != "" {
 		bld.WriteString("table ip nat {\n")
-		bld.WriteString("\tchain postrouting {\n")
-		bld.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
-		fmt.Fprintf(&bld, "\t\toifname %q masquerade\n", egressIface)
-		bld.WriteString("\t}\n")
+		if forwards(cfg) {
+			bld.WriteString("\tchain postrouting {\n")
+			bld.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
+			fmt.Fprintf(&bld, "\t\toifname %q masquerade\n", egressIface)
+			bld.WriteString("\t}\n")
+		}
+		// A routed app's resolver is not ours to choose: podman writes resolv.conf and
+		// points it at the network's own DNS, which on an --internal bridge answers sibling
+		// names and forwards nothing (measured: an external name returns NXDOMAIN). Rather
+		// than fight over the file, the query is redirected here, to a resolver the app
+		// reaches through its sibling - so it travels inside the tunnel and stops with it.
+		// dstnat runs before the filter hook, so the rules above then see the new address.
+		if server := dnsRedirect(cfg); server != "" {
+			bld.WriteString("\tchain output {\n")
+			bld.WriteString("\t\ttype nat hook output priority dstnat; policy accept;\n")
+			for _, proto := range []string{"udp", "tcp"} {
+				fmt.Fprintf(&bld, "\t\t%s dport { 53, 853 } dnat to %s\n", proto, server)
+			}
+			bld.WriteString("\t}\n")
+		}
 		bld.WriteString("}\n")
 	}
 	return bld.String()
+}
+
+// dnsRedirect returns the resolver a routed app's DNS is rewritten to, or "" when the app
+// is not routed. Only a routed app: for an ordinary one the network's resolver works and is
+// the only thing that knows its siblings' names, so redirecting would take that away for
+// nothing. A routed app has already lost it - that resolver cannot answer anything external
+// from an internal bridge - which is why this is a repair rather than a restriction.
+//
+// The first declared server: validation requires a routed app to name one, and one address
+// is what a dnat rule takes.
+func dnsRedirect(cfg schema.AppConfig) string {
+	if len(cfg.NetworkMeta.DNSServers) == 0 {
+		return ""
+	}
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if netList.Via {
+			return strings.TrimSpace(cfg.NetworkMeta.DNSServers[0])
+		}
+	}
+	return ""
+}
+
+// writeDNSRules permits DNS to the declared resolvers and drops it everywhere else. The
+// drop is the point: without it, naming a resolver would be a suggestion rather than a
+// restriction, and an app is free to ignore what its /etc/resolv.conf says.
+//
+// Emitted only when the app declares resolvers - an app that names none keeps whatever DNS
+// its network gives it, exactly as before.
+func writeDNSRules(bld *strings.Builder, servers []string) {
+	if len(servers) == 0 {
+		return
+	}
+	var v4, v6 []string
+	for _, server := range servers {
+		address := strings.TrimSpace(server)
+		if strings.Contains(address, ":") {
+			v6 = append(v6, address)
+		} else {
+			v4 = append(v4, address)
+		}
+	}
+	for family, addresses := range map[string][]string{"ip": v4, "ip6": v6} {
+		if len(addresses) == 0 {
+			continue
+		}
+		for _, proto := range []string{"udp", "tcp"} {
+			fmt.Fprintf(bld, "\t\t%s daddr { %s } %s dport { 53, 853 } accept\n",
+				family, strings.Join(addresses, ", "), proto)
+		}
+	}
+	for _, proto := range []string{"udp", "tcp"} {
+		fmt.Fprintf(bld, "\t\t%s dport { 53, 853 } drop\n", proto)
+	}
 }
 
 // verdictFor is the terminal verdict a list contributes: a whitelist accepts its
@@ -480,6 +554,11 @@ func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	// app on that bridge. A bridge per app keeps them apart whatever their rules say.
 	if needsOwnEgress(cfg) {
 		args = append(args, "--network", EgressNetwork(cfg.AppNameID)+":interface_name="+egressIface)
+	}
+	for _, server := range cfg.NetworkMeta.DNSServers {
+		// The app is handed these instead of the resolver podman would put on its link,
+		// which on an --internal bridge answers sibling names and forwards nothing.
+		args = append(args, "--dns", strings.TrimSpace(server))
 	}
 	if forwards(cfg) {
 		// Set here because a container cannot set it itself: /proc/sys is read-only in the

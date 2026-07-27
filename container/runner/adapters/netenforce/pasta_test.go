@@ -519,3 +519,51 @@ func TestForward_NotImpliedForAnOrdinaryApp(t *testing.T) {
 		}
 	}
 }
+
+// A routed app's resolver is not Zinc's to choose: podman writes resolv.conf and points it
+// at the network's own DNS, which on an --internal bridge answers sibling names and forwards
+// nothing. The query is redirected in the netns instead, to a resolver reached through the
+// sibling - so it travels inside the tunnel and stops with it.
+func TestDNS_RoutedAppsQueriesAreRedirectedThroughTheSibling(t *testing.T) {
+	cfg := routedApp()
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1"}
+	got := NFTRuleset(cfg)
+
+	for _, want := range []string{
+		"type nat hook output priority dstnat;", // before the filter hook, so it sees the new address
+		"udp dport { 53, 853 } dnat to 1.1.1.1",
+		"tcp dport { 53, 853 } dnat to 1.1.1.1",
+		"ip daddr { 1.1.1.1 } udp dport { 53, 853 } accept", // and the filter then permits it
+		"udp dport { 53, 853 } drop",                        // anything not redirected dies
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("routed ruleset missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Only a routed app. For an ordinary one the network's resolver works and is the only thing
+// that knows its siblings' names, so redirecting would take that away for nothing.
+func TestDNS_OrdinaryAppKeepsItsNetworkResolver(t *testing.T) {
+	cfg := pastaApp()
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1"}
+	got := NFTRuleset(cfg)
+
+	if strings.Contains(got, "dnat to") {
+		t.Errorf("an app that is not routed must keep its own resolver:\n%s", got)
+	}
+	// It is still held to the servers it declared.
+	if !strings.Contains(got, "ip daddr { 1.1.1.1 } udp dport { 53, 853 } accept") {
+		t.Errorf("declared resolvers should still be the only ones permitted:\n%s", got)
+	}
+}
+
+// An app that declares nothing keeps exactly the ruleset it had before.
+func TestDNS_NoServersNoRules(t *testing.T) {
+	got := NFTRuleset(pastaApp())
+	for _, unwanted := range []string{"dport { 53, 853 }", "dnat to"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("an app declaring no resolvers must be untouched, found %q:\n%s", unwanted, got)
+		}
+	}
+}

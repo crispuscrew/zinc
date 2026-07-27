@@ -30,6 +30,22 @@ tracked in [RELEASES.md](RELEASES.md).
   existing: rootless podman needs cgroup v2 delegation for any of it to be real, and a host
   without it would grant nothing and say nothing.
 
+- **DNS for a routed app** - `NetworkMeta.DNSServers`, required once any list sets `Via`.
+  Measured first, which changed the fix: a routed app was not leaking DNS, it could not
+  resolve at all. podman writes the container's `resolv.conf` and points it at the network's
+  own resolver, and on an `--internal` bridge that resolver answers sibling names and forwards
+  nothing - an external name comes back NXDOMAIN, with or without `--dns` on the pod, which
+  podman accepts and then ignores in favour of the network's.
+  So the query is redirected in the app's own netns rather than fought over in a file: DNS to
+  any address is rewritten to the declared resolver, which is routed through the sibling like
+  any other destination. It travels inside the tunnel and stops with it - verified end to end,
+  including that names stop resolving the moment the gateway is stopped. Anything not
+  redirected is dropped, so an app carrying a hardcoded resolver cannot step around it.
+  Only a routed app is redirected. For an ordinary one the network's resolver works and is the
+  only thing that knows its siblings' names, so taking it away would cost something and buy
+  nothing. The cost for a routed app is that it resolves through the declared server alone,
+  sibling names included; it has already lost those to the NXDOMAIN above.
+
 - **Route an app through a sibling** - `Via: true` on an egress list naming another app.
   Its CIDRs go to that sibling over their private link instead of out the app's own egress,
   which is how an app is put behind a VPN container without trusting it to route itself. Per
