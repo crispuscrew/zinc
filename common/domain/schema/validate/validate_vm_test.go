@@ -300,6 +300,46 @@ func TestVM_VulkanWarnsAboutTheSandbox(t *testing.T) {
 	}
 }
 
+// A virtio display on a guest declared to have no virtio drivers boots to a black screen -
+// the firmware paints, the OS takes over, and the device is left with no active scanout.
+// Measured on Windows 11. It stays a warning rather than an error because it is the correct
+// machine once the guest's driver is installed, which is the only way off a fixed screen size.
+func TestVM_VirtioDisplayOnACompatibleGuestWarns(t *testing.T) {
+	for _, display := range []schema.VMDisplay{schema.VMDisplayWindow, schema.VMDisplayAccelerated} {
+		cfg := baseVM()
+		cfg.VirtualizationMeta.Display = display
+		cfg.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+		if err := Validate(cfg); err != nil {
+			t.Errorf("Display %s on a compatible guest should stay valid, got %v", display, err)
+		}
+		found := false
+		for _, warning := range Warnings(cfg) {
+			if strings.Contains(warning, "viogpudo") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("Display %s on a compatible guest should warn, got %v", display, Warnings(cfg))
+		}
+	}
+
+	// The driverless pairing is the one being recommended, so it must stay quiet.
+	quiet := baseVM()
+	quiet.VirtualizationMeta.Display = schema.VMDisplayCompatible
+	quiet.VirtualizationMeta.Devices = schema.VMDevicesCompatible
+	for _, warning := range Warnings(quiet) {
+		if strings.Contains(warning, "viogpudo") {
+			t.Errorf("Display Compatible is the driverless choice and must not warn, got %q", warning)
+		}
+	}
+	// A virtio guest drives a virtio display by definition.
+	virtio := baseVM()
+	virtio.VirtualizationMeta.Display = schema.VMDisplayWindow
+	if len(Warnings(virtio)) != 0 {
+		t.Errorf("a virtio guest with a virtio display should not warn, got %v", Warnings(virtio))
+	}
+}
+
 // A fixed guest screen size is only meaningful for the one display mode whose guest has no
 // driver to resize itself, and it rides on a device with no BIOS-compatible mode. Accepting
 // it anywhere else would write a config that looks configured and changes nothing, or one

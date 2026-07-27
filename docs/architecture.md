@@ -753,7 +753,21 @@ guest is always 1280x800. `DisplayWidth`/`DisplayHeight` switch it to a display 
 does take a size from, along with a framebuffer sized to the screen and an EDID refresh rate
 low enough that the mode's pixel clock fits its own field. Every one of those limits fails the
 same silent way, by coming up at 1280x800 with nothing logged, so a size that cannot work is
-refused at validation instead.
+refused at validation instead. What validation cannot check is the guest's own ceiling: an
+installed Windows desktop with no display driver paints at most 1824x1080 and, asked for more,
+writes rows of its own width into a wider scanout - a sheared picture rather than a smaller
+one. That limit belongs to the guest, not the machine, so it is documented rather than
+enforced; a Linux guest on the same device drives 4K perfectly well.
+
+**A provisioning disc in the guest's own language.** Every VM app gets a small read-only disc
+built fresh on each launch. For a cloud-init guest it carries that guest's identity. A guest on
+the compatible device profile has never heard of cloud-init, so the disc carries
+`zinc-setup.cmd` instead: a generated batch file that stages the virtio drivers from the
+virtio-win disc. This is where the host's reach ends. The drivers that lift such a guest off a
+fixed screen size and an emulated disk can only be installed from inside it, by a user with an
+administrator token, so the last step is handed over as something the guest can run rather than
+as something the reader must retype. The disc is built whenever either guest needs it, from one
+predicate, so turning cloud-init off does not silently take the script away too.
 
 **Installation is how the base comes into being.** A guest with no cloud image is installed by
 `zvr install`, which takes flags rather than an app name on purpose: an app pins its base by

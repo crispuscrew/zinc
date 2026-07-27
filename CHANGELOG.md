@@ -81,6 +81,24 @@ tracked in [RELEASES.md](RELEASES.md).
   in, since the driver that would fix its display is on a disc it could no longer be handed.
   Only the boot order stays the install's own, so an ordinary run boots the disk with the disc
   simply present. The discs are read-only, so leaving one in a config costs a drive letter.
+- **`zinc-setup.cmd`, a script the guest can actually run.** Everything Zinc can do for a
+  Windows guest stops at the machine: the drivers that make that machine worth having are on
+  the virtio-win disc and can only be staged from inside Windows by a user holding an
+  administrator token. So `zvr` now writes the guest a script rather than writing the reader
+  instructions. It elevates itself (a double-clicked `.cmd` has no token, and without one
+  `pnputil` fails on every driver), finds the driver disc by looking for a file only it has
+  rather than by a drive letter that depends on what else is attached, falls back from `w11`
+  to `w10` folders for an older disc, and stages the display, disk and network drivers. All
+  three, not just the display one: switching an app to `Devices: Virtio` without `viostor`
+  already staged leaves Windows unable to see its own boot disk. Nothing it does changes the
+  running machine, so it is safe to run twice and safe to run early.
+  It rides the disc every VM app already gets - the one a Linux guest reads cloud-init from,
+  which a `Devices: Compatible` guest has never heard of. That disc is now also built when
+  cloud-init is disabled, which a Windows guest would reasonably do, so turning cloud-init
+  off no longer takes the script away with it.
+- `zc new` now prints the same advisories `zc validate` does. Authoring is when a
+  valid-but-surprising choice is cheapest to change; meeting it later as a black screen or an
+  open port gives nothing to connect it back to.
 - **`make -C virtualization/runner windows-demo WIN_ISO=...`** - the whole Windows flow from
   one argument. The Windows ISO is Microsoft's and cannot be fetched for you; everything
   else is handled, including downloading the virtio-win driver disc (resumable, since it is
@@ -89,21 +107,29 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Known limitations
 
-- **Windows guests get no 3D acceleration.** There is no virtio-gpu driver for Windows, so
-  they run on an unaccelerated framebuffer; passthrough, the usual answer, needs a second GPU.
-  Windows guests are for software that must run on Windows, not for games.
+- **Windows guests get no 3D acceleration.** virtio-gpu's Windows driver is display-only -
+  there is no virgl path, so guest OpenGL and Vulkan have nothing to run on and the desktop
+  is an unaccelerated framebuffer. Passthrough, the usual answer, needs a second GPU. Windows
+  guests are for software that must run on Windows, not for games.
 - **A guest's screen size is fixed at boot.** Resizing the window scales those pixels rather
   than changing the guest's resolution, because a guest with no display driver cannot be told
-  about a new mode. Making the window resize the guest needs a real driver inside it
-  (`viogpudo` from virtio-win, or QXL).
-- **An installed Windows desktop caps its width at 1728**, whatever it is given. Measured on a
-  Windows 11 24H2 guest with no display driver: asked for 1920x1080, 1920x1200 and 1920x1024
-  it painted 1728 columns and left the rest black, and at 1728x1080 it filled the screen
-  exactly. Height is honoured throughout, and the cap is on width rather than framebuffer
-  bytes - 1920x1024 is smaller than 1728x1080 and still got clipped. Windows Setup itself is
-  not affected and uses whatever mode it is given, so this is the installed desktop's own
-  behaviour. Until a guest display driver is installed, a Windows app is best authored at
-  `--resolution 1728x1080`, which is the same usable desktop with no wasted black.
+  about a new mode. The way off it is a real driver inside the guest: stage `viogpudo` from
+  the virtio-win disc, then re-author with `--display Window`. Do it in that order. Measured
+  on Windows 11: given a virtio-gpu with no driver staged, the firmware paints and then the
+  screen goes black the moment Windows starts, because the device is left with no active
+  scanout - qemu's window just reads "display output is not active". Authoring that pairing
+  now warns, at `zc new` and at every `zvr run`, rather than letting a black window be the
+  first news of it.
+- **An installed Windows desktop stops at 1824x1080** without a display driver, whatever the
+  machine gives it. Measured on a Windows 11 24H2 guest: at 1920x1080, 1920x1024 and 1920x1200
+  it painted 1824 columns and no more than 1080 rows, leaving the rest black; at 1824x1080
+  nothing was clipped. Past that it does not simply clip. Asked for 2560x1440 it painted
+  810 rows of sheared, repeating bands - and 810 x 2560 is exactly 1920 x 1080, so the desktop
+  is writing rows of its own width into a scanout with a wider stride, and every display row
+  swallows 1.33 guest rows. Windows Setup is not affected and uses whatever mode it is given,
+  so this is the installed desktop's own behaviour. Until a guest display driver is installed,
+  author a Windows app at `--resolution 1824x1080`: the largest desktop it will actually
+  paint, with nothing wasted.
 
 ## [0.5.0] - 2026-07-26
 

@@ -90,7 +90,10 @@ WIN_MEMORY  ?= 8192
 WIN_VCPUS   ?= 4
 # A guest with no display driver keeps whatever mode the firmware gave it, and left alone
 # that is 1280x800 for the whole life of the app. Set WIN_RES= (empty) to leave it there.
-WIN_RES     ?= 1920x1080
+# 1824x1080 rather than 1920x1080 because an installed Windows desktop with no display driver
+# paints at most 1824 columns: given 1920 it leaves the last 96 black. Measured, see the
+# changelog.
+WIN_RES     ?= 1824x1080
 VIRTIO_WIN  := $(IMAGE_DIR)/virtio-win.iso
 VIRTIO_URL  := https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
 
@@ -157,11 +160,15 @@ windows-demo: build
 	@echo "  ./bin/zvr run $(WIN_APP)      boot it (writes to its own overlay)"
 	@echo "  ./bin/zvr reset $(WIN_APP)    throw the overlay away, back to freshly installed"
 	@echo
-	@echo "No 3D acceleration: Windows has no virtio-gpu driver and passthrough needs a"
-	@echo "second GPU, so this is for software that must run on Windows, not for games."
+	@echo "No 3D acceleration: virtio-gpu's Windows driver is display-only and passthrough"
+	@echo "needs a second GPU, so this is for software that must run on Windows, not games."
 	@echo "Its screen is fixed at $(if $(WIN_RES),$(WIN_RES),1280x800) - a guest with no display driver cannot be"
-	@echo "told about a new mode, so resizing the window scales those pixels. Re-author with"
-	@echo "a different --resolution to change it (up to 3840x2400; the install stays)."
+	@echo "told about a new mode, so resizing the window scales those pixels."
+	@echo
+	@echo "To lift that: boot the guest, open the CD labelled cidata and run zinc-setup.cmd."
+	@echo "It stages the display, disk and network drivers. Then re-author the app with"
+	@echo "--display Window (and no --resolution) for a display that resizes with the window,"
+	@echo "and --devices Virtio for a faster disk and NIC."
 
 
 ## virtio-win: fetch the driver ISO on its own (optional; only needed to switch a guest to virtio)

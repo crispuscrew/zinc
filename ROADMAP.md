@@ -172,9 +172,13 @@ Three failures worth remembering, because all three are silent and none names it
    12-bit active-pixel fields. Each was measured against real firmware rather than assumed,
    and a size that cannot work is now refused at validation.
 
-Known limits: no 3D for Windows guests (no virtio-gpu driver, and passthrough needs a second
-GPU), and the screen size is fixed at boot because a driverless guest cannot be told about a
-new mode.
+Known limits: no 3D for Windows guests (virtio-gpu's Windows driver is display-only, and
+passthrough needs a second GPU); the screen size is fixed at boot because a driverless guest
+cannot be told about a new mode; and a driverless Windows desktop paints at most 1824x1080
+whatever the machine offers it, so a Windows app is authored at that size. The way off the
+fixed size is the guest's own display driver: `InstallMedia` discs are now attached on every
+run, not only the install, so an installed guest can still be handed the virtio-win disc,
+stage `viogpudo` from it and be re-authored with `--display Window`.
 
 **ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project in
 its own repository, layered on these tools; its milestones are tracked there, not in this

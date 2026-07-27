@@ -185,6 +185,21 @@ func Warnings(cfg schema.AppConfig) []string {
 				"because the venus renderer runs in a helper process the sandbox would kill. The guest gains "+
 				"GPU-accelerated Vulkan; the qemu process loses its syscall filter.")
 	}
+	if cfg.Type == schema.ZincVirtualization && virtioGpuOnACompatibleGuest(cfg.VirtualizationMeta) {
+		// Measured on a Windows 11 guest: the firmware paints on a virtio-gpu, and then the
+		// screen goes black the moment the OS takes over, because a guest with no virtio-gpu
+		// driver leaves the device with no active scanout. Nothing errors and nothing is
+		// logged - the window just says the display output is not active. Devices:
+		// Compatible is the app saying this guest has no virtio drivers, so pairing it with
+		// a virtio display is worth a word at authoring time rather than a black screen at
+		// the first boot. Not an error: once the driver IS installed this is the right
+		// machine, and it is how a guest stops being stuck at a fixed screen size.
+		warns = append(warns,
+			"VirtualizationMeta: Display "+string(cfg.VirtualizationMeta.Display)+" gives the guest a virtio-gpu, "+
+				"but Devices: Compatible says the guest has no virtio drivers. Unless one is installed inside it "+
+				"(viogpudo, from the virtio-win disc), the screen goes black as soon as the OS starts. "+
+				"Display: Compatible is the driverless choice.")
+	}
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		if netList.Ingress {
 			warns = append(warns, ingressWarnings(index, netList)...)
@@ -199,6 +214,16 @@ func Warnings(cfg schema.AppConfig) []string {
 		}
 	}
 	return warns
+}
+
+// virtioGpuOnACompatibleGuest reports the one display/device pairing that produces a picture
+// from the firmware and nothing from the OS. Window and Accelerated are both virtio-gpu; None
+// has no display at all, and Compatible is the driverless choice this warning points at.
+func virtioGpuOnACompatibleGuest(virt schema.VirtualizationMeta) bool {
+	if virt.Devices != schema.VMDevicesCompatible {
+		return false
+	}
+	return virt.Display == schema.VMDisplayWindow || virt.Display == schema.VMDisplayAccelerated
 }
 
 // ingressWarnings surfaces one published-port (Ingress) list: inbound exposure always

@@ -51,7 +51,7 @@ const usage = `usage: zc <command> [args]
   tui                               keyboard-first manager (create/edit/run/stop/logs)
   new <name> --image <img> [--desc d] [--icon i]
   new <name> --vm --image <base.qcow2> --base-digest sha256:... [--memory MiB]
-             [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]
+             [--vcpus N] [--disk GiB] [--display None|Window|Accelerated|Compatible]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
              [--firmware UEFI] [--secure-boot] [--tpm] [--devices Compatible] [--vulkan]
              [--resolution WxH] [--mac ADDR] [--media disc.iso]
@@ -186,7 +186,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	vcpus := fset.Int("vcpus", 2, "VM only: guest CPU count")
 	diskSize := fset.Int64("disk", 0, "VM only: overlay size in GiB (0 keeps the base image's size)")
 	display := fset.String("display", string(schema.VMDisplayAccelerated),
-		"VM only: None (headless), Window (no 3D), or Accelerated (virtio-gpu-gl)")
+		"VM only: None (headless), Window (no 3D), Accelerated (virtio-gpu-gl), or Compatible (plain VGA, for a guest with no virtio-gpu driver)")
 	ciUser := fset.String("ci-user", "", "VM only: account cloud-init creates in the guest")
 	ciKey := fset.String("ci-ssh-key", "", "VM only: path to a PUBLIC key authorised for that account")
 	forward := fset.String("forward", "", "VM only: publish a guest port as HOST:GUEST (e.g. 2222:22), repeatable with commas")
@@ -268,6 +268,12 @@ func cmdNew(svc backend.Service, argv []string) error {
 		return err
 	}
 	fmt.Printf("created %s → %s\n", cfg.AppNameID, svc.Path(cfg.AppNameID))
+	// Same advisories `zc validate` prints. Authoring is when a valid-but-surprising choice
+	// is cheapest to change: the alternative is meeting it as a black screen or an open port
+	// at the first launch, with nothing on screen connecting the two.
+	for _, warn := range validate.Warnings(cfg) {
+		fmt.Println("warning: " + warn)
+	}
 	return nil
 }
 
