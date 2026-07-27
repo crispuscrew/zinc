@@ -96,16 +96,16 @@ StopConditions:
   KeepAlive: false               # keep the container after the entrypoint exits (no --rm)
   Background: false              # stay alive after the window closes
 
-ResourcesMeta:                   # validated (>= 0; 0 = unlimited). Runtime enforcement: roadmap
+ResourcesMeta:                   # enforced (>= 0; 0 = unlimited)
   MaxCPUCores: 2                 # fractional allowed (0.5)
   MaxRamMiB: 2048
-  MaxSwapMiB: 0
+  MaxSwapMiB: 0                  # on top of MaxRamMiB, which must be set alongside it
   PIDsLimit: 512                 # fork-bomb guard
 
-InternalUserMeta:                # validated. Runtime wiring (--user): roadmap
+InternalUserMeta:                # enforced
   UseNonRootUser: true
   NonRootUserName: app
-  KeepUserID: false
+  KeepUserID: false              # --userns=keep-id: the container sees the host's uid
 
 ImageMeta:
   Image: docker.io/library/alpine@sha256:...  # third-party images MUST be digest-pinned (5.5)
@@ -119,7 +119,7 @@ DisplayMeta:
 NetworkMeta:
   NetworkLists: []               # empty = isolated (own localhost only). See 5.3 and section 6.
 
-NotificationMeta:                # schema-defined; runtime wiring: roadmap
+NotificationMeta:                # NOT implemented - a non-default value is refused, not ignored
   Disabled: false
   Silenced: false
   UseCustomPrefix: false
@@ -173,9 +173,11 @@ Keys:
 capability drop-all baseline plus `Capabilities`, Wayland socket + security-context label,
 GPU device, the theme bundle, audio (Pipewire socket / `/dev/snd`), explicit host bind
 mounts, SSH/GPG key mounts, the entrypoint override, and the terminal / multiterminal /
-background / keep-alive lifecycle. **Schema-defined but not yet wired into the
-launch:** `ResourcesMeta`, `InternalUserMeta`, `NotificationMeta`, and `Configs`. They are on
-the roadmap and are called out here so the doc does not overclaim.
+background / keep-alive lifecycle. `ResourcesMeta` (`--cpus`, `--memory`, `--memory-swap`, `--pids-limit`) and
+`InternalUserMeta` (`--user`, `--userns=keep-id`) are enforced as of 0.7. **Schema-defined
+and not wired into the launch:** `NotificationMeta` and `Configs`. `NotificationMeta` is
+refused rather than ignored - Zinc has no notification path, so accepting `Silenced` would
+tell an author their app is muted while it notifies freely.
 
 ---
 

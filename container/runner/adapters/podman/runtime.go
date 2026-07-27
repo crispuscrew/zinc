@@ -131,6 +131,14 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 	if home == "" {
 		home = "/root"
 	}
+	// Keys are mounted into the home of whoever runs the app. An app told to run as a
+	// non-root user does not get to read /root, so mounting its ssh key there would put the
+	// file in the container and still deny it - the failure would look like a broken key
+	// rather than a wrong path. /home/<name> is the convention every mainstream image
+	// follows for a named user.
+	if user := cfg.InternalUserMeta; user.UseNonRootUser && user.NonRootUserName != "" {
+		home = "/home/" + user.NonRootUserName
+	}
 
 	args := []string{"run"}
 	mode := modeFor(cfg)
@@ -171,6 +179,12 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 	// Least-privilege baseline (section 1, section 5.1): drop every capability and forbid privilege
 	// escalation. Anything the app genuinely needs is re-added below from Capabilities.
 	args = append(args, "--security-opt", "no-new-privileges", "--cap-drop", "all")
+
+	// The rest of the containment baseline: who the app runs as, and how much of the
+	// machine it may take. Both are part of the sandbox rather than tuning, so they sit
+	// with the capability drop rather than among the optional wiring below.
+	args = append(args, userArgs(cfg.InternalUserMeta)...)
+	args = append(args, resourceArgs(cfg.ResourcesMeta)...)
 
 	// Network attachment is the enforcer's decision (section 5.3) - we only splice it in.
 	args = append(args, netFlags...)
@@ -265,6 +279,60 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		args = append(args, HolderCmd()...)
 	}
 	return args, nil
+}
+
+// userArgs decides who the app runs as inside the container. Both fields were in the schema
+// and validated from the first release and neither reached podman, so an app that asked to
+// run unprivileged ran as root and nothing said otherwise - the worst shape for a setting to
+// have on a sandboxing tool.
+//
+// KeepUserID is the rootless-podman question, not the same one. Rootless maps the invoking
+// host user to root inside the container, so a file written into a bind mount comes back
+// owned by the host user either way; what --userns=keep-id changes is that the container
+// sees the SAME uid as the host, which is what an app sharing a host directory with the
+// desktop needs in order to agree about ownership.
+func userArgs(user schema.InternalUserMeta) []string {
+	var args []string
+	if user.KeepUserID {
+		args = append(args, "--userns=keep-id")
+	}
+	if user.UseNonRootUser && user.NonRootUserName != "" {
+		// By name, not uid: the name has to exist in the image's /etc/passwd, and podman
+		// fails loudly when it does not. A numeric uid would always "work" and could land
+		// on a user the image does not have, with no home and no shell.
+		args = append(args, "--user", user.NonRootUserName)
+	}
+	return args
+}
+
+// resourceArgs caps what one app may take from the machine. A container with no limits can
+// exhaust the host's memory or fork until nothing else can start, which is a containment
+// hole rather than a tuning oversight - these were validated and then dropped on the floor.
+//
+// Zero means unlimited throughout, matching the schema and podman's own default, so an app
+// that sets nothing gets exactly the argv it got before.
+func resourceArgs(res schema.ResourcesMeta) []string {
+	var args []string
+	if res.MaxCPUCores > 0 {
+		// 'f' with -1 precision: 0.5 stays "0.5" and 2 stays "2", never "2.000000" or an
+		// exponent, both of which podman rejects.
+		args = append(args, "--cpus", strconv.FormatFloat(res.MaxCPUCores, 'f', -1, 64))
+	}
+	if res.MaxRamMiB > 0 {
+		args = append(args, "--memory", strconv.FormatInt(res.MaxRamMiB, 10)+"m")
+	}
+	if res.MaxSwapMiB > 0 && res.MaxRamMiB > 0 {
+		// --memory-swap is the TOTAL of memory and swap, not the swap on its own. Passing
+		// the swap figure alone would silently shrink the app's memory ceiling instead of
+		// adding to it - and on a config asking for 2048 MiB of RAM and 512 of swap, it
+		// would cap the whole app at 512. Validation requires the memory limit alongside,
+		// so the sum is always the number the author meant.
+		args = append(args, "--memory-swap", strconv.FormatInt(res.MaxRamMiB+res.MaxSwapMiB, 10)+"m")
+	}
+	if res.PIDsLimit > 0 {
+		args = append(args, "--pids-limit", strconv.FormatInt(res.PIDsLimit, 10))
+	}
+	return args
 }
 
 // Lifecycle argv builders (section 9.1). Pure functions returning the arguments to pass to

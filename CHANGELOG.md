@@ -5,6 +5,38 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [Unreleased]
+
+### Added
+
+- **`ResourcesMeta` and `InternalUserMeta` are enforced.** Both shipped in the schema at 0.1,
+  were range- and charset-validated ever since, and never reached podman: the runtime emitted
+  no `--cpus`, `--memory`, `--pids-limit` or `--user` anywhere. So an app could set
+  `UseNonRootUser: true` and `MaxRamMiB: 2048`, be told the config was valid, and run as root
+  with no memory limit. On a sandboxing tool that is the worst shape a setting can have -
+  a security control that reads as if it were in force. What made it an oversight rather than
+  a decision is that VM apps already *reject* these fields as container-only, so the schema
+  knew they meant something; only the container runtime never looked.
+  `MaxSwapMiB` is granted on top of `MaxRamMiB` rather than passed through. podman's
+  `--memory-swap` is the total of memory and swap, so forwarding the swap figure alone would
+  have capped an app asking for 2048 MiB of RAM and 512 of swap at 512 MiB - the opposite of
+  granting it swap. It now requires a memory limit alongside, and the runtime sends the sum.
+  Key mounts follow the user: an app running as `app` gets its keys under `/home/app`, not
+  `/root`, where they would have been present and unreadable and looked like a broken key.
+  Verified against the kernel rather than the argv: a new end-to-end scenario launches an app
+  with a 128 MiB cap, 32 MiB of swap, 50 PIDs and `NonRootUserName: nobody`, and the app
+  reports back what it was actually granted - `UID=65534`, `memory.max=134217728`,
+  `memory.swap.max=33554432`, `pids.max=50`. Emitting a flag is not the same as a limit
+  existing: rootless podman needs cgroup v2 delegation for any of it to be real, and a host
+  without it would grant nothing and say nothing.
+
+### Changed
+
+- **`NotificationMeta` is refused instead of ignored.** Nothing in Zinc proxies, silences or
+  prefixes an app's notifications, so every field in the block is inert. Accepting `Silenced`
+  told an author their app was muted while it notified freely. A non-default value is now a
+  validation error naming the reason; the zero value every existing app has stays legal.
+
 ## [0.6.0] - 2026-07-27
 
 Windows-class guests. The VM runner now describes a machine rather than assuming one, and

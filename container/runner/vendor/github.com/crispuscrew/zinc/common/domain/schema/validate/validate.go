@@ -31,6 +31,8 @@ func Validate(cfg schema.AppConfig) error {
 	checkVirtualizationUnset(cfg, add)
 	checkContainerImage(cfg.ImageMeta.Image, add)
 	checkResources(cfg.ResourcesMeta, add)
+	checkInternalUser(cfg.InternalUserMeta, add)
+	checkNotifications(cfg.NotificationMeta, add)
 
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		checkNetworkList(index, netList, add)
@@ -170,6 +172,42 @@ func checkResources(res schema.ResourcesMeta, add addFunc) {
 	if res.PIDsLimit < 0 {
 		add("ResourcesMeta.PIDsLimit %d: must be >= 0 (0 = unlimited)", res.PIDsLimit)
 	}
+	// A swap allowance on its own has no meaning to enforce. The runtime tells podman the
+	// TOTAL of memory and swap, because that is the only figure podman takes, and with no
+	// memory limit there is no total to state - podman would either refuse the flag or read
+	// the swap figure as the app's whole memory ceiling, which is the opposite of what
+	// asking for swap means. Naming the missing field beats either.
+	if res.MaxSwapMiB > 0 && res.MaxRamMiB <= 0 {
+		add("ResourcesMeta.MaxSwapMiB %d: needs MaxRamMiB set too - swap is allowed on top of the memory limit, so without one there is nothing to add it to",
+			res.MaxSwapMiB)
+	}
+}
+
+// checkInternalUser screens who the app runs as. Both halves have to agree: the runtime
+// passes the name to podman, so asking for a non-root user without naming one leaves
+// nothing to pass, and naming one without asking leaves a field that reads as if it were in
+// force. Either way the config would say something the launch does not do, which is the
+// whole reason these fields were worth wiring up.
+func checkInternalUser(user schema.InternalUserMeta, add addFunc) {
+	if user.UseNonRootUser && strings.TrimSpace(user.NonRootUserName) == "" {
+		add("InternalUserMeta.UseNonRootUser: set NonRootUserName too - the user is passed to podman by name, and it must exist in the image")
+	}
+	if !user.UseNonRootUser && strings.TrimSpace(user.NonRootUserName) != "" {
+		add("InternalUserMeta.NonRootUserName %q: has no effect without UseNonRootUser", user.NonRootUserName)
+	}
+}
+
+// checkNotifications fails closed on a block that is defined and does nothing. Zinc has no
+// notification path yet - nothing proxies, silences or prefixes an app's notifications - so
+// every field here is inert. Silently accepting Silenced would tell an author their app is
+// muted while it notifies freely, and the honest answer for an unimplemented mechanism is to
+// refuse the config rather than mis-enforce it. The zero value stays legal, so an app that
+// never touched the block is unaffected.
+func checkNotifications(notify schema.NotificationMeta, add addFunc) {
+	if notify == (schema.NotificationMeta{}) {
+		return
+	}
+	add("NotificationMeta: not implemented - Zinc does not proxy or filter app notifications yet, so none of these fields would be enforced; leave the block at its defaults")
 }
 
 // Warnings returns non-fatal create-time advisories (zc); nothing here blocks save or

@@ -79,3 +79,70 @@ func TestBenignCapabilityOnFilteredAppOK(t *testing.T) {
 		t.Fatalf("benign cap on a filtered app: want nil, got: %v", err)
 	}
 }
+
+// Swap is granted on top of the memory limit, because podman only takes the total of the
+// two. On its own there is nothing to add it to, and the runtime would either drop it or
+// hand podman a figure that caps the app far below what it asked for.
+func TestResources_SwapNeedsAMemoryLimit(t *testing.T) {
+	cfg := baseCfg()
+	cfg.ResourcesMeta.MaxSwapMiB = 512
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "MaxSwapMiB") {
+		t.Fatalf("swap without a memory limit: want a MaxSwapMiB error, got: %v", err)
+	}
+
+	cfg.ResourcesMeta.MaxRamMiB = 2048
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("swap alongside a memory limit should pass, got: %v", err)
+	}
+}
+
+// The two halves of the user setting have to agree. Each on its own describes something the
+// launch will not do, which is exactly the failure these fields had for five releases.
+func TestInternalUser_BothHalvesOrNeither(t *testing.T) {
+	asking := baseCfg()
+	asking.InternalUserMeta.UseNonRootUser = true
+	err := Validate(asking)
+	if err == nil || !strings.Contains(err.Error(), "NonRootUserName") {
+		t.Fatalf("UseNonRootUser with no name: want a NonRootUserName error, got: %v", err)
+	}
+
+	named := baseCfg()
+	named.InternalUserMeta.NonRootUserName = "app"
+	err = Validate(named)
+	if err == nil || !strings.Contains(err.Error(), "no effect") {
+		t.Fatalf("a name without UseNonRootUser: want a no-effect error, got: %v", err)
+	}
+
+	both := baseCfg()
+	both.InternalUserMeta.UseNonRootUser = true
+	both.InternalUserMeta.NonRootUserName = "app"
+	if err := Validate(both); err != nil {
+		t.Fatalf("both halves set should pass, got: %v", err)
+	}
+
+	// KeepUserID answers a different question (host/container uid agreement) and stands
+	// alone.
+	keep := baseCfg()
+	keep.InternalUserMeta.KeepUserID = true
+	if err := Validate(keep); err != nil {
+		t.Fatalf("KeepUserID on its own should pass, got: %v", err)
+	}
+}
+
+// Nothing in Zinc proxies or filters notifications, so every field in this block is inert.
+// Accepting Silenced would tell an author their app is muted while it notifies freely; an
+// unimplemented mechanism is refused rather than mis-enforced.
+func TestNotifications_RefusedUntilImplemented(t *testing.T) {
+	cfg := baseCfg()
+	cfg.NotificationMeta.Silenced = true
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "NotificationMeta") {
+		t.Fatalf("a set notification field: want a NotificationMeta error, got: %v", err)
+	}
+
+	// The zero value is what every existing app has, and must stay legal.
+	if err := Validate(baseCfg()); err != nil {
+		t.Fatalf("an untouched notification block should pass, got: %v", err)
+	}
+}

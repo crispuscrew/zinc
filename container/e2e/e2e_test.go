@@ -75,7 +75,7 @@ func TestE2E(t *testing.T) {
 	if err := os.MkdirAll(apps, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"sleeper", "producer", "consumer"} {
+	for _, name := range []string{"sleeper", "producer", "consumer", "capped"} {
 		data, err := os.ReadFile(filepath.Join(here, "apps", name+".yaml"))
 		if err != nil {
 			t.Fatal(err)
@@ -172,6 +172,41 @@ func TestE2E(t *testing.T) {
 		}
 		if !strings.Contains(verdict, "9999=closed") {
 			t.Error("consumer should be DROPPED on the unpublished port 9999")
+		}
+	})
+
+	t.Run("containment", func(t *testing.T) {
+		// ResourcesMeta and InternalUserMeta were validated and dropped on the floor until
+		// 0.7. The runtime's unit tests prove the flags are emitted; only the kernel can say
+		// they took effect, so the app reports its own cgroup values and uid back through
+		// the logs. Rootless podman needs cgroup v2 delegation for any of this to be real -
+		// a host without it would give the app no limits and say nothing.
+		must(t, zc, "run", "capped", "--exec")
+		if !waitFor(func() bool { return running("capped") }) {
+			t.Fatal("capped should be running after `zc run --exec`")
+		}
+		defer func() { _, _ = tool(zc, "stop", "capped") }()
+
+		var out string
+		waitFor(func() bool {
+			out, _ = tool(zc, "logs", "capped")
+			return strings.Contains(out, "capped up")
+		})
+		t.Logf("capped reported:\n%s", out)
+
+		// 128 MiB, and swap on top of it rather than instead of it: --memory-swap is the
+		// total of the two, so a 128 MiB limit with 32 MiB of swap leaves a 32 MiB swap
+		// ceiling. Passing the swap figure through unsummed would have capped the app at
+		// 32 MiB of memory outright.
+		for _, want := range []string{
+			"UID=65534",            // nobody, not root
+			"MEMORY_MAX=134217728", // 128 MiB
+			"SWAP_MAX=33554432",    // 160 MiB total - 128 MiB memory
+			"PIDS_MAX=50",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("expected %q in the app's own report of what it was granted", want)
+			}
 		}
 	})
 }

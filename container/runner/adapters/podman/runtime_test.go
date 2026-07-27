@@ -349,3 +349,100 @@ func assertContainsSeq(t *testing.T, args []string, first, second string) {
 	}
 	t.Fatalf("expected adjacent %q %q in %v", first, second, args)
 }
+
+// The containment fields shipped in the schema, were validated, and never reached podman:
+// an app that asked for a memory cap or a non-root user got neither, and nothing said so.
+// These pin that they now arrive as flags.
+func TestAppRunArgs_ResourceCapsReachPodman(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID: "app",
+		ImageMeta: schema.ImageMeta{Image: "localhost/app:local"},
+		ResourcesMeta: schema.ResourcesMeta{
+			MaxCPUCores: 0.5,
+			MaxRamMiB:   2048,
+			MaxSwapMiB:  512,
+			PIDsLimit:   100,
+		},
+	}
+	got := appArgs(t, cfg, baseOpts(), netNone())
+
+	assertContainsSeq(t, got, "--cpus", "0.5")
+	assertContainsSeq(t, got, "--memory", "2048m")
+	assertContainsSeq(t, got, "--pids-limit", "100")
+	// The one that is not the number in the config: podman's --memory-swap is the total of
+	// memory and swap. Passing 512m here would cap the whole app at a quarter of the
+	// memory it asked for, which is the opposite of granting it swap.
+	assertContainsSeq(t, got, "--memory-swap", "2560m")
+}
+
+// A fractional core has to survive formatting. %f would render 0.5 as "0.500000" and a
+// large value in exponent form, and podman rejects both.
+func TestAppRunArgs_CPUFormatting(t *testing.T) {
+	for _, testCase := range []struct {
+		cores float64
+		want  string
+	}{{0.5, "0.5"}, {2, "2"}, {1.25, "1.25"}} {
+		cfg := schema.AppConfig{
+			AppNameID:     "app",
+			ImageMeta:     schema.ImageMeta{Image: "localhost/app:local"},
+			ResourcesMeta: schema.ResourcesMeta{MaxCPUCores: testCase.cores},
+		}
+		assertContainsSeq(t, appArgs(t, cfg, baseOpts(), netNone()), "--cpus", testCase.want)
+	}
+}
+
+// Swap without a memory limit is refused by validation rather than guessed at, so the
+// runtime must not invent a total from a figure that has nothing to add to.
+func TestAppRunArgs_SwapWithoutMemoryEmitsNothing(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:     "app",
+		ImageMeta:     schema.ImageMeta{Image: "localhost/app:local"},
+		ResourcesMeta: schema.ResourcesMeta{MaxSwapMiB: 512},
+	}
+	mustNotContain(t, appArgs(t, cfg, baseOpts(), netNone()), "--memory-swap")
+}
+
+// The sharpest of the inert fields: an app declaring itself unprivileged ran as root.
+func TestAppRunArgs_NonRootUser(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:        "app",
+		ImageMeta:        schema.ImageMeta{Image: "localhost/app:local"},
+		InternalUserMeta: schema.InternalUserMeta{UseNonRootUser: true, NonRootUserName: "app"},
+		Keys:             []schema.Key{{Type: schema.SSH, Path: "/home/user/.ssh/id_ed25519"}},
+	}
+	got := appArgs(t, cfg, baseOpts(), netNone())
+
+	assertContainsSeq(t, got, "--user", "app")
+	// The key has to land somewhere that user can read. Mounted into /root it would be
+	// present in the container and still unreadable, which reads as a broken key.
+	assertContainsSeq(t, got, "-v", "/home/user/.ssh/id_ed25519:/home/app/.ssh/id_ed25519:ro")
+}
+
+// KeepUserID is a different question from which user runs the app: it is about the
+// container and the host agreeing on the uid, which is what a shared host directory needs.
+func TestAppRunArgs_KeepUserID(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:        "app",
+		ImageMeta:        schema.ImageMeta{Image: "localhost/app:local"},
+		InternalUserMeta: schema.InternalUserMeta{KeepUserID: true},
+	}
+	got := appArgs(t, cfg, baseOpts(), netNone())
+	if !slices.Contains(got, "--userns=keep-id") {
+		t.Errorf("KeepUserID should map the host uid into the container, got %v", got)
+	}
+	mustNotContain(t, got, "--user")
+}
+
+// An app that asks for none of this must get exactly the argv it got before, or wiring the
+// fields up would change every existing app's launch. TestAppRunArgs_StrictNone pins the
+// full argv; this states the intent.
+func TestAppRunArgs_NoCapsNoFlags(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID: "app",
+		ImageMeta: schema.ImageMeta{Image: "localhost/app:local"},
+	}
+	got := appArgs(t, cfg, baseOpts(), netNone())
+	for _, flag := range []string{"--cpus", "--memory", "--memory-swap", "--pids-limit", "--user", "--userns=keep-id"} {
+		mustNotContain(t, got, flag)
+	}
+}
