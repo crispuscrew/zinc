@@ -30,6 +30,27 @@ tracked in [RELEASES.md](RELEASES.md).
   existing: rootless podman needs cgroup v2 delegation for any of it to be real, and a host
   without it would grant nothing and say nothing.
 
+- **Route an app through a sibling** - `Via: true` on an egress list naming another app.
+  Its CIDRs go to that sibling over their private link instead of out the app's own egress,
+  which is how an app is put behind a VPN container without trusting it to route itself. Per
+  list, so one app can send work subnets through one sibling and everything else direct.
+  The guarantees come from the topology rather than from rules being right: the link is an
+  `--internal` bridge, so a client whose only interface is that bridge has no other path to
+  those destinations and cannot leak past the sibling; and when the sibling stops, its traffic
+  blackholes rather than falling back. Both measured end to end through `zcr`.
+  The sibling must agree, with `Forward: true` on its own link ingress list - forwarding for
+  other apps makes an app a router, so it is never implied by another app naming it. Such an
+  app gets `net.ipv4.ip_forward=1` at pod creation (a container cannot set it itself:
+  `/proc/sys` is read-only in the namespace, so it would have dropped every packet it was
+  meant to forward), a default-drop `forward` chain, and `masquerade` out of its own bridge -
+  without which replies would be addressed to a private link address the outside cannot route
+  back to.
+  No address is ever written into a config. podman assigns the gateway's and it changes when
+  the gateway is recreated, so the route is resolved at launch through the network alias
+  podman already gives every app on a link. That step runs before the ruleset, because
+  resolving needs DNS and the ruleset closes the netns; both still run before the app, so the
+  app never sees an unlocked network.
+
 - **A sibling link may coexist with other networking on one app.** It could not before: the
   ruleset was interface-gated or address-gated, never both, and whichever ran ignored the
   other kind of list outright - so a linked app's egress rules simply vanished, which is why

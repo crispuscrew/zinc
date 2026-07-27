@@ -360,6 +360,27 @@ The producer accepts only its published `Ports` inbound on that link interface; 
 else default-drops. The consumer accepts nothing new inbound. The bridge is `--internal`, so
 neither app reaches anything else through it.
 
+**Routing through a sibling.** An egress list that names an `AppName` and sets `Via: true`
+sends its CIDRs to that sibling over their private link instead of out this app's own egress -
+how an app is put behind a VPN container. It is per list, so one app can pick a different
+backend per destination. The client gets no other path to those destinations, so it cannot
+leak past the sibling, and when the sibling stops its traffic blackholes rather than falling
+back (measured, both ways).
+
+The sibling must agree: `Forward: true` on its own link ingress list. Forwarding for other
+apps makes an app a router, so it is never implied by another app naming it. A forwarding app
+gets `net.ipv4.ip_forward=1` at pod creation - a container cannot set it itself, `/proc/sys`
+is read-only in the namespace - plus a `forward` chain (default-drop, link in / egress out
+only; the forward hook is a separate chain from `output`, so the egress rules never see
+routed traffic) and `masquerade` out of its own bridge, without which replies would be
+addressed to a private link address the outside cannot route back to.
+
+The gateway's address is never written into a config. podman assigns it and it changes when
+the gateway is recreated, so the route step resolves it at launch through the network alias
+podman already gives every app on a link. It runs before the ruleset, because resolving needs
+DNS and the ruleset closes the netns - and both run before the app, so the app still never
+sees an unlocked network.
+
 **A linked app may also reach the outside.** One app is gated both ways at once: the `zlink*`
 bridges by interface, everything else by address and port. Chain policy comes from the
 non-link lists alone - a link list is structurally a whitelist, so counting it would flip an

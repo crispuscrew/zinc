@@ -151,8 +151,12 @@ func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.C
 			Desc: "ensure link network " + entry.network,
 		})
 	}
+	steps = append(steps, ports.Command{Args: podCreateArgs(cfg, pod), Desc: "create pod (netns)"})
+	// Routes first, rules second: resolving the gateway needs DNS, and the ruleset that
+	// follows closes the netns. Both are done before the app starts, so the app still never
+	// sees an unlocked network.
+	steps = append(steps, routeCommands(cfg, image)...)
 	return append(steps,
-		ports.Command{Args: podCreateArgs(cfg, pod), Desc: "create pod (netns)"},
 		ports.Command{Args: nftApplyArgs(pod, image), Stdin: NFTRuleset(cfg), Desc: "lock netns with nft (before app)"},
 	)
 }
@@ -165,6 +169,87 @@ func (Enforcer) Teardown(cfg schema.AppConfig) []string {
 		return []string{"pod", "rm", "-f", PodName(cfg.AppNameID)}
 	}
 	return []string{"stop", cfg.AppNameID}
+}
+
+// viaLists returns the egress lists that route through a sibling, paired with the link
+// interface their traffic leaves by. The interface comes from links(), so the route and the
+// ruleset always agree on which bridge is which.
+func viaLists(cfg schema.AppConfig) []viaRoute {
+	byNetwork := map[string]string{}
+	for _, entry := range links(cfg) {
+		byNetwork[entry.network] = entry.iface
+	}
+	var out []viaRoute
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if !netList.Via {
+			continue
+		}
+		gateway := strings.TrimSpace(netList.AppName)
+		out = append(out, viaRoute{
+			gateway: gateway,
+			iface:   byNetwork[LinkNetwork(gateway)],
+			cidrs:   append(append([]string{}, netList.IPv4CIDR...), netList.IPv6CIDR...),
+		})
+	}
+	return out
+}
+
+// viaRoute is one "send these destinations through that sibling" instruction.
+type viaRoute struct {
+	gateway string
+	iface   string
+	cidrs   []string
+}
+
+// forwards reports whether this app has agreed to route for the siblings on its link.
+func forwards(cfg schema.AppConfig) bool {
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if netList.Forward {
+			return true
+		}
+	}
+	return false
+}
+
+// routeCommands installs the sibling routes inside the app's netns, before the app starts.
+//
+// The gateway's address is resolved at this moment rather than written into the config,
+// because podman assigns it and it changes when the gateway is recreated. It resolves by the
+// network alias podman already gives every app on a link (its AppNameID), using the link's
+// own DNS - so a config never carries an address, and a gateway that restarts on a new one
+// is picked up the next time a client starts.
+//
+// The step runs in the same helper as the ruleset and before it, so DNS is still reachable:
+// afterwards the netns is default-drop. Both run before the app, so the app still never sees
+// an unlocked network.
+func routeCommands(cfg schema.AppConfig, image string) []ports.Command {
+	var steps []ports.Command
+	for _, route := range viaLists(cfg) {
+		if len(route.cidrs) == 0 || route.iface == "" {
+			continue
+		}
+		var script strings.Builder
+		// Fail on the first error: a route that did not install would leave the app sending
+		// those destinations out its own egress instead - the leak this feature exists to
+		// prevent - so the launch must stop rather than continue quietly.
+		script.WriteString("set -e\n")
+		fmt.Fprintf(&script, "gateway=$(getent hosts %s | awk '{print $1; exit}')\n", route.gateway)
+		fmt.Fprintf(&script, "test -n \"$gateway\" || { echo \"cannot resolve sibling %s on its link\" >&2; exit 1; }\n", route.gateway)
+		for _, cidr := range route.cidrs {
+			// replace, not add: a re-run of a resumed launch must not fail on an existing
+			// route, and the default route already exists on a bridge-attached pod.
+			fmt.Fprintf(&script, "ip route replace %s via \"$gateway\" dev %s\n", cidr, route.iface)
+		}
+		steps = append(steps, ports.Command{
+			Args: []string{
+				"run", "--pod", PodName(cfg.AppNameID), "--rm", "--pull", "never",
+				"--security-opt", "no-new-privileges", "--cap-drop", "all", "--cap-add", "NET_ADMIN",
+				image, "sh", "-c", script.String(),
+			},
+			Desc: "route through sibling " + route.gateway,
+		})
+	}
+	return steps
 }
 
 // isLinkList reports whether a list is a tier-2 sibling link: a producer's self-scoped
@@ -250,7 +335,29 @@ func NFTRuleset(cfg schema.AppConfig) string {
 		bld.WriteString("\t}\n")
 	}
 
+	// A forwarding app needs two more things, and neither is optional: a filter rule for
+	// traffic it routes on behalf of siblings (the forward hook is a separate chain from
+	// output, so the egress rules above never see it), and NAT out of its own bridge, or
+	// replies would be addressed to a private link address the outside cannot route back to.
+	if forwards(cfg) {
+		bld.WriteString("\tchain forward {\n")
+		bld.WriteString("\t\ttype filter hook forward priority 0; policy drop;\n")
+		bld.WriteString("\t\tct state established,related accept\n")
+		if own := ownLinkIface(cfg); own != "" {
+			fmt.Fprintf(&bld, "\t\tiifname %q oifname %q accept\n", own, egressIface)
+		}
+		bld.WriteString("\t}\n")
+	}
 	bld.WriteString("}\n")
+
+	if forwards(cfg) {
+		bld.WriteString("table ip nat {\n")
+		bld.WriteString("\tchain postrouting {\n")
+		bld.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
+		fmt.Fprintf(&bld, "\t\toifname %q masquerade\n", egressIface)
+		bld.WriteString("\t}\n")
+		bld.WriteString("}\n")
+	}
 	return bld.String()
 }
 
@@ -373,6 +480,12 @@ func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	// app on that bridge. A bridge per app keeps them apart whatever their rules say.
 	if needsOwnEgress(cfg) {
 		args = append(args, "--network", EgressNetwork(cfg.AppNameID)+":interface_name="+egressIface)
+	}
+	if forwards(cfg) {
+		// Set here because a container cannot set it itself: /proc/sys is read-only in the
+		// namespace, so an app that agreed to route for its siblings would silently drop
+		// every packet it was meant to forward.
+		args = append(args, "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv6.conf.all.forwarding=1")
 	}
 	// alias=<AppNameID>: podman resolves the network alias but NOT the pod's app
 	// container name, so this makes each app reachable on the link at its AppNameID

@@ -259,6 +259,23 @@ type NetworkList struct {
 
 	GatewayV4 string `yaml:"GatewayV4"` // if "" use default
 	GatewayV6 string `yaml:"GatewayV6"`
+
+	// Via turns an egress list naming an AppName from "talk TO that app" into "route
+	// THROUGH it": the listed CIDRs are sent to that sibling over their private link
+	// instead of out this app's own egress. That is how an app is put behind a VPN
+	// container without trusting it to route itself - it has no other path to those
+	// destinations, so it cannot leak past the sibling, and if the sibling stops, the
+	// traffic blackholes rather than falling back.
+	//
+	// Per list, so one app can pick a different backend per destination: work subnets
+	// through one sibling, everything else direct.
+	Via bool `yaml:"Via"`
+
+	// Forward is the other half, set on the producer's own ingress list: siblings on my
+	// link may route through me, and I will forward and masquerade their traffic out of my
+	// own egress. Explicit because forwarding for other apps is a privilege - it makes this
+	// app a router - and must never be implied by another app naming it.
+	Forward bool `yaml:"Forward"`
 }
 
 type NotificationMeta struct {

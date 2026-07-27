@@ -48,7 +48,39 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 		add("NetworkLists[%d].AppName %q: invalid app name; allowed [a-z0-9._-], must start alphanumeric", index, netList.AppName)
 	}
 
+	checkRouting(index, netList, add)
 	checkGateway(index, netList, self, add)
+}
+
+// checkRouting screens the two halves of routing through a sibling. Each is refused in the
+// shapes where it would describe something the launch cannot do, because the whole value of
+// the feature is that a client cannot reach its destinations any other way - a half-stated
+// config that still runs is a config that leaks.
+func checkRouting(index int, netList schema.NetworkList, add addFunc) {
+	if netList.Via {
+		if strings.TrimSpace(netList.AppName) == "" {
+			add("NetworkLists[%d].Via: needs an AppName - routing through a sibling has to name which one", index)
+		}
+		if netList.Host {
+			add("NetworkLists[%d].Via: cannot be host-scoped - the route goes to a sibling over their private link, not to the host", index)
+		}
+		if netList.Ingress {
+			add("NetworkLists[%d].Via: is an egress property - an ingress list describes who reaches this app, which is not something to route", index)
+		}
+		if netList.Blacklist {
+			add("NetworkLists[%d].Via: cannot be a blacklist - its CIDRs are the destinations to send through the sibling, and a blacklist would state the ones not to route while routing nothing", index)
+		}
+		if len(netList.IPv4CIDR) == 0 && len(netList.IPv6CIDR) == 0 {
+			add("NetworkLists[%d].Via: needs IPv4CIDR/IPv6CIDR destinations to route (use 0.0.0.0/0 and/or ::/0 to send everything through the sibling)", index)
+		}
+	}
+	if netList.Forward {
+		// Forward belongs on the producer's own link ingress: it is this app saying that
+		// siblings joining its link may route out through it.
+		if !netList.Ingress || netList.Host || strings.TrimSpace(netList.AppName) != "" {
+			add("NetworkLists[%d].Forward: belongs on this app's own link ingress list (Ingress: true, no Host, no AppName) - it says siblings on that link may route through this app", index)
+		}
+	}
 }
 
 // checkGateway validates routing gateways and gates the multi-homing they imply. A

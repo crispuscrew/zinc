@@ -405,3 +405,117 @@ func TestPodCreate_LinkOnlyAppGetsNoEgressBridge(t *testing.T) {
 		}
 	}
 }
+
+// routedApp sends everything through a sibling; vpnApp agrees to carry it. Together they
+// are the whole feature: the client has no other path to those destinations, so it cannot
+// leak past the sibling, and if the sibling stops the traffic blackholes.
+func routedApp() schema.AppConfig {
+	cfg := pastaApp()
+	cfg.AppNameID = "browser"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{
+		{AppName: "vpn", Via: true, IPv4CIDR: []string{"0.0.0.0/0"}},
+	}
+	return cfg
+}
+
+func vpnApp() schema.AppConfig {
+	cfg := pastaApp()
+	cfg.AppNameID = "vpn"
+	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{
+		{Ingress: true, Forward: true},
+		{IPv4CIDR: []string{"203.0.113.7/32"}, Ports: []int{51820}},
+	}
+	return cfg
+}
+
+// The gateway's address is never written into a config: podman assigns it and it changes
+// when the gateway is recreated. The route step resolves it at launch through the network
+// alias podman already gives every app on a link.
+func TestVia_RouteResolvesTheGatewayAtLaunch(t *testing.T) {
+	steps := Enforcer{}.Prepare(routedApp(), options.HostOptions{})
+
+	var script string
+	for _, step := range steps {
+		if strings.HasPrefix(step.Desc, "route through sibling") {
+			script = step.Args[len(step.Args)-1]
+		}
+	}
+	if script == "" {
+		t.Fatal("a Via list should produce a route step")
+	}
+	for _, want := range []string{
+		"getent hosts vpn", // resolved by alias, not from config
+		`ip route replace 0.0.0.0/0 via "$gateway" dev zlink0`, // over the private link
+		"set -e", // a route that fails must stop the launch
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("route script missing %q:\n%s", want, script)
+		}
+	}
+}
+
+// Order matters: resolving the gateway needs DNS, and the ruleset that follows closes the
+// netns. Both still run before the app, so the app never sees an unlocked network.
+func TestVia_RouteRunsBeforeTheRulesetAndBeforeTheApp(t *testing.T) {
+	steps := Enforcer{}.Prepare(routedApp(), options.HostOptions{})
+
+	route, nft := -1, -1
+	for index, step := range steps {
+		switch {
+		case strings.HasPrefix(step.Desc, "route through sibling"):
+			route = index
+		case strings.Contains(step.Desc, "lock netns"):
+			nft = index
+		}
+	}
+	if route < 0 || nft < 0 {
+		t.Fatalf("expected both a route and an nft step, got %d steps", len(steps))
+	}
+	if route > nft {
+		t.Error("the route step must run before the ruleset closes the netns, or DNS is already blocked")
+	}
+}
+
+// A container cannot set ip_forward itself - /proc/sys is read-only in the namespace - so an
+// app that agreed to route for its siblings would silently drop every packet it forwarded.
+func TestForward_GatewayGetsForwardingAndNAT(t *testing.T) {
+	steps := Enforcer{}.Prepare(vpnApp(), options.HostOptions{})
+	var podArgs []string
+	for _, step := range steps {
+		if slices.Contains(step.Args, "pod") {
+			podArgs = step.Args
+		}
+	}
+	if !slices.Contains(podArgs, "net.ipv4.ip_forward=1") {
+		t.Errorf("a forwarding app needs ip_forward set at pod creation, got %v", podArgs)
+	}
+
+	got := NFTRuleset(vpnApp())
+	for _, want := range []string{
+		"hook forward priority 0; policy drop;",      // forwarded traffic is its own chain
+		`iifname "zlink0" oifname "zegress0" accept`, // siblings out, nothing else
+		"table ip nat {", // replies must come back
+		`oifname "zegress0" masquerade`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("gateway ruleset missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// An app that never agreed to route for anyone must not gain a forward chain, NAT, or
+// forwarding sysctls. Forwarding for other apps makes this app a router, which is a
+// privilege and must never be implied by another app naming it.
+func TestForward_NotImpliedForAnOrdinaryApp(t *testing.T) {
+	got := NFTRuleset(gatewayApp()) // has a link and egress, but no Forward
+	for _, unwanted := range []string{"hook forward", "table ip nat"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("an app that did not opt in must not get %q:\n%s", unwanted, got)
+		}
+	}
+	for _, step := range (Enforcer{}).Prepare(gatewayApp(), options.HostOptions{}) {
+		if slices.Contains(step.Args, "net.ipv4.ip_forward=1") {
+			t.Errorf("forwarding must be opt-in, got %v", step.Args)
+		}
+	}
+}
