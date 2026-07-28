@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,5 +280,76 @@ func TestNewVM_MediaDiscs(t *testing.T) {
 	got := cfg.VirtualizationMeta.InstallMedia
 	if len(got) != 2 || got[0] != "/iso/virtio-win.iso" || got[1] != "/iso/tools.iso" {
 		t.Errorf("InstallMedia = %q, want both discs trimmed and the empty entry dropped", got)
+	}
+}
+
+// --tunnel must author an app that WORKS, not just one that has the field set. The tunnel is
+// built inside a namespace whose ruleset default-drops, so without a rule permitting UDP to
+// the peer's endpoint the handshake never leaves and the interface carries nothing.
+func TestNewTunnel_SeedsTheEndpointEgressRule(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "wg.conf")
+	if err := os.WriteFile(conf, []byte("[Interface]\nPrivateKey = k\nAddress = 10.9.0.2/24\n"+
+		"[Peer]\nPublicKey = p\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 0.0.0.0/0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cfg schema.AppConfig
+	if err := seedTunnel(&cfg, conf); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NetworkMeta.Tunnel.WireGuardConf != conf {
+		t.Errorf("WireGuardConf = %q, want the absolute path %q", cfg.NetworkMeta.Tunnel.WireGuardConf, conf)
+	}
+	if len(cfg.NetworkMeta.NetworkLists) != 1 {
+		t.Fatalf("want one seeded egress list, got %+v", cfg.NetworkMeta.NetworkLists)
+	}
+	list := cfg.NetworkMeta.NetworkLists[0]
+	if len(list.IPv4CIDR) != 1 || list.IPv4CIDR[0] != "203.0.113.7/32" {
+		t.Errorf("the endpoint address should be allowed, got %v", list.IPv4CIDR)
+	}
+	if len(list.Ports) != 1 || list.Ports[0] != 51820 {
+		t.Errorf("the endpoint PORT should be allowed, got %v", list.Ports)
+	}
+	// And the whole thing must actually pass validation, which is the point of seeding it.
+	cfg.SchemaVersion, cfg.Type, cfg.AppNameID = schema.SchemaVersion, schema.ZincContainer, "vpn"
+	cfg.ImageMeta.Image = "localhost/vpn:local"
+	if err := validate.Validate(cfg); err != nil {
+		t.Fatalf("a --tunnel app should be valid as authored, got: %v", err)
+	}
+}
+
+// A relative path is made absolute: the runner reads it from wherever it happens to be
+// running, and a relative one would name a different file depending on the caller.
+func TestNewTunnel_MakesThePathAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "wg.conf"), []byte("[Interface]\nPrivateKey = k\nAddress = 10.9.0.2/24\n"+
+		"[Peer]\nPublicKey = p\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 0.0.0.0/0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	var cfg schema.AppConfig
+	if err := seedTunnel(&cfg, "wg.conf"); err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(cfg.NetworkMeta.Tunnel.WireGuardConf) {
+		t.Errorf("WireGuardConf = %q, want an absolute path", cfg.NetworkMeta.Tunnel.WireGuardConf)
+	}
+}
+
+// A config Zinc cannot apply is refused at authoring time, where it is cheapest to fix,
+// rather than at the first launch.
+func TestNewTunnel_RefusesAConfigItCannotApply(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "wg.conf")
+	if err := os.WriteFile(conf, []byte("[Interface]\nPrivateKey = k\nAddress = 10.9.0.2/24\nPostUp = rm -rf /\n"+
+		"[Peer]\nPublicKey = p\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 0.0.0.0/0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cfg schema.AppConfig
+	if err := seedTunnel(&cfg, conf); err == nil {
+		t.Fatal("a config with a script hook must be refused")
+	}
+	if err := seedTunnel(&cfg, filepath.Join(dir, "absent.conf")); err == nil {
+		t.Fatal("a missing config must be refused")
 	}
 }

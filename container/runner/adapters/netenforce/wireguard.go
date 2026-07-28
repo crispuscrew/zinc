@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
-	"github.com/crispuscrew/zinc/container/runner/domain/tunnel"
+	"github.com/crispuscrew/zinc/common/domain/schema/wgconf"
 	"github.com/crispuscrew/zinc/container/runner/ports"
 )
 
@@ -35,7 +35,7 @@ func tunnelCommand(cfg schema.AppConfig, image string) (*ports.Command, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: reading WireGuardConf: %w", cfg.AppNameID, err)
 	}
-	conf, err := tunnel.Parse(string(data))
+	conf, err := wgconf.Parse(string(data))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %s: %w", cfg.AppNameID, path, err)
 	}
@@ -64,7 +64,7 @@ func tunnelCommand(cfg schema.AppConfig, image string) (*ports.Command, error) {
 		for _, endpoint := range conf.Endpoints {
 			fmt.Fprintf(&script,
 				"[ -n \"$existing\" ] && ip route replace %s via \"$existing\" || true\n",
-				hostRoute(endpoint))
+				hostRoute(endpoint.Host))
 		}
 	}
 	// The peers' AllowedIPs are what the tunnel carries, so they are what is routed into it.

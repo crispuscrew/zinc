@@ -499,6 +499,14 @@ A gateway's **own** egress rules deliberately do not bound what it forwards. The
 sent it. The `forward` hook is a separate chain from `output`, so the two never see each
 other's rules - that is a design line, not an oversight.
 
+`zc new <name> --image <img> --tunnel <wg.conf>` authors one in a single command, and authors
+it *working*: it reads the config and adds the egress rule the handshake needs, allowing UDP
+to each peer's endpoint. Setting the path alone would produce an app that cannot work and
+does not say why - the tunnel is built inside a namespace whose ruleset default-drops, so
+without that rule the handshake never leaves and the interface sits there carrying nothing.
+The endpoint is already in the file, so there is no reason to copy it across by hand and no
+reason for the two to be able to disagree.
+
 **Zinc builds the tunnel, so the app never holds the capability that builds it.**
 `NetworkMeta.Tunnel.WireGuardConf` points at a wg-quick-format config; the runner reads it at
 launch, creates `wg0` inside the app's netns, applies the config, assigns the addresses and
@@ -718,7 +726,7 @@ shared `common` library and never imports the runtime.
 Authoring commands (local, no runtime needed):
 
 ```
-zc new <name> --image <img> [--desc d] [--icon i]
+zc new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
 zc list
 zc validate <name|app.yaml> [--resolved]
 zc delete <name>
@@ -1053,7 +1061,8 @@ compositor-agnostic on purpose, so it can be adopted piecemeal on any existing s
 ## 13. Repo Layout
 
 The shared library is `common/`, which holds the app schema, its validation, and the
-config-inheritance resolver (`common/domain/schema`, `.../validate`, `.../inherit`). It is
+config-inheritance resolver and the WireGuard-config reader (`common/domain/schema`,
+`.../validate`, `.../inherit`, `.../wgconf`). It is
 pure - no I/O, and the resolver takes a loader from its caller rather than reading anything
 itself - and its one dependency is the YAML codec, which the resolver needs because it merges
 nodes rather than decoded structs (3.1). Both tools depend on it and validate identically. The runtime hexagon lives **inside**
@@ -1065,7 +1074,7 @@ zinc/
   check.mk               containerized checks (test/vet/fmt/vendor); every module includes it
   tool.mk                binary targets (build/run/repro); each tool's Makefile includes it
   go.work                ties the modules together for local dev only (the build never uses it)
-  common/                shared library - the app schema, validation + inheritance (pure, no I/O)
+  common/                shared library - schema, validation, inheritance, wg config (pure)
     domain/schema/                    schema.go (AppConfig, schema version 2)
     domain/schema/validate/           the hard rules + create-time warnings
     examples/apps/                    sample app YAMLs

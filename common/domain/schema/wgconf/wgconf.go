@@ -1,4 +1,4 @@
-// Package tunnel reads a wg-quick-format WireGuard config into the parts the runner needs
+// Package wgconf reads a wg-quick-format WireGuard config into the parts the runner needs
 // to build the interface itself. Pure: it parses text and performs no I/O.
 //
 // It exists because `wg setconf` and wg-quick do not accept the same file. wg-quick is a
@@ -6,7 +6,7 @@
 // rest to `wg setconf`. Zinc does the stripping here instead, in Go, where what is accepted
 // and what is refused can be stated and tested - rather than shipping wg-quick, which wants
 // to be root, rewrite resolv.conf, and run whatever the file tells it to.
-package tunnel
+package wgconf
 
 import (
 	"fmt"
@@ -24,12 +24,20 @@ type Config struct {
 	// Routes are the peers' AllowedIPs: what the tunnel carries, and so what is routed into
 	// it.
 	Routes []string
-	// Endpoints are the peer addresses, without ports. The route to an endpoint must NOT go
-	// through the tunnel, or the encrypted packets would be sent into the thing they are
-	// carrying; the caller pins them to the pre-existing route first.
-	Endpoints []string
+	// Endpoints are the peers' addresses and ports. Two callers need them and need different
+	// halves: the runner pins the ADDRESS to the pre-existing route, because a route to an
+	// endpoint through the tunnel would send the encrypted packets into the thing carrying
+	// them; and the creator uses both to author the egress rule that lets the handshake out
+	// in the first place.
+	Endpoints []Endpoint
 	// MTU is the [Interface] MTU, or 0 when the file does not set one.
 	MTU int
+}
+
+// Endpoint is one peer's address and port.
+type Endpoint struct {
+	Host string
+	Port int
 }
 
 // interfaceKeys are the [Interface] settings `wg setconf` understands. Everything else in
@@ -139,11 +147,11 @@ func (cfg *Config) absorb(setConf *strings.Builder, section, key, value string, 
 		case "allowedips":
 			cfg.Routes = append(cfg.Routes, splitList(value)...)
 		case "endpoint":
-			host, err := endpointHost(value)
+			endpoint, err := parseEndpoint(value)
 			if err != nil {
 				return fmt.Errorf("line %d: Endpoint %q: %w", line, value, err)
 			}
-			cfg.Endpoints = append(cfg.Endpoints, host)
+			cfg.Endpoints = append(cfg.Endpoints, endpoint)
 		}
 		if !peerKeys[key] {
 			return fmt.Errorf("line %d: unknown [Peer] setting %q", line, key)
@@ -153,28 +161,34 @@ func (cfg *Config) absorb(setConf *strings.Builder, section, key, value string, 
 	return nil
 }
 
-// endpointHost takes the address off an Endpoint, dropping the port. A name rather than an
-// address is refused: it would have to be resolved to be pinned to a route, and the pinning
-// has to happen before the netns is closed - so a name that resolved to something else a
-// moment later would send the encrypted packets into the tunnel they belong to.
-func endpointHost(value string) (string, error) {
-	host := value
-	if strings.HasPrefix(value, "[") { // [v6]:port
+// parseEndpoint splits an Endpoint into address and port. A name rather than an address is
+// refused: it would have to be resolved to be pinned to a route, the pinning happens before
+// the namespace is closed, and a name that resolved to something else a moment later would
+// send the encrypted packets into the tunnel they belong to.
+func parseEndpoint(value string) (Endpoint, error) {
+	host, portText := value, ""
+	switch {
+	case strings.HasPrefix(value, "["): // [v6]:port
 		end := strings.Index(value, "]")
 		if end < 0 {
-			return "", fmt.Errorf("unclosed [")
+			return Endpoint{}, fmt.Errorf("unclosed [")
 		}
 		host = value[1:end]
-	} else if index := strings.LastIndex(value, ":"); index >= 0 && strings.Count(value, ":") == 1 {
-		host = value[:index]
+		portText = strings.TrimPrefix(value[end+1:], ":")
+	case strings.Count(value, ":") == 1:
+		host, portText, _ = strings.Cut(value, ":")
 	}
 	if host == "" {
-		return "", fmt.Errorf("no host")
+		return Endpoint{}, fmt.Errorf("no host")
 	}
 	if !isAddress(host) {
-		return "", fmt.Errorf("must be an IP address, not a name - it has to be pinned to a route before the namespace closes, and a name could resolve elsewhere by then")
+		return Endpoint{}, fmt.Errorf("must be an IP address, not a name - it has to be pinned to a route before the namespace closes, and a name could resolve elsewhere by then")
 	}
-	return host, nil
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return Endpoint{}, fmt.Errorf("wants a port, as address:port")
+	}
+	return Endpoint{Host: host, Port: port}, nil
 }
 
 // isAddress reports whether text is a bare IPv4 or IPv6 address. Deliberately not

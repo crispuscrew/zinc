@@ -1,4 +1,4 @@
-package tunnel
+package wgconf
 
 import (
 	"slices"
@@ -36,7 +36,7 @@ func TestParse_SplitsTheFile(t *testing.T) {
 	if want := []string{"0.0.0.0/0", "::/0"}; !slices.Equal(cfg.Routes, want) {
 		t.Errorf("Routes = %v, want %v", cfg.Routes, want)
 	}
-	if want := []string{"203.0.113.7"}; !slices.Equal(cfg.Endpoints, want) {
+	if want := []Endpoint{{Host: "203.0.113.7", Port: 51820}}; !slices.Equal(cfg.Endpoints, want) {
 		t.Errorf("Endpoints = %v, want %v", cfg.Endpoints, want)
 	}
 	if cfg.MTU != 1420 {
@@ -97,7 +97,7 @@ func TestParse_EndpointMustBeAnAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"2001:db8::7"}; !slices.Equal(cfg.Endpoints, want) {
+	if want := []Endpoint{{Host: "2001:db8::7", Port: 51820}}; !slices.Equal(cfg.Endpoints, want) {
 		t.Errorf("Endpoints = %v, want %v", cfg.Endpoints, want)
 	}
 }
@@ -113,6 +113,7 @@ func TestParse_RejectsTheMalformed(t *testing.T) {
 		"key before section":    "PrivateKey = k\n[Interface]\n",
 		"not a pair":            "[Interface]\nPrivateKey\n",
 		"bad mtu":               "[Interface]\nPrivateKey = k\nAddress = 10.7.0.2/32\nMTU = huge\n[Peer]\nPublicKey = p\nAllowedIPs = 0.0.0.0/0\n",
+		"endpoint with no port": "[Interface]\nPrivateKey = k\nAddress = 10.7.0.2/32\n[Peer]\nPublicKey = p\nEndpoint = 203.0.113.7\nAllowedIPs = 0.0.0.0/0\n",
 	} {
 		if err := parseErr(text); err == nil {
 			t.Errorf("%s: want an error", name)

@@ -14,7 +14,7 @@ Authoring (local, no runtime needed):
 
 ```
 zc tui                             keyboard-first manager (create/edit/run/stop/logs)
-zc new <name> --image <img> [--desc d] [--icon i]
+zc new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
 zc list
 zc validate <name|app.yaml> [--resolved]       --resolved prints what an inheriting app merges to
 zc delete <name>

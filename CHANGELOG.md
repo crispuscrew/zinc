@@ -9,6 +9,18 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- **`zc new --tunnel <wg.conf>`: author a tunnel app in one command, and author it working.**
+  It reads the config and adds the egress rule the handshake needs - UDP to each peer's
+  endpoint - rather than only setting the path. Setting the path alone produces an app that
+  cannot work and does not say why: the tunnel is built inside a namespace whose ruleset
+  default-drops, so without that rule the handshake never leaves and the interface carries
+  nothing. The endpoint is already in the file, so nobody has to copy it across and the two
+  cannot disagree. A config Zinc could not apply is refused here, at authoring time, rather
+  than at the first launch. Verified by launching what it wrote: live handshake, payload
+  fetched through the tunnel, and the app at `CapEff: 0000000000000000`.
+  The WireGuard config reader moved to `common/domain/schema/wgconf` so both tools can use
+  it - `zc` authors from it and the runner applies it, and `zc` may not import the runner.
+
 - **`NetworkMeta.Tunnel`: Zinc builds an app's WireGuard interface, so the app never holds
   the capability that builds it.** A tunnel needs `CAP_NET_ADMIN` to create, and an app with
   `NetworkLists` may never hold it - `NET_ADMIN` in the pod netns would let the app flush the

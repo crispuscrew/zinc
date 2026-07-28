@@ -3,6 +3,7 @@
 github.com/crispuscrew/zinc/common/domain/schema
 github.com/crispuscrew/zinc/common/domain/schema/inherit
 github.com/crispuscrew/zinc/common/domain/schema/validate
+github.com/crispuscrew/zinc/common/domain/schema/wgconf
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3

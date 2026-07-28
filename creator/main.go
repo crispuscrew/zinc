@@ -9,7 +9,7 @@
 // runtime must be on $PATH for the run/manage commands; authoring works without it.
 //
 //	zc tui                             keyboard-first manager (create/edit/run/stop/logs)
-//	zc new <name> --image <img> [--desc d] [--icon i]
+//	zc new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
 //	zc list
 //	zc validate <name|app.yaml>
 //	zc delete <name>
@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ import (
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
+	"github.com/crispuscrew/zinc/common/domain/schema/wgconf"
 	"github.com/crispuscrew/zinc/creator/internal/backend"
 	"github.com/crispuscrew/zinc/creator/internal/keys"
 	"github.com/crispuscrew/zinc/creator/internal/runner"
@@ -51,7 +53,7 @@ import (
 const usage = `usage: zc <command> [args]
 
   tui                               keyboard-first manager (create/edit/run/stop/logs)
-  new <name> --image <img> [--desc d] [--icon i]
+  new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
   new <name> --vm --image <base.qcow2> --base-digest sha256:... [--memory MiB]
              [--vcpus N] [--disk GiB] [--display None|Window|Accelerated|Compatible]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
@@ -204,6 +206,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	resolution := fset.String("resolution", "", "VM only: fixed guest screen size as WxH (e.g. 1920x1080); for --display Compatible, whose guest has no driver to resize itself")
 	mac := fset.String("mac", "", "VM only: guest NIC address, or \"random\"; the default is derived per-app under QEMU's 52:54:00 prefix, so set this to present something that names no vendor")
 	media := fset.String("media", "", "VM only: ISO attached read-only as a CD-ROM on every run (e.g. a virtio-win driver disc), repeatable with commas")
+	tunnelConf := fset.String("tunnel", "", "container only: path to a wg-quick config; Zinc builds the WireGuard interface for the app (the app itself never gets NET_ADMIN)")
 	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
 	if err := fset.Parse(flags); err != nil {
 		return err
@@ -227,6 +230,14 @@ func cmdNew(svc backend.Service, argv []string) error {
 	for _, step := range strings.Split(*install, ";") {
 		if trimmed := strings.TrimSpace(step); trimmed != "" {
 			cfg.ImageMeta.Install = append(cfg.ImageMeta.Install, trimmed)
+		}
+	}
+	if *tunnelConf != "" {
+		if *isVM {
+			return fmt.Errorf("--tunnel is container-only: a guest brings up its own interfaces")
+		}
+		if err := seedTunnel(&cfg, *tunnelConf); err != nil {
+			return err
 		}
 	}
 	if *isVM {
@@ -279,6 +290,38 @@ func cmdNew(svc backend.Service, argv []string) error {
 	// at the first launch, with nothing on screen connecting the two.
 	for _, warn := range validate.Warnings(cfg) {
 		fmt.Println("warning: " + warn)
+	}
+	return nil
+}
+
+// seedTunnel points the app at a wg-quick config AND authors the egress rule the handshake
+// needs. Setting the path alone would produce an app that cannot work and does not say why:
+// the tunnel is built inside a namespace whose ruleset default-drops, so without a rule
+// permitting UDP to the peer's endpoint the handshake never leaves and the interface sits
+// there carrying nothing. The endpoint is in the file, so there is no reason to make someone
+// copy it across by hand and no reason for the two to be able to disagree.
+func seedTunnel(cfg *schema.AppConfig, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("--tunnel: %w", err)
+	}
+	conf, err := wgconf.Parse(string(data))
+	if err != nil {
+		return fmt.Errorf("--tunnel %s: %w", path, err)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("--tunnel: %w", err)
+	}
+	cfg.NetworkMeta.Tunnel = schema.TunnelMeta{WireGuardConf: absolute}
+	for _, endpoint := range conf.Endpoints {
+		list := schema.NetworkList{Ports: []int{endpoint.Port}}
+		if strings.Contains(endpoint.Host, ":") {
+			list.IPv6CIDR = []string{endpoint.Host + "/128"}
+		} else {
+			list.IPv4CIDR = []string{endpoint.Host + "/32"}
+		}
+		cfg.NetworkMeta.NetworkLists = append(cfg.NetworkMeta.NetworkLists, list)
 	}
 	return nil
 }
