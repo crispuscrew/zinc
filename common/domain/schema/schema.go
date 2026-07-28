@@ -332,7 +332,25 @@ type NetworkList struct {
 	// link may route through me, and I will forward and masquerade their traffic out of my
 	// own egress. Explicit because forwarding for other apps is a privilege - it makes this
 	// app a router - and must never be implied by another app naming it.
+	//
+	// What a gateway forwards is bounded from BOTH ends, and the two ends answer different
+	// questions. WHERE is the client's: only the CIDRs its own Via list names are routed
+	// here at all, and it cannot change that - the runner installs those routes and the app
+	// has no capability to alter them. WHAT is the gateway's, and that is ForwardPorts.
+	//
+	// A gateway's own egress rules deliberately do NOT bound what it forwards. They say
+	// where this app may go; forwarded traffic is somebody else's, already bounded by
+	// whoever sent it.
 	Forward bool `yaml:"Forward"`
+
+	// ForwardPorts narrows what a forwarding app will carry to these destination ports.
+	// Empty forwards any port, which is what a general-purpose gateway is for; naming them
+	// is how a gateway becomes single-purpose - a DNS hop that passes 53 and nothing else,
+	// so a client routed through it cannot use it to reach anything but a resolver.
+	//
+	// Only the ports. The addresses are not repeated here because the client already fixed
+	// them by choosing what to route, and stating them twice would let the two disagree.
+	ForwardPorts []int `yaml:"ForwardPorts"`
 }
 
 type NotificationMeta struct {

@@ -7,6 +7,32 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Added
+
+- **`NetworkList.ForwardPorts`: a gateway bounds what it carries.** A forwarding app's
+  `forward` chain was a blanket accept - `iifname zlink0 oifname zegress0 accept`, no
+  destination, no port - so a client routed through a gateway reached anything on any port.
+  A gateway can now say what it will pass: `ForwardPorts: [53]` makes it a DNS hop, and only
+  port 53 crosses it whatever a client points at it. Empty carries any port, which is what a
+  general-purpose gateway is for.
+  **Only the ports, deliberately.** The bound has two ends and they belong to different apps:
+  *where* is the client's, since only the CIDRs its own `Via` list names are routed to the
+  gateway at all and it cannot change that - the runner installs those routes and the app has
+  no capability to alter them - and *what* is the gateway's. Repeating the addresses on the
+  gateway would let the two disagree. A gateway's own egress rules still do not bound what it
+  forwards, and that is now stated in the architecture doc as a design line rather than left
+  to be discovered: they say where *this app* may go, and forwarded traffic is somebody
+  else's.
+  Measured: a client whose only path is a `ForwardPorts: [53]` gateway resolved `example.com`
+  through it and was blocked connecting to port 443 of the address it had just resolved.
+
+- **Gateways chain.** The forward rule named the egress bridge alone, so a gateway that was
+  itself routed through another sibling dropped everything its own `Via` routes sent to that
+  link. It now accepts out of every interface the gateway's routes can use - its egress
+  bridge and any link it is routed through - with `masquerade` following onto each. A hop can
+  pass its clients' traffic onward into another gateway rather than out to the network, and a
+  relay whose every list is a link correctly has no egress bridge at all.
+
 ### Security
 
 - **A linked app kept its inbound filter.** While this branch was in progress, an app that

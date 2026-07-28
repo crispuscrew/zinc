@@ -401,6 +401,9 @@ Each `NetworkList` entry is one directional rule. The fields that shape it:
   sibling instead of out this app's own egress (6.2). One list carries one address family.
 - **`Forward`** - on a producer's own ingress list, agree to route for the siblings on its
   link. Never implied by another app naming it.
+- **`ForwardPorts`** - what a forwarding app will carry, by destination port. Empty carries
+  any port. The addresses are not repeated here: the client already fixed them by choosing
+  what to route (6.2).
 - **`GatewayV4` / `GatewayV6`** - next-hop for multi-homing (not supported yet, 6.5).
 
 `NetworkMeta` also carries **`DNSServers`**: the resolvers the app is handed, and - once it
@@ -481,10 +484,26 @@ back (measured, both ways).
 The sibling must agree: `Forward: true` on its own link ingress list. Forwarding for other
 apps makes an app a router, so it is never implied by another app naming it. A forwarding app
 gets `net.ipv4.ip_forward=1` at pod creation - a container cannot set it itself, `/proc/sys`
-is read-only in the namespace - plus a `forward` chain (default-drop, link in / egress out
-only; the forward hook is a separate chain from `output`, so the egress rules never see
-routed traffic) and `masquerade` out of its own bridge, without which replies would be
-addressed to a private link address the outside cannot route back to.
+is read-only in the namespace - plus a default-drop `forward` chain and `masquerade`, without
+which replies would be addressed to a private link address the outside cannot route back to.
+
+**What a gateway carries is bounded from both ends, and the two ends belong to different
+apps.** *Where* is the client's: only the CIDRs its own `Via` list names are routed to the
+gateway at all, and the client cannot change that - the runner installs those routes and the
+app has no capability to alter them. *What* is the gateway's, and it is `ForwardPorts`. A
+gateway that sets `ForwardPorts: [53]` is a DNS hop: whatever a client points at it, only
+port 53 crosses. Empty carries any port, which is what a general-purpose gateway is for.
+
+A gateway's **own** egress rules deliberately do not bound what it forwards. They say where
+*this app* may go; forwarded traffic is somebody else's, and was already bounded by whoever
+sent it. The `forward` hook is a separate chain from `output`, so the two never see each
+other's rules - that is a design line, not an oversight.
+
+**Gateways chain.** The forward chain accepts out of every interface the gateway's own routes
+can use - its egress bridge, and any link it is itself routed through - with `masquerade`
+following onto each. So a hop can pass its clients' traffic onward into another gateway
+rather than out to the network, and a relay whose every list is a link has no egress bridge
+at all.
 
 The gateway's address is never written into a config. podman assigns it and it changes when
 the gateway is recreated, so the route step resolves it at launch through the network alias

@@ -199,3 +199,27 @@ func TestVia_MixedFamiliesOnOneListRejected(t *testing.T) {
 		t.Fatalf("a dual-family Via list should be refused, got: %v", err)
 	}
 }
+
+// ForwardPorts narrows what an app carries for its siblings, so without Forward it narrows
+// nothing and would read as a restriction on forwarding this app does not do.
+func TestForwardPorts_NeedForward(t *testing.T) {
+	orphan := withList(schema.NetworkList{Ingress: true, ForwardPorts: []int{53}})
+	err := Validate(orphan)
+	if err == nil || !strings.Contains(err.Error(), "no effect without Forward") {
+		t.Fatalf("ForwardPorts without Forward should be refused, got: %v", err)
+	}
+
+	ok := withList(schema.NetworkList{Ingress: true, Forward: true, ForwardPorts: []int{53}})
+	if err := Validate(ok); err != nil {
+		t.Fatalf("Forward with ForwardPorts should pass, got: %v", err)
+	}
+}
+
+// Forward is this app agreeing to route for the siblings on its OWN link, so it belongs on
+// its own link ingress list and nowhere else.
+func TestForward_BelongsOnTheOwnLinkIngressList(t *testing.T) {
+	err := Validate(withList(schema.NetworkList{IPv4CIDR: []string{"0.0.0.0/0"}, Forward: true}))
+	if err == nil || !strings.Contains(err.Error(), "OWN link ingress list") {
+		t.Fatalf("Forward on an egress list should be refused, got: %v", err)
+	}
+}

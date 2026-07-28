@@ -649,3 +649,65 @@ func TestNFTRuleset_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// A gateway bounds WHAT it carries, not where: the destinations were already fixed by the
+// client, whose Via CIDRs are the only thing routed here and which it cannot change.
+func TestForward_PortsNarrowWhatAGatewayCarries(t *testing.T) {
+	cfg := vpnApp()
+	for index, netList := range cfg.NetworkMeta.NetworkLists {
+		if netList.Forward {
+			cfg.NetworkMeta.NetworkLists[index].ForwardPorts = []int{53}
+		}
+	}
+	ruleset := NFTRuleset(cfg)
+	for _, proto := range []string{"tcp", "udp"} {
+		want := `iifname "zlink0" oifname "zegress0" ` + proto + ` dport { 53 } accept`
+		if !strings.Contains(ruleset, want) {
+			t.Errorf("missing %q in:\n%s", want, ruleset)
+		}
+	}
+	// And nothing that would pass any other port.
+	if strings.Contains(ruleset, `oifname "zegress0" accept`) {
+		t.Errorf("a bounded gateway must not keep the blanket accept:\n%s", ruleset)
+	}
+}
+
+// No ForwardPorts is a general-purpose gateway: it carries whatever its clients routed to it.
+func TestForward_NoPortsCarriesEverything(t *testing.T) {
+	ruleset := NFTRuleset(vpnApp())
+	if !strings.Contains(ruleset, `iifname "zlink0" oifname "zegress0" accept`) {
+		t.Errorf("an unbounded gateway should keep the blanket accept:\n%s", ruleset)
+	}
+}
+
+// Gateways chain: a hop that is itself routed through another sibling must forward its
+// clients' traffic ONWARD into that link, not only out to the network. The forward rule used
+// to name the egress bridge alone, so everything the hop's own Via routes sent to a link was
+// dropped.
+func TestForward_ChainsIntoAnUpstreamSibling(t *testing.T) {
+	cfg := schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion, Type: schema.ZincContainer,
+		AppNameID: "hop", ImageMeta: schema.ImageMeta{Image: "localhost/h:local"},
+		NetworkMeta: schema.NetworkMeta{
+			DNSServers: []string{"1.1.1.1"},
+			NetworkLists: []schema.NetworkList{
+				{Ingress: true, Forward: true},
+				{AppName: "upstream", Via: true, IPv4CIDR: []string{"0.0.0.0/0"}},
+			},
+		},
+	}
+	ruleset := NFTRuleset(cfg)
+	if !strings.Contains(ruleset, `iifname "zlink0" oifname "zlink1" accept`) {
+		t.Errorf("a chained gateway must forward onward into its upstream link:\n%s", ruleset)
+	}
+	// NAT has to follow the traffic, or the upstream sees a private address on a bridge it
+	// is not attached to and the replies have nowhere to go.
+	if !strings.Contains(ruleset, `oifname "zlink1" masquerade`) {
+		t.Errorf("masquerade must follow onto the onward link:\n%s", ruleset)
+	}
+	// This hop has no direct egress of its own - every list it carries is a link - so it
+	// must not claim one.
+	if strings.Contains(ruleset, "zegress0") {
+		t.Errorf("a pure relay has no egress bridge to name:\n%s", ruleset)
+	}
+}

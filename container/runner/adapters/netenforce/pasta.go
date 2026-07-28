@@ -19,6 +19,7 @@ package netenforce
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -385,9 +386,7 @@ func NFTRuleset(cfg schema.AppConfig) string {
 		bld.WriteString("\tchain forward {\n")
 		bld.WriteString("\t\ttype filter hook forward priority 0; policy drop;\n")
 		bld.WriteString("\t\tct state established,related accept\n")
-		if own := ownLinkIface(cfg); own != "" {
-			fmt.Fprintf(&bld, "\t\tiifname %q oifname %q accept\n", own, egressIface)
-		}
+		writeForwardRules(&bld, cfg)
 		bld.WriteString("\t}\n")
 	}
 	bld.WriteString("}\n")
@@ -397,7 +396,13 @@ func NFTRuleset(cfg schema.AppConfig) string {
 		if forwards(cfg) {
 			bld.WriteString("\tchain postrouting {\n")
 			bld.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
-			fmt.Fprintf(&bld, "\t\toifname %q masquerade\n", egressIface)
+			// One per interface forwarded traffic can leave by, not just this app's own
+			// bridge: a gateway that is itself routed through another sibling sends what it
+			// forwards out that link, and without NAT there the upstream would see a private
+			// address on a bridge it is not attached to.
+			for _, iface := range forwardExits(cfg) {
+				fmt.Fprintf(&bld, "\t\toifname %q masquerade\n", iface)
+			}
 			bld.WriteString("\t}\n")
 		}
 		// A routed app's resolver is not ours to choose: podman writes resolv.conf and
@@ -417,6 +422,68 @@ func NFTRuleset(cfg schema.AppConfig) string {
 		bld.WriteString("}\n")
 	}
 	return bld.String()
+}
+
+// writeForwardRules emits what a gateway will carry for its siblings: from its own link, out
+// to each interface its routes can send that traffic by, narrowed to ForwardPorts.
+//
+// The two ends of the bound answer different questions and come from different apps. WHERE
+// is the client's: only the CIDRs its Via list names are routed to this gateway at all, and
+// the client cannot change that - the runner installs those routes and the app has no
+// capability to alter them. WHAT is the gateway's, and it is the ports below. This app's own
+// egress rules are deliberately not consulted: they say where THIS app may go, and forwarded
+// traffic is somebody else's.
+func writeForwardRules(bld *strings.Builder, cfg schema.AppConfig) {
+	own := ownLinkIface(cfg)
+	if own == "" {
+		return // nothing arrives to forward
+	}
+	ports := forwardPorts(cfg)
+	for _, exit := range forwardExits(cfg) {
+		if len(ports) == 0 {
+			fmt.Fprintf(bld, "\t\tiifname %q oifname %q accept\n", own, exit)
+			continue
+		}
+		for _, proto := range []string{"tcp", "udp"} {
+			fmt.Fprintf(bld, "\t\tiifname %q oifname %q %s dport { %s } accept\n",
+				own, exit, proto, portList(ports))
+		}
+	}
+}
+
+// forwardPorts is what a gateway agreed to carry, or nil for any port.
+func forwardPorts(cfg schema.AppConfig) []int {
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if netList.Forward {
+			return netList.ForwardPorts
+		}
+	}
+	return nil
+}
+
+// forwardExits lists the interfaces forwarded traffic may leave by: this app's own egress
+// bridge, plus every link it routes through as a client of another gateway. The second kind
+// is what lets gateways chain - a hop that passes its clients' traffic onward into a sibling
+// rather than out to the network itself. Without it the forward chain would name only the
+// egress bridge and drop everything the gateway's own Via routes sent to a link.
+func forwardExits(cfg schema.AppConfig) []string {
+	var exits []string
+	if needsOwnEgress(cfg) {
+		exits = append(exits, egressIface)
+	}
+	own := LinkNetwork(cfg.AppNameID)
+	byNetwork := map[string]string{}
+	for _, entry := range links(cfg) {
+		byNetwork[entry.network] = entry.iface
+	}
+	for _, route := range viaLists(cfg) {
+		iface := byNetwork[LinkNetwork(route.gateway)]
+		if iface == "" || LinkNetwork(route.gateway) == own || slices.Contains(exits, iface) {
+			continue
+		}
+		exits = append(exits, iface)
+	}
+	return exits
 }
 
 // dnsRedirect returns the resolver a routed app's DNS is rewritten to, or "" when the app

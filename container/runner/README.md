@@ -35,7 +35,10 @@ network namespace before it starts:
   two apps, gated per-port by interface.
 - Routing through a sibling (`Via` on an egress list naming an app): that list's destinations
   leave through the sibling instead of this app's own egress - how an app is put behind a VPN
-  container. The sibling must agree with `Forward: true` on its own link ingress list.
+  container. The sibling must agree with `Forward: true` on its own link ingress list, and
+  bounds what it carries with `ForwardPorts` (empty carries any port; the destinations were
+  already fixed by the client's routes). Gateways chain: a hop can forward onward into
+  another gateway rather than out to the network.
 - `Domains` on an egress list: destinations named rather than numbered, resolved at launch
   into addresses. An address allowlist taken at that moment, not hostname filtering, and not
   refreshed while the app runs.

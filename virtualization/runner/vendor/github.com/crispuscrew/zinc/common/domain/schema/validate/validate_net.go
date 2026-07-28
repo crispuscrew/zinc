@@ -56,9 +56,28 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 	if netList.Via && len(netList.IPv4CIDR) > 0 && len(netList.IPv6CIDR) > 0 {
 		add("NetworkLists[%d]: a routed (Via) list carries both IPv4CIDR and IPv6CIDR, but one list resolves one gateway address and cannot route both families through it; use one Via list per family", index)
 	}
+	checkForwarding(index, netList, add)
 	checkDomains(index, netList, add)
 	checkRouting(index, netList, add)
 	checkGateway(index, netList, self, add)
+}
+
+// checkForwarding screens a gateway's agreement to route for its siblings. ForwardPorts is
+// the gateway's half of the bound - what it will carry - and is meaningless without the
+// agreement itself, so a value there with no Forward would read as a restriction on
+// forwarding this app does not do.
+func checkForwarding(index int, netList schema.NetworkList, add addFunc) {
+	for _, port := range netList.ForwardPorts {
+		if port < 1 || port > 65535 {
+			add("NetworkLists[%d].ForwardPorts %d: out of range 1-65535", index, port)
+		}
+	}
+	if len(netList.ForwardPorts) > 0 && !netList.Forward {
+		add("NetworkLists[%d].ForwardPorts: has no effect without Forward - it narrows what this app carries for its siblings, and without Forward it carries nothing", index)
+	}
+	if netList.Forward && !(netList.Ingress && !netList.Host && strings.TrimSpace(netList.AppName) == "") {
+		add("NetworkLists[%d].Forward: belongs on this app's OWN link ingress list (Ingress, no Host, no AppName) - it is this app agreeing to route for the siblings that join its link", index)
+	}
 }
 
 // domainRE is a hostname in the form the resolver will be handed: lowercase labels, no
