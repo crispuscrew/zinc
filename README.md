@@ -97,6 +97,11 @@ zc tui                        # keyboard-first manager: create / edit / run / st
 zc image search alpine
 zc image resolve alpine:3.20  # gives docker.io/library/alpine@sha256:... to paste in
 
+# compose interop, both ways. Lossy in both directions, and it prints exactly how:
+# exporting cannot carry the egress lock-down, importing invents no network access.
+zc compose export firefox -o compose.yaml
+zc compose import ./stack.yaml --dry-run   # one app per service; --service picks one
+
 # run: zc forwards these to zcr. run without --exec prints the podman plan first
 zc run firefox --exec
 zc logs firefox -f

@@ -1,0 +1,191 @@
+package compose
+
+import (
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/crispuscrew/zinc/common/domain/schema"
+)
+
+// FromApp renders one app definition as a compose project, and returns the notes naming
+// what could not come with it. Pure: no I/O, no store lookups.
+//
+// The notes are the honest half of this function. Everything a compose file can carry is
+// carried; the things it cannot - the egress lock-down above all - would otherwise be
+// absent without being mentioned, and a reader comparing the two files would reasonably
+// conclude Zinc was not doing anything the compose file does not show. A caller is
+// expected to print them.
+//
+// A VM app has no compose equivalent at all and is refused rather than half-rendered.
+func FromApp(cfg schema.AppConfig) (Project, []string, error) {
+	if cfg.Type == schema.ZincVirtualization {
+		return Project{}, nil, fmt.Errorf("%s is a VM app: compose describes containers, and a guest is not one", cfg.AppNameID)
+	}
+
+	var notes []string
+	note := func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) }
+
+	service := Service{
+		Image:         cfg.ImageMeta.Image,
+		ContainerName: cfg.AppNameID,
+		// The baseline the runner applies to every app. Stated outright rather than left
+		// implicit, because in compose it is not the default: a service with no cap_drop
+		// runs with podman's default capability set.
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
+	}
+	if entry := strings.TrimSpace(cfg.StartConditions.Entrypoint); entry != "" {
+		service.Entrypoint = StringList{entry}
+	}
+	if cfg.StartConditions.Autorestart {
+		service.Restart = "on-failure"
+	}
+	if user := cfg.InternalUserMeta; user.UseNonRootUser && user.NonRootUserName != "" {
+		service.User = user.NonRootUserName
+	}
+	service.CapAdd = append(service.CapAdd, cfg.Capabilities...)
+	service.PidsLimit = cfg.ResourcesMeta.PIDsLimit
+	if limits := resourceLimits(cfg.ResourcesMeta); limits != nil {
+		service.Deploy = &Deploy{Resources: Resources{Limits: limits}}
+	}
+	if probe := cfg.StartConditions.ReadyCheck; len(probe) > 0 {
+		service.Healthcheck = &Healthcheck{Test: append(StringList{"CMD"}, probe...)}
+		if seconds := cfg.StartConditions.ReadyTimeoutSec; seconds > 0 {
+			service.Healthcheck.Timeout = strconv.Itoa(seconds) + "s"
+		}
+	}
+	for _, dep := range cfg.StartConditions.DependsOn {
+		if service.DependsOn == nil {
+			service.DependsOn = Dependencies{}
+		}
+		// The condition cannot be decided from this app alone - whether the wait is for
+		// "started" or "healthy" is a property of the DEPENDENCY's ReadyCheck, and only its
+		// own config knows. service_started is the safe reading: it is what DependsOn means
+		// without a probe, and claiming service_healthy for a dependency that defines no
+		// healthcheck would make the compose file hang rather than run.
+		service.DependsOn[dep] = Depend{Condition: ConditionStarted}
+	}
+	if desc := strings.TrimSpace(cfg.Description); desc != "" {
+		service.Labels = map[string]string{"zinc.description": desc}
+	}
+
+	service.Volumes = append(service.Volumes, volumeMounts(cfg)...)
+	ports, expose, netNotes := networkFields(cfg)
+	service.Ports, service.Expose = ports, expose
+	notes = append(notes, netNotes...)
+
+	if len(cfg.ImageMeta.Install) > 0 {
+		note("ImageMeta.Install is not represented: Zinc builds a derived image from the pinned base plus those steps, and compose can only point `build:` at a Containerfile on disk. The image named here is the BASE, not what Zinc runs.")
+	}
+	if cfg.HostTheme {
+		note("HostTheme is not represented: the theme bundle is assembled by the runner at launch and mounted read-only from a path only it knows.")
+	}
+	// Unconditional, because the desktop wiring is not a field an app opts into: the runner
+	// mounts whatever the session it is launched from actually has. A file written on this
+	// machine could not name those paths for another one even if it tried.
+	note("Desktop wiring (the Wayland socket, PipeWire, /dev/dri) is not represented: the runner resolves it at launch from the session it is started in, so it is not knowable when this file is written.")
+	if cfg.StartConditions.Multiterminal {
+		note("StartConditions.Multiterminal is not represented: the shared holder container and its per-terminal `exec` are a runner behaviour, not a compose one.")
+	}
+	if len(cfg.Keys) > 0 {
+		note("Keys are mounted read-only into the home of the user the app runs as; the paths below are the host's and are not portable to another machine.")
+	}
+
+	project := Project{
+		Name:     cfg.AppNameID,
+		Services: map[string]Service{cfg.AppNameID: service},
+	}
+	if len(cfg.NetworkMeta.NetworkLists) > 0 {
+		notes = append(notes,
+			"THE EGRESS LOCK-DOWN IS NOT REPRESENTED. Zinc applies an nftables ruleset to this app's network namespace, and locks it, BEFORE the app starts; running this compose file gives the container ordinary, unfiltered networking. This file describes the app - it does not sandbox it.")
+	}
+	return project, notes, nil
+}
+
+// resourceLimits renders ResourcesMeta into compose's own spellings, or nil when the app
+// set no CPU or memory cap. PIDsLimit is not here: compose keeps it at the service's top
+// level rather than under deploy.
+func resourceLimits(res schema.ResourcesMeta) *Limits {
+	var limits Limits
+	if res.MaxCPUCores > 0 {
+		limits.CPUs = strconv.FormatFloat(res.MaxCPUCores, 'f', -1, 64)
+	}
+	if res.MaxRamMiB > 0 {
+		limits.Memory = strconv.FormatInt(res.MaxRamMiB, 10) + "M"
+	}
+	if limits == (Limits{}) {
+		return nil
+	}
+	return &limits
+}
+
+// volumeMounts renders the app's host bind mounts and key mounts in compose's short
+// string form. The options are the ones the runner passes podman, so a reader sees the
+// same posture: read-only and noexec unless the app asked otherwise.
+func volumeMounts(cfg schema.AppConfig) StringList {
+	var mounts StringList
+	for _, volume := range cfg.Volumes {
+		if !volume.HostMounted || strings.TrimSpace(volume.HostMount) == "" {
+			continue
+		}
+		options := "ro"
+		if volume.Writable {
+			options = "rw"
+		}
+		if volume.Executable {
+			options += ",exec"
+		} else {
+			options += ",noexec"
+		}
+		mounts = append(mounts, volume.HostMount+":"+volume.InnerMount+":"+options)
+	}
+	home := "/root"
+	if user := cfg.InternalUserMeta; user.UseNonRootUser && user.NonRootUserName != "" {
+		home = "/home/" + user.NonRootUserName
+	}
+	for _, key := range cfg.Keys {
+		dir := ".ssh"
+		if key.Type == schema.GPG {
+			dir = ".gnupg"
+		}
+		base := key.Path
+		if idx := strings.LastIndex(base, "/"); idx >= 0 {
+			base = base[idx+1:]
+		}
+		mounts = append(mounts, key.Path+":"+home+"/"+dir+"/"+base+":ro")
+	}
+	return mounts
+}
+
+// networkFields renders the NetworkLists compose has a word for, and reports the rest.
+// Published ports (Ingress && Host) become `ports`, a sibling link's published ports
+// become `expose`, and every other kind of list - the allow/deny egress rules, the
+// routing - has no compose spelling at all, which is exactly the part that matters most.
+func networkFields(cfg schema.AppConfig) (ports, expose StringList, notes []string) {
+	for index, netList := range cfg.NetworkMeta.NetworkLists {
+		switch {
+		case netList.Ingress && netList.Host:
+			for _, port := range netList.Ports {
+				text := strconv.Itoa(port)
+				ports = append(ports, text+":"+text)
+			}
+		case netList.Ingress:
+			for _, port := range netList.Ports {
+				expose = append(expose, strconv.Itoa(port))
+			}
+		case strings.TrimSpace(netList.AppName) != "" && netList.Via:
+			notes = append(notes, fmt.Sprintf(
+				"NetworkLists[%d] routes this app's traffic through %q. Compose has no routing: joining both services to one network lets them talk, but it does NOT send this app's egress through the other, and nothing here stops it reaching the internet directly.",
+				index, netList.AppName))
+		case strings.TrimSpace(netList.AppName) != "":
+			notes = append(notes, fmt.Sprintf(
+				"NetworkLists[%d] links this app to %q over a private bridge, restricted to that app's published ports. Put both services on one `internal` compose network to approximate it; the port restriction does not come along.",
+				index, netList.AppName))
+		}
+	}
+	sort.Strings(ports)
+	sort.Strings(expose)
+	return ports, expose, notes
+}

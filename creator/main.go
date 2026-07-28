@@ -14,6 +14,8 @@
 //	zc validate <name|app.yaml>
 //	zc delete <name>
 //	zc keys list|show|set <s>|edit|validate|path   TUI keybind schemes
+//	zc compose export <name> [-o f]    describe an app as a Compose-specification file
+//	zc compose import <compose.yaml>   author app definitions from one
 //	zc run <name|app.yaml> [--exec]    ⟶ zcr run
 //	zc build <name|app.yaml>           ⟶ zcr build
 //	zc stop|restart|inspect <name>     ⟶ zcr
@@ -59,6 +61,8 @@ const usage = `usage: zc <command> [args]
   validate <name|app.yaml>
   delete <name>
   keys list|show|set <s>|edit|validate|path   TUI keybind schemes (default|vim|custom)
+  compose export <name> [-o f]      describe an app as a compose file (lossy; prints what)
+  compose import <compose.yaml>     author apps from a compose file (fail-closed; lossy)
   run <name|app.yaml> [--exec]      build the launch plan; print it, or launch    (⟶ zcr)
   build <name|app.yaml>             (re)build the derived image (ImageMeta.Install) (⟶ zcr)
   stop|restart|inspect <name>       (⟶ zcr)
@@ -142,6 +146,8 @@ func run(argv []string) error {
 		return cmdValidate(svc, rest)
 	case "delete":
 		return cmdDelete(svc, rest)
+	case "compose":
+		return cmdCompose(svc, rest)
 	default:
 		return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 	}

@@ -9,6 +9,35 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- **`zc compose export` and `zc compose import`: interop with the Compose specification,**
+  in both directions and honest about both. Neither is lossless, so neither is silent about
+  it - every field that did not cross is printed as a note.
+  *Export* describes an app in the format other tools read. Image, entrypoint, user,
+  capabilities, resource limits, mounts, published ports, `depends_on` and the `ReadyCheck`
+  (as a `healthcheck`) all carry. The egress lock-down does not, and cannot: a compose file
+  has no way to say "an nftables ruleset is applied to this netns and locked before the
+  process starts". The generated file therefore leads with a comment saying it DESCRIBES an
+  app rather than sandboxing it, and an app carrying NetworkLists exports with that stated in
+  capitals. A VM app is refused rather than half-rendered - a guest is not a container.
+  Verified by feeding the output back to the real `podman-compose config`, which parses and
+  normalises it with every field intact.
+  *Import* onboards an existing compose service, and tightens as it goes. Compose cannot say
+  what a service may reach, so reading its silence as "full network access" would import a
+  posture nobody chose: an imported app arrives with no network at all, and published ports
+  are the only exception because they are the only thing stated. The same reading applies
+  throughout - an unqualified mount becomes read-only and noexec (compose's default is
+  read-write), `cap_add: ALL` is refused, a bare numeric `user` is dropped since Zinc passes
+  the user to podman by name, and a mutable tag is resolved to its digest before the app is
+  saved. Multi-service files import as one app each; `--service` takes just one and
+  `--dry-run` prints instead of saving.
+  The polymorphism of real compose files is handled rather than rejected: `depends_on` in
+  both its list and map forms, and every list field written as either a scalar or a sequence,
+  because `expose: 5432` and `command: nginx -g daemon off;` are how people actually write
+  them. That last one was a bug found by running it: taken whole, the command became an
+  Entrypoint that is a filename with spaces in it - valid on paper, unexecutable in fact. It
+  is now split the way compose itself splits it, reduced to the executable, with the dropped
+  arguments named.
+
 - **`StartConditions.ReadyCheck`: `DependsOn` can wait for ready, not just for running.** A
   dependency counted as up the moment its container was, which is true enough for a service
   whose process is its readiness and false for anything a dependent routes through. A VPN

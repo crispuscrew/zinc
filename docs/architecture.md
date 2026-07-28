@@ -570,6 +570,7 @@ zc list
 zc validate <name|app.yaml>
 zc delete <name>
 zc keys list|show|set <s>|edit|validate|path
+zc compose export <name> [-o f]     zc compose import <compose.yaml> [--service s] [--dry-run]
 zc tui
 ```
 
@@ -599,10 +600,34 @@ implementation detail of the creator; they are distinct from any desktop hotkeys
 host-level (ZDE) concern. (The scheme files happen to be TOML internally; that is a `zc`
 implementation detail and has nothing to do with the app format, which is YAML.)
 
+**Compose interop** (`internal/compose`) translates between an app definition and a
+Compose-specification file, in both directions. Both are authoring, which is why they live
+here and not in the runner, and neither is lossless - so both print what did not cross rather
+than omitting it silently.
+
+*Exporting drops guarantees.* A compose file cannot express the nftables egress lock-down
+applied to the app's netns before it starts, the Wayland security context, or the desktop
+wiring the runner resolves from the live session. What it can carry - image, entrypoint, user,
+capabilities, resource limits, mounts, published ports, `depends_on`, and the `ReadyCheck` as a
+`healthcheck` - it carries, and the generated file leads with a comment saying it describes an
+app rather than sandboxing one. A VM app is refused outright: a guest is not a container.
+
+*Importing tightens.* Compose has no way to say what a service may reach, so reading its
+silence as "full network access" would import a posture nobody chose. An imported app arrives
+with no NetworkLists, which is no network at all; published ports are the one exception,
+because they are stated. Everything else fails closed the same way: an unqualified mount
+becomes read-only and noexec (compose's default is read-write), `cap_add: ALL` is refused, a
+bare numeric `user` is dropped because Zinc passes the user to podman by name, and a mutable
+image tag is resolved to its digest through `zcr image resolve` before the app is saved -
+without which validation would reject it anyway. Each service becomes its own app, and
+`depends_on` becomes `DependsOn` (with the caveat, printed, that ordering is not connectivity:
+in compose the two share a network, in Zinc a link has to be declared).
+
 Internally `zc` is a small CLI over a backend facade: an `internal/store` YAML app store (a
 mirror of the same on-disk format `zcr` reads), an `internal/runner` delegate that finds `zcr`
 on `$PATH` and drives it, an `internal/backend` facade the CLI and TUI both call, the
-`internal/tui` Bubbletea UI, and `internal/keys` for the keybind schemes.
+`internal/tui` Bubbletea UI, `internal/compose` for the interop above, and `internal/keys` for
+the keybind schemes.
 
 ### 9.2 zcr - the runner
 
