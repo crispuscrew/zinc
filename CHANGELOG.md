@@ -19,7 +19,12 @@ tracked in [RELEASES.md](RELEASES.md).
   netns, applies it, assigns the addresses and routes the peers' `AllowedIPs` into it - in
   the same privileged helper that already installs routes and loads the ruleset, and before
   the app exists. Measured end to end against a real WireGuard peer: handshake completed,
-  3/3 pings across the tunnel, and the app reporting `CapEff: 0000000000000000`.
+  pings across the tunnel, and the app reporting `CapEff: 0000000000000000` - including the
+  `AllowedIPs = 0.0.0.0/0` case, where the default route points into the tunnel and the
+  handshake can only complete because the endpoint was pinned to its pre-tunnel route first.
+  And through a gateway: a client routed at a tunnel-carrying sibling fetched a payload that
+  lives only on the far side of that tunnel, which takes the `Via` route, the forward chain,
+  the masquerade onto `wg0`, the tunnel itself and the return path all working at once.
   The private key travels on the helper's stdin, the channel the nft ruleset already uses -
   not an argv, which every process on the host can read out of `/proc`, not an image, not a
   mount the app could open. Each peer endpoint is pinned to its pre-tunnel route first, or an
@@ -49,8 +54,10 @@ tracked in [RELEASES.md](RELEASES.md).
   forwards, and that is now stated in the architecture doc as a design line rather than left
   to be discovered: they say where *this app* may go, and forwarded traffic is somebody
   else's.
-  Measured: a client whose only path is a `ForwardPorts: [53]` gateway resolved `example.com`
-  through it and was blocked connecting to port 443 of the address it had just resolved.
+  Measured twice: a client whose only path is a `ForwardPorts: [53]` gateway resolved
+  `example.com` through it and was blocked connecting to port 443 of the address it had just
+  resolved; and through a tunnel-carrying gateway with `ForwardPorts: [8080]`, a client
+  fetched the far end's 8080 and timed out on its 9090.
 
 - **Gateways chain.** The forward rule named the egress bridge alone, so a gateway that was
   itself routed through another sibling dropped everything its own `Via` routes sent to that
