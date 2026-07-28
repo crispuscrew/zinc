@@ -580,3 +580,72 @@ func TestDNS_NoServersNoRules(t *testing.T) {
 		}
 	}
 }
+
+// REGRESSION: a consumer-only app was left with no input base chain at all. In nftables a
+// hook with no base chain is not filtered, so "no chain" means unfiltered inbound, not
+// closed - and every app on that shared bridge could reach every port it listened on.
+func TestNFTRuleset_ConsumerOnlyStillFiltersInbound(t *testing.T) {
+	cfg := schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion, Type: schema.ZincContainer,
+		AppNameID: "client", ImageMeta: schema.ImageMeta{Image: "localhost/c:local"},
+		NetworkMeta: schema.NetworkMeta{NetworkLists: []schema.NetworkList{{AppName: "db"}}},
+	}
+	ruleset := NFTRuleset(cfg)
+	if !strings.Contains(ruleset, "chain input") {
+		t.Fatalf("a linked app must still have an input chain, or its inbound is unfiltered:\n%s", ruleset)
+	}
+	if !strings.Contains(ruleset, "type filter hook input priority 0; policy drop;") {
+		t.Errorf("a consumer publishes nothing, so its input chain must default-drop:\n%s", ruleset)
+	}
+}
+
+// The declared resolvers are handed to every filtered app. The ruleset restricts DNS to them
+// for all of them, so an app restricted but never given them has no DNS at all.
+func TestPodCreateArgs_DNSReachesAnUnlinkedApp(t *testing.T) {
+	cfg := schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion, Type: schema.ZincContainer,
+		AppNameID: "plain", ImageMeta: schema.ImageMeta{Image: "localhost/p:local"},
+		NetworkMeta: schema.NetworkMeta{
+			DNSServers:   []string{"10.0.0.53"},
+			NetworkLists: []schema.NetworkList{{IPv4CIDR: []string{"0.0.0.0/0"}, Ports: []int{443}}},
+		},
+	}
+	args := strings.Join(podCreateArgs(cfg, "plain-pod"), " ")
+	if !strings.Contains(args, "--dns 10.0.0.53") {
+		t.Fatalf("an unlinked app must be handed its declared resolvers too: %s", args)
+	}
+}
+
+// The resolver a routed app's DNS is redirected to has to travel through the sibling like
+// everything else. Without a route for it, every query leaves by the app's own egress in the
+// clear while the docs say it goes through the tunnel.
+func TestRouteCommands_RedirectedResolverIsRoutedThroughTheSibling(t *testing.T) {
+	cfg := routedApp()
+	cfg.NetworkMeta.DNSServers = []string{"10.0.0.53"}
+	var script string
+	for _, step := range routeCommands(cfg, "zinc/netfilter:local") {
+		script += strings.Join(step.Args, " ")
+	}
+	if !strings.Contains(script, "ip route replace 10.0.0.53/32 via") {
+		t.Fatalf("the redirected resolver must get a route through the sibling:\n%s", script)
+	}
+}
+
+// The rendered ruleset must be identical across runs; map iteration order used to leak into
+// it whenever both DNS families were declared.
+func TestNFTRuleset_Deterministic(t *testing.T) {
+	cfg := schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion, Type: schema.ZincContainer,
+		AppNameID: "app", ImageMeta: schema.ImageMeta{Image: "localhost/a:local"},
+		NetworkMeta: schema.NetworkMeta{
+			DNSServers:   []string{"1.1.1.1", "2606:4700:4700::1111"},
+			NetworkLists: []schema.NetworkList{{IPv4CIDR: []string{"0.0.0.0/0"}, Ports: []int{443}}},
+		},
+	}
+	first := NFTRuleset(cfg)
+	for run := 0; run < 200; run++ {
+		if got := NFTRuleset(cfg); got != first {
+			t.Fatalf("ruleset differs between renders:\n%s\n---\n%s", first, got)
+		}
+	}
+}

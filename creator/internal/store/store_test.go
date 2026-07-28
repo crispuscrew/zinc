@@ -294,3 +294,32 @@ func TestLoadResolved_FailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// An app must not resolve into another app's identity. AppNameID is what the runner names
+// the container, the pod and the derived image after, so a child that omitted it and took
+// its base's name would make `zcr run notes` build, and `zcr stop notes` destroy, whatever
+// `browser` is. Inheriting apps are hand-written, so nothing else keeps the two in step.
+func TestLoadResolved_RefusesToTakeTheBasesIdentity(t *testing.T) {
+	sto := tempStore(t)
+	writeApp(t, sto, "browser", "SchemaVersion: 2\nType: ZincContainer\nAppNameID: browser\n"+
+		"ImageMeta:\n  Image: localhost/browser:local\n")
+	writeApp(t, sto, "notes", "SchemaVersion: 2\nInherits: browser\nIcon: notes\n")
+
+	_, err := sto.LoadResolved("notes")
+	if err == nil {
+		t.Fatal("an app resolving to another app's AppNameID must be refused")
+	}
+	if !strings.Contains(err.Error(), "keep its own name") {
+		t.Errorf("the refusal should say why: %v", err)
+	}
+
+	// Stating its own name is all it takes.
+	writeApp(t, sto, "notes", "SchemaVersion: 2\nAppNameID: notes\nInherits: browser\nIcon: notes\n")
+	cfg, err := sto.LoadResolved("notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ImageMeta.Image != "localhost/browser:local" {
+		t.Errorf("it should still inherit everything else, got Image=%q", cfg.ImageMeta.Image)
+	}
+}

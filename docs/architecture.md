@@ -125,7 +125,7 @@ NetworkMeta:
     # an egress list may name destinations by address and/or by name:
     #   IPv4CIDR / IPv6CIDR      # addresses, as written
     #   Domains                  # resolved AT LAUNCH into addresses; a snapshot, not name
-    #                            # filtering, and not refreshed while the app runs (5.3)
+    #                            # filtering, and not refreshed while the app runs (6.2)
 
 NotificationMeta:                # NOT implemented - a non-default value is refused, not ignored
   Disabled: false
@@ -182,7 +182,7 @@ capability drop-all baseline plus `Capabilities`, Wayland socket + security-cont
 GPU device, the theme bundle, audio (Pipewire socket / `/dev/snd`), explicit host bind
 mounts, SSH/GPG key mounts, the entrypoint override, and the terminal / multiterminal /
 background / keep-alive lifecycle. `ResourcesMeta` (`--cpus`, `--memory`, `--memory-swap`, `--pids-limit`) and
-`InternalUserMeta` (`--user`, `--userns=keep-id`) are enforced as of 0.7. **Schema-defined
+`InternalUserMeta` (`--user`, `--userns=keep-id`) are enforced now. **Schema-defined
 and not wired into the launch:** `NotificationMeta` and `Configs`. `NotificationMeta` is
 refused rather than ignored - Zinc has no notification path, so accepting `Silenced` would
 tell an author their app is muted while it notifies freely.
@@ -389,9 +389,23 @@ Each `NetworkList` entry is one directional rule. The fields that shape it:
   listed). `true` is allow-all-except (default-accept with the listed entries dropped).
 - **`IPv4CIDR` / `IPv6CIDR`** - destinations (egress) or allowed sources (ingress). The two
   families are emitted separately, so a v4 CIDR never gates v6 traffic.
-- **`Ports`** - TCP+UDP port set for the rule.
+- **`Domains`** - destinations named rather than numbered (egress only). Resolved AT LAUNCH
+  into addresses on this list, under the same `Ports`. A snapshot, not name filtering, and not
+  refreshed while the app runs - see 6.2.
+- **`Ports`** - TCP+UDP port set for the rule. Not honoured on a `Via` list (the link is
+  accepted whole), which is refused rather than accepted.
 - **`Interface`** - a specific host/app interface to bind (pasta copies its addressing).
+  Refused on an app that also has a sibling link: such an app is on bridges rather than pasta,
+  where podman publishes by address and the interface could not be honoured.
+- **`Via`** - on an egress list naming an `AppName`, send this list's CIDRs THROUGH that
+  sibling instead of out this app's own egress (6.2). One list carries one address family.
+- **`Forward`** - on a producer's own ingress list, agree to route for the siblings on its
+  link. Never implied by another app naming it.
 - **`GatewayV4` / `GatewayV6`** - next-hop for multi-homing (not supported yet, 6.5).
+
+`NetworkMeta` also carries **`DNSServers`**: the resolvers the app is handed, and - once it
+has any `NetworkLists` - the only ones its ruleset lets it reach. Required for a routed app,
+whose first resolver must be IPv4 (6.2).
 
 List order is priority: the first entry wins. Blocking DNS, for example, is just an egress
 blacklist for ports 53 and 853, ordered ahead of any broad allow so it wins. Validation
@@ -447,8 +461,10 @@ link (gated by interface, so an address set on it enforces nothing).
 **DNS for a routed app.** `NetworkMeta.DNSServers`, required once a list sets `Via`. podman
 writes a container's `resolv.conf` and points it at the network's own resolver; on an
 `--internal` bridge that resolver answers sibling names and forwards nothing, so a routed app
-gets NXDOMAIN for anything external. `--dns` on the pod is accepted and then ignored in favour
-of the network's. Zinc therefore redirects the query in the app's netns instead: DNS to any
+gets NXDOMAIN for anything external. Zinc therefore does two things: it hands the pod the
+declared resolvers (`--dns`), and - because the app may still hold a resolver of its own, and
+because what matters is where the query GOES rather than what `resolv.conf` says - it
+redirects the query in the app's netns: DNS to any
 address is rewritten (`nat` `output`, `dstnat` priority, so the filter hook then sees the new
 address) to the declared resolver, which is routed through the sibling like anything else - it
 travels inside the tunnel and stops with it. Whatever is not redirected is dropped. Only a
@@ -496,8 +512,12 @@ bridges alone.
 The ruleset is a pure function of the validated config, rendered as `table inet zinc`. A
 standard (egress and/or tier-3) app builds an `output` chain (egress: `daddr`/`dport`) and,
 when it publishes, an `input` chain (ingress: `saddr`/`dport`). A tier-2 (sibling-link) app
-is gated by interface instead: the private `zlink*` bridges are accepted, and a producer's
-published ports are accepted inbound on its own link interface, nothing else.
+is gated by interface as well: the private `zlink*` bridges are accepted, a producer's
+published ports are accepted inbound on its own link interface, and any address rules the same
+app carries are still emitted alongside. (Both kinds are rendered at once; before 0.7 it was
+one or the other, and whichever ran ignored the other kind of list outright.) An app with any
+link always gets an input chain, published or not - it shares that bridge with its siblings,
+and a hook with no base chain is not filtered at all.
 
 Every chain defaults to `policy drop` and always accepts loopback and
 `established,related` traffic (so a server's reply rides the established rule). Per-direction
@@ -546,7 +566,7 @@ layer, section 13) rather than a bare `podman run`.
 true enough for a service whose process is its readiness and false for anything a dependent
 routes through: a VPN container is running long before its tunnel is, and a client started in
 that window has a default route and a resolver pointing at a gateway that cannot forward yet
-(5.3, routing). `StartConditions.ReadyCheck` closes that window. It is a command in exec form
+(6.2, routing). `StartConditions.ReadyCheck` closes that window. It is a command in exec form
 (`["sh", "-c", "ip link show wg0 | grep -q UP"]`) which the runner installs as the container's
 healthcheck, so `podman ps` reports the last answer to the same question the launch sequence
 waits on, and which a dependent polls until it passes or `ReadyTimeoutSec` (default 60s) runs
@@ -649,7 +669,7 @@ Authoring commands (local, no runtime needed):
 ```
 zc new <name> --image <img> [--desc d] [--icon i]
 zc list
-zc validate <name|app.yaml>
+zc validate <name|app.yaml> [--resolved]
 zc delete <name>
 zc keys list|show|set <s>|edit|validate|path
 zc compose export <name> [-o f]     zc compose import <compose.yaml> [--service s] [--dry-run]
@@ -981,9 +1001,11 @@ compositor-agnostic on purpose, so it can be adopted piecemeal on any existing s
 
 ## 13. Repo Layout
 
-The shared library is `common/`, which holds **only** the app schema and its validation
-(`common/domain/schema` plus `common/domain/schema/validate`), pure stdlib with no I/O. Both
-tools depend on it and validate identically. The runtime hexagon lives **inside**
+The shared library is `common/`, which holds the app schema, its validation, and the
+config-inheritance resolver (`common/domain/schema`, `.../validate`, `.../inherit`). It is
+pure - no I/O, and the resolver takes a loader from its caller rather than reading anything
+itself - and its one dependency is the YAML codec, which the resolver needs because it merges
+nodes rather than decoded structs (3.1). Both tools depend on it and validate identically. The runtime hexagon lives **inside**
 `container/runner`; there is no separate shared runtime module.
 
 ```
@@ -992,7 +1014,7 @@ zinc/
   check.mk               containerized checks (test/vet/fmt/vendor); every module includes it
   tool.mk                binary targets (build/run/repro); each tool's Makefile includes it
   go.work                ties the modules together for local dev only (the build never uses it)
-  common/                shared library - the app schema + validation (pure, no I/O)
+  common/                shared library - the app schema, validation + inheritance (pure, no I/O)
     domain/schema/                    schema.go (AppConfig, schema version 2)
     domain/schema/validate/           the hard rules + create-time warnings
     examples/apps/                    sample app YAMLs
@@ -1004,6 +1026,7 @@ zinc/
     internal/backend/                 the one facade the CLI + TUI use
     internal/tui/                     the keyboard-first terminal UI
     internal/keys/                    the TUI keybind schemes (~/.config/zinc/zc)
+    internal/compose/                 Compose-spec interop, both directions (9.1)
   container/
     runner/              zcr - the container runtime (the hexagon)
       domain/                         pure model: derived-image policy, launch options
@@ -1071,7 +1094,7 @@ the network lock-down applies rules with (6.4).
 | 2 | GPU passthrough weakens isolation | off by default; never enable for untrusted images (5.4) |
 | 3 | Image tags can be poisoned upstream | third-party images must be digest-pinned; launch is `--pull never` (5.5) |
 | 4 | Derived images are per-machine, not digest-pinned | their guarantee is the pinned base plus the visible install lines (7) |
-| 5 | Some schema fields are validated but not yet enforced at runtime (resources, internal user, notifications, config mounts) | called out explicitly in section 3; on the roadmap, fail-loud where relevant |
+| 5 | Some schema fields are validated but not yet enforced at runtime (config mounts). Resources and internal user are enforced; notifications are refused outright rather than ignored | called out explicitly in section 3; on the roadmap, fail-loud where relevant |
 | 6 | Host-scoped egress, gateway/multi-homing, and mixing a sibling link with other networking are unsupported | fail-closed: rejected at launch, never mis-enforced (6.5) |
 | 7 | The netfilter helper runs with namespaced `CAP_NET_ADMIN` | namespaced to the pod's userns, harmless on the host; the image is local and `--pull never` (6.4) |
 | 8 | VM apps have no egress filtering, only explicit port forwards | the nftables model lives in a container netns and does not reach a guest; rejected rather than mis-enforced (10) |

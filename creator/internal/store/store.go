@@ -171,7 +171,19 @@ func (sto *Store) LoadResolved(name string) (schema.AppConfig, error) {
 	if err != nil {
 		return schema.AppConfig{}, fmt.Errorf("config: %s: %w", name, err)
 	}
-	return decode(merged, sto.Path(name))
+	resolved, derr := decode(merged, sto.Path(name))
+	if derr != nil {
+		return schema.AppConfig{}, derr
+	}
+	// An app must not be able to resolve into another app's identity. A child that omits
+	// AppNameID inherits its base's, and AppNameID is what the runner names the container,
+	// the pod and the derived image after - so `zcr run notes` would build, and `zcr stop
+	// notes` would destroy, whatever `browser` is. Inheriting apps are hand-written (Save
+	// refuses to rewrite one), so nothing else keeps the filename and the name in step.
+	if resolved.AppNameID != name {
+		return schema.AppConfig{}, fmt.Errorf("config: %s: resolves to AppNameID %q - an app must keep its own name; state AppNameID in the app rather than taking the base's", name, resolved.AppNameID)
+	}
+	return resolved, nil
 }
 
 // LoadFileResolved decodes an app YAML at an arbitrary path with its Inherits chain applied.

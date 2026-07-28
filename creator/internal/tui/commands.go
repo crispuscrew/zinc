@@ -174,12 +174,20 @@ func loadApps(svc backend.Service) tea.Cmd {
 		running, _ := svc.Running() // a query failure degrades to "nothing running"
 		rows := make([]appRow, 0, len(names))
 		for _, name := range names {
-			cfg, err := svc.Load(name)
+			raw, err := svc.Load(name)
 			if err != nil {
 				rows = append(rows, appRow{cfg: schema.AppConfig{AppNameID: name}, loadErr: err})
 				continue
 			}
-			rows = append(rows, appRow{cfg: cfg, running: running[name]})
+			// Resolved for the row, raw for the form. A broken inheritance (a base that was
+			// renamed away) still lists, showing the error, so it can be opened and fixed
+			// rather than vanishing from the only UI that could repair it.
+			cfg, rerr := svc.LoadResolved(name)
+			if rerr != nil {
+				rows = append(rows, appRow{cfg: raw, raw: raw, running: running[name], loadErr: rerr})
+				continue
+			}
+			rows = append(rows, appRow{cfg: cfg, raw: raw, running: running[name]})
 		}
 		return appsMsg{rows}
 	}

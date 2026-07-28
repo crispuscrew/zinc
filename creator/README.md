@@ -16,10 +16,15 @@ Authoring (local, no runtime needed):
 zc tui                             keyboard-first manager (create/edit/run/stop/logs)
 zc new <name> --image <img> [--desc d] [--icon i]
 zc list
-zc validate <name|app.yaml>
+zc validate <name|app.yaml> [--resolved]       --resolved prints what an inheriting app merges to
 zc delete <name>
 zc keys list|show|set <s>|edit|validate|path   TUI keybind schemes
+zc compose export <name> [-o f]                describe an app as a Compose-spec file
+zc compose import <compose.yaml> [--service s] [--dry-run]
 ```
+
+Both compose directions are lossy and print exactly how: exporting cannot carry the egress
+lock-down, and importing invents no network access.
 
 Runtime (forwarded verbatim to `zcr`):
 

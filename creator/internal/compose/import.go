@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,8 +13,11 @@ import (
 // App is one imported service: the app definition it became, and the notes about what the
 // compose file said that did not survive the crossing.
 type App struct {
-	Config schema.AppConfig
-	Notes  []string
+	// Service is the compose key this came from, kept because it is what a user has in front
+	// of them when they name one with --service; Config.AppNameID may have been coerced.
+	Service string
+	Config  schema.AppConfig
+	Notes   []string
 }
 
 // ToApps turns a compose project into one app definition per service, in a stable order.
@@ -65,6 +69,14 @@ func serviceToApp(name string, project Project) App {
 		note("entrypoint %q was reduced to %q: Zinc's Entrypoint is ONE executable, so its arguments were dropped. The app will not behave as the compose file did until they are baked into the image or a wrapper script.",
 			strings.Join(argv, " "), head)
 	}
+	if len(service.Entrypoint) == 0 && len(service.Command) > 0 {
+		// compose's `command` replaces the image's CMD and leaves its ENTRYPOINT in place;
+		// Zinc has one field and it becomes podman's --entrypoint, which replaces the
+		// ENTRYPOINT instead. On the images where that matters most - postgres, redis, mysql -
+		// the entrypoint script is what creates the data directory and drops privileges.
+		note("command %q became the Entrypoint. In compose, `command` replaces the image's CMD and its ENTRYPOINT still runs; here it replaces the ENTRYPOINT. If this image has a setup entrypoint (postgres, redis, mysql and friends all do), it will no longer run.",
+			strings.Join(service.Command, " "))
+	}
 	// Only on-failure restarts come across. compose's "always" and "unless-stopped" restart
 	// a container the user stopped on purpose, which is the one thing Autorestart is
 	// documented not to do.
@@ -98,17 +110,23 @@ func serviceToApp(name string, project Project) App {
 	}
 
 	if service.User != "" {
-		if _, err := strconv.Atoi(service.User); err == nil {
-			note("user: %s was dropped: Zinc passes the user to podman BY NAME, so it must exist in the image; a bare uid would always 'work' and could land on a user the image does not have", service.User)
-		} else {
-			userName, _, _ := strings.Cut(service.User, ":")
+		// The user half is taken before the numeric test, because `1000:1000` is at least as
+		// common as a bare `1000` and means the same thing - testing the whole string let the
+		// spelling this refuses walk straight through as a "name" of "1000".
+		userName, _, hadGroup := strings.Cut(service.User, ":")
+		switch {
+		case strings.TrimSpace(userName) == "":
+			note("user: %s was dropped: it names no user, only a group, and Zinc has no field for a group on its own", service.User)
+		case isNumeric(userName):
+			note("user: %s was dropped: Zinc passes the user to podman BY NAME, so it must exist in the image; a numeric id would always 'work' and could land on a user the image does not have", service.User)
+		default:
 			cfg.InternalUserMeta = schema.InternalUserMeta{UseNonRootUser: true, NonRootUserName: userName}
-			if userName != service.User {
+			if hadGroup {
 				note("user: %s became NonRootUserName %q: the group half has no Zinc field", service.User, userName)
 			}
 		}
 	}
-	cfg.ResourcesMeta = resources(service)
+	cfg.ResourcesMeta = resources(service, note)
 	cfg.Capabilities = importCapabilities(service, note)
 	cfg.Volumes = importVolumes(service, note)
 	cfg.NetworkMeta.NetworkLists = importPorts(service, note)
@@ -121,7 +139,21 @@ func serviceToApp(name string, project Project) App {
 	for _, dep := range service.DependsOn.Names() {
 		note("depends_on %q brings the app up first, but does NOT let it talk to that app. On a compose network they would share one; in Zinc a link is a NetworkList naming %q, and its ports must be published on the other side.", dep, appName(dep))
 	}
-	return App{Config: cfg, Notes: notes}
+	return App{Service: name, Config: cfg, Notes: notes}
+}
+
+// isNumeric reports whether every character is a digit, which is what makes a compose user
+// field an id rather than a name.
+func isNumeric(text string) bool {
+	if text == "" {
+		return false
+	}
+	for _, char := range text {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // appName coerces a compose service key into a legal AppNameID: lowercase, and the
@@ -225,17 +257,27 @@ func healthcheckKind(test []string) string {
 // resources reads compose's limits into ResourcesMeta. Memory is a byte quantity with a
 // unit suffix; anything unparseable is left at zero (unlimited) rather than guessed at,
 // because guessing low would throttle an app and guessing high would not be a limit.
-func resources(service Service) schema.ResourcesMeta {
+func resources(service Service, note func(string, ...any)) schema.ResourcesMeta {
 	res := schema.ResourcesMeta{PIDsLimit: service.PidsLimit}
 	if service.Deploy == nil || service.Deploy.Resources.Limits == nil {
 		return res
 	}
 	limits := service.Deploy.Resources.Limits
-	if cores, err := strconv.ParseFloat(limits.CPUs, 64); err == nil && cores > 0 {
-		res.MaxCPUCores = cores
+	if limits.CPUs != "" {
+		if cores, err := strconv.ParseFloat(limits.CPUs, 64); err == nil && cores > 0 {
+			res.MaxCPUCores = cores
+		} else {
+			// Silence here would be the worst kind: a cap the compose file set, quietly
+			// becoming no cap at all, on the tool whose job is to bound what an app takes.
+			note("deploy.resources.limits.cpus %q could not be read, so this app imports with NO cpu limit. Set ResourcesMeta.MaxCPUCores by hand.", limits.CPUs)
+		}
 	}
-	if mib, ok := memoryMiB(limits.Memory); ok {
-		res.MaxRamMiB = mib
+	if limits.Memory != "" {
+		if mib, ok := memoryMiB(limits.Memory); ok {
+			res.MaxRamMiB = mib
+		} else {
+			note("deploy.resources.limits.memory %q could not be read as whole MiB, so this app imports with NO memory limit. Set ResourcesMeta.MaxRamMiB by hand.", limits.Memory)
+		}
 	}
 	return res
 }
@@ -285,11 +327,24 @@ func memoryMiB(text string) (int64, bool) {
 func importCapabilities(service Service, note func(string, ...any)) []string {
 	var caps []string
 	for _, capability := range service.CapAdd {
-		upper := strings.ToUpper(strings.TrimSpace(capability))
-		if upper == "ALL" {
+		upper := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(capability)), "CAP_")
+		switch upper {
+		case "ALL":
 			note("cap_add: ALL was dropped: Zinc's baseline is cap-drop ALL, and re-adding every capability would undo the containment this tool is for. Name the capabilities the app actually needs.")
 			continue
+		case "NET_ADMIN", "SYS_ADMIN":
+			// These two are refused rather than noted: NET_ADMIN lets an app flush the egress
+			// ruleset in its own netns and SYS_ADMIN contains it, so importing either from a
+			// third-party file would hand away the boundary this tool exists to hold. The
+			// validator refuses them outright on a filtered app; an imported app has no
+			// NetworkLists by default, so without this they would sail through.
+			note("cap_add: %s was dropped: it would let the app remove its own network lock-down, so it is never granted by an import. Add it by hand if this app genuinely needs it and you accept what it means.", upper)
+			continue
 		}
+		// Every other capability is carried, and said out loud: a capability re-added on top
+		// of cap-drop ALL is a deliberate widening, and it should not arrive silently just
+		// because someone else's file asked for it.
+		note("cap_add: %s was carried over - it is granted on top of Zinc's cap-drop ALL baseline. Drop it if the app does not need it.", upper)
 		caps = append(caps, upper)
 	}
 	for _, opt := range service.SecurityOpt {
@@ -323,21 +378,36 @@ func importVolumes(service Service, note func(string, ...any)) []schema.Volume {
 			note("volume %q was dropped: %q is a named compose volume, and Zinc mounts host paths rather than managing volumes", mount, host)
 			continue
 		}
+		if !strings.HasPrefix(host, "/") {
+			// `./data` is relative to the COMPOSE FILE, and `~` is the shell's. Zinc stores an
+			// absolute host path and the runner hands it to podman from wherever it happens to
+			// be running, so keeping either verbatim mounts a different directory than the file
+			// meant - silently, and podman creates the missing one rather than failing.
+			note("volume %q was dropped: %q is relative to the compose file (or to a shell's home), and Zinc mounts absolute host paths. Re-add it with the full path.", mount, host)
+			continue
+		}
 		volume := schema.Volume{HostMounted: true, HostMount: host, InnerMount: inner}
 		options := ""
 		if len(parts) > 2 {
 			options = parts[2]
 		}
+		writable := false
 		for _, opt := range strings.Split(options, ",") {
 			switch strings.TrimSpace(opt) {
 			case "rw":
-				volume.Writable = true
+				volume.Writable, writable = true, true
+			case "ro":
+				writable = true // stated, and it agrees with the default
 			case "exec":
 				volume.Executable = true
 			}
 		}
-		if options == "" {
-			note("volume %q became read-only and noexec: an unqualified compose mount is read-write, and importing that silently would hand the app write access nobody asked for. Set Writable if it needs it.", mount)
+		// Anything that did not state ro or rw lands read-only, and that has to be said. The
+		// case worth naming is `:z` / `:Z`, the SELinux relabel suffix that is everywhere on
+		// this project's own platform: it means read-WRITE, and it used to go silent because
+		// the note only fired for a bare mount.
+		if !writable {
+			note("volume %q became read-only and noexec: a compose mount that does not say `ro` is read-write, and importing that silently would hand the app write access nobody asked for. Set Writable if it needs it.", mount)
 		}
 		volumes = append(volumes, volume)
 	}
@@ -350,8 +420,16 @@ func importVolumes(service Service, note func(string, ...any)) []schema.Volume {
 // container's cannot be represented: Zinc publishes a listener under its own number.
 func importPorts(service Service, note func(string, ...any)) []schema.NetworkList {
 	var lists []schema.NetworkList
-	published := portNumbers(service.Ports, true, note)
-	internal := portNumbers(service.Expose, false, note)
+	// A compose port may name the address to bind, and `127.0.0.1:8080:80` is how a file says
+	// "this is not for the network". Publishing it to the LAN would be the importer widening
+	// the sandbox from what the file asked for, which is the one thing it must not do - so a
+	// loopback-bound port is imported as a sibling-only listener instead.
+	lanSpecs, localSpecs := splitByBindAddress(service.Ports)
+	published := portNumbers(lanSpecs, true, note)
+	internal := portNumbers(append(append(StringList{}, service.Expose...), localSpecs...), false, note)
+	if len(localSpecs) > 0 {
+		note("port(s) %v were bound to loopback in the compose file, so they are NOT published to the LAN here - they are reachable only from sibling apps on a link. Add Host if the LAN really should reach them.", []string(localSpecs))
+	}
 	if len(published) > 0 {
 		lists = append(lists, schema.NetworkList{Ingress: true, Host: true, Ports: published})
 		note("ports %v are published to the LAN (Ingress + Host). If only sibling apps need them, drop Host.", published)
@@ -360,6 +438,24 @@ func importPorts(service Service, note func(string, ...any)) []schema.NetworkLis
 		lists = append(lists, schema.NetworkList{Ingress: true, Ports: internal})
 	}
 	return lists
+}
+
+// splitByBindAddress separates port specs that reach the network from those the compose file
+// pinned to loopback. A spec is IP:HOST:CONTAINER when it has three fields; anything else
+// binds everywhere.
+func splitByBindAddress(specs StringList) (lan, local StringList) {
+	for _, spec := range specs {
+		fields := strings.Split(spec, ":")
+		if len(fields) >= 3 {
+			bind := strings.Trim(strings.Join(fields[:len(fields)-2], ":"), "[]")
+			if address := net.ParseIP(bind); address != nil && address.IsLoopback() {
+				local = append(local, spec)
+				continue
+			}
+		}
+		lan = append(lan, spec)
+	}
+	return lan, local
 }
 
 // portNumbers reads compose port specs into the container-side numbers. A published spec

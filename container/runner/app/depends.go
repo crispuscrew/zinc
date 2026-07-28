@@ -120,9 +120,28 @@ func (svc Service) waitReady(depCfg schema.AppConfig, dependent string) error {
 // now, so the combination is enforceable and no longer refused: a gateway app needs a link
 // AND real egress to be worth routing through.
 func checkNetwork(cfg schema.AppConfig) error {
+	linked := false
+	for _, netList := range cfg.NetworkMeta.NetworkLists {
+		if isLinkList(netList) {
+			linked = true
+		}
+	}
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		appName := strings.TrimSpace(netList.AppName)
 		switch {
+		case linked && netList.Ingress && netList.Host && strings.TrimSpace(netList.Interface) != "":
+			// Interface scoping rides on pasta (`--network pasta:--interface,<iface>`), and an
+			// app with a link is on bridges instead, where podman publishes by address rather
+			// than by interface name. Accepting it would publish the port on EVERY host
+			// interface while the config, and the authoring warning, both say one.
+			return fmt.Errorf("%s: NetworkLists[%d]: Interface %q cannot be honoured on an app that also has a sibling link - the port would be published on every host interface instead of that one; drop Interface, or drop the link",
+				cfg.AppNameID, index, netList.Interface)
+		case netList.Via && len(netList.Ports) > 0:
+			// A Via list becomes routes plus a blanket `oifname <link> accept`; its ports are
+			// used nowhere. Left accepted it would read as "only 443 through the VPN" while
+			// tunnelling every port.
+			return fmt.Errorf("%s: NetworkLists[%d]: Ports cannot be enforced on a routed (Via) list - the sibling link is accepted as a whole, so listing ports would read as a restriction that is not applied; drop Ports, or drop Via",
+				cfg.AppNameID, index)
 		case netList.GatewayV4 != "" || netList.GatewayV6 != "":
 			return fmt.Errorf("%s: NetworkLists[%d]: routing through a gateway (multi-homing) is not supported in this build yet", cfg.AppNameID, index)
 		case netList.Ingress && appName != "":

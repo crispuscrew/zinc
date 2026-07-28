@@ -83,6 +83,10 @@ func checkDepends(dependsOn []string, add addFunc) {
 	}
 }
 
+// maxReadyTimeoutSec is a day. Anything beyond it is a typo rather than a wait, and the
+// nanosecond duration the runner builds from it must not overflow.
+const maxReadyTimeoutSec = 86400
+
 // checkReadiness screens the readiness gate a dependent waits on. ReadyCheck is exec form
 // and reaches podman as one JSON argument, so it needs no quoting rules - only that every
 // word is a word. A timeout on its own is the inert-field case: nothing waits without a
@@ -93,8 +97,12 @@ func checkReadiness(start schema.StartConditions, add addFunc) {
 			add("StartConditions.ReadyCheck[%d]: must not be empty", index)
 		}
 	}
-	if start.ReadyTimeoutSec < 0 {
-		add("StartConditions.ReadyTimeoutSec %d: must be >= 0 (0 = the runner's default)", start.ReadyTimeoutSec)
+	// Bounded at both ends. The upper bound is not tidiness: the runner turns this into a
+	// time.Duration in nanoseconds, and a large enough value overflows to a NEGATIVE duration,
+	// so the deadline is already past and the wait would end on the first failed probe - a
+	// very long timeout silently becoming no timeout at all.
+	if start.ReadyTimeoutSec < 0 || start.ReadyTimeoutSec > maxReadyTimeoutSec {
+		add("StartConditions.ReadyTimeoutSec %d: must be between 0 and %d (0 = the runner's default)", start.ReadyTimeoutSec, maxReadyTimeoutSec)
 	}
 	if start.ReadyTimeoutSec > 0 && len(start.ReadyCheck) == 0 {
 		add("StartConditions.ReadyTimeoutSec %d: has no effect without ReadyCheck - with no probe, a dependency counts as ready once it is running and nothing waits", start.ReadyTimeoutSec)

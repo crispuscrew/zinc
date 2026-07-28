@@ -369,3 +369,31 @@ func TestOpenTerminal_GatesUnsupportedNetwork(t *testing.T) {
 		t.Fatalf("OpenTerminal must gate an unsupported network shape via checkNetwork, got: %v", err)
 	}
 }
+
+// Interface scoping rides on pasta, and a linked app is on bridges instead, where podman
+// publishes by address rather than by interface name. Accepting the combination published
+// the port on EVERY host interface while the config and the authoring warning both named one.
+func TestCheckNetwork_InterfaceWithALinkRejected(t *testing.T) {
+	cfg := depApp("srv")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{
+		{Ingress: true, Ports: []int{5432}},
+		{Ingress: true, Host: true, Interface: "eth0", Ports: []int{8080}},
+	}}
+	err := checkNetwork(cfg)
+	if err == nil || !strings.Contains(err.Error(), "every host interface") {
+		t.Fatalf("Interface alongside a link must be refused, got: %v", err)
+	}
+}
+
+// A Via list becomes routes plus a blanket accept on the link; its Ports reach nothing. Left
+// accepted, the list would read as "only 443 through the VPN" while tunnelling every port.
+func TestCheckNetwork_PortsOnAViaListRejected(t *testing.T) {
+	cfg := depApp("client")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{
+		{AppName: "vpn", Via: true, IPv4CIDR: []string{"0.0.0.0/0"}, Ports: []int{443}},
+	}}
+	err := checkNetwork(cfg)
+	if err == nil || !strings.Contains(err.Error(), "not applied") {
+		t.Fatalf("Ports on a routed list must be refused, got: %v", err)
+	}
+}

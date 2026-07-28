@@ -79,7 +79,9 @@ func cmdComposeExport(svc backend.Service, argv []string) error {
 		return err
 	}
 	if *out == "" {
-		os.Stdout.Write(data)
+		if _, werr := os.Stdout.Write(data); werr != nil {
+			return fmt.Errorf("write: %w", werr) // a truncated export must not look like a whole one
+		}
 	} else if err := os.WriteFile(*out, data, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", *out, err)
 	} else {
@@ -226,11 +228,12 @@ func readProject(path string) (compose.Project, error) {
 	return project, nil
 }
 
-// selectService narrows a multi-service import to one, matched on either the compose key's
-// imported name or the name the user typed.
+// selectService narrows a multi-service import to one, matched on either the compose key as
+// written in the file or the app name it was coerced to. The key is what the user is reading
+// when they choose; requiring the coerced name would mean guessing what the coercion did.
 func selectService(apps []compose.App, want string) []compose.App {
 	for _, app := range apps {
-		if app.Config.AppNameID == want {
+		if app.Service == want || app.Config.AppNameID == want {
 			return []compose.App{app}
 		}
 	}

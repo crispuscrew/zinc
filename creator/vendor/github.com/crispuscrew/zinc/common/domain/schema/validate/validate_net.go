@@ -49,6 +49,13 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 		add("NetworkLists[%d].AppName %q: invalid app name; allowed [a-z0-9._-], must start alphanumeric", index, netList.AppName)
 	}
 
+	// One Via list resolves ONE gateway address, from a single `getent hosts` answer, and
+	// uses it for every CIDR on the list. A v6 CIDR routed via a v4 gateway is rejected by
+	// `ip route` ("Nexthop has invalid gateway") and the launch aborts, so the two families
+	// need a list each.
+	if netList.Via && len(netList.IPv4CIDR) > 0 && len(netList.IPv6CIDR) > 0 {
+		add("NetworkLists[%d]: a routed (Via) list carries both IPv4CIDR and IPv6CIDR, but one list resolves one gateway address and cannot route both families through it; use one Via list per family", index)
+	}
 	checkDomains(index, netList, add)
 	checkRouting(index, netList, add)
 	checkGateway(index, netList, self, add)
@@ -112,9 +119,23 @@ func checkDomains(index int, netList schema.NetworkList, add addFunc) {
 // a resolver gives it one reachable through the sibling, so the queries travel inside the
 // tunnel and stop with it.
 func checkDNS(netMeta schema.NetworkMeta, add addFunc) {
+	routed := false
+	for _, netList := range netMeta.NetworkLists {
+		if netList.Via {
+			routed = true
+		}
+	}
 	for index, server := range netMeta.DNSServers {
-		if net.ParseIP(strings.TrimSpace(server)) == nil {
+		address := net.ParseIP(strings.TrimSpace(server))
+		if address == nil {
 			add("NetworkMeta.DNSServers[%d] %q: not a valid IP address", index, server)
+			continue
+		}
+		// A routed app's first resolver is written into a `dnat to` rule inside `table ip
+		// nat`, which is IPv4-only. An IPv6 address there makes nft refuse the whole ruleset,
+		// so the launch fails with a parse error naming neither the field nor the reason.
+		if index == 0 && routed && address.To4() == nil {
+			add("NetworkMeta.DNSServers[0] %q: a routed app's FIRST resolver must be IPv4 - it is redirected through an IPv4 nat rule, and an IPv6 address there makes the whole ruleset fail to load", server)
 		}
 	}
 	if len(netMeta.DNSServers) > 0 {

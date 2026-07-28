@@ -235,8 +235,21 @@ func forwards(cfg schema.AppConfig) bool {
 // an unlocked network.
 func routeCommands(cfg schema.AppConfig, image string) []ports.Command {
 	var steps []ports.Command
-	for _, route := range viaLists(cfg) {
-		if len(route.cidrs) == 0 || route.iface == "" {
+	routes := viaLists(cfg)
+	for index, route := range routes {
+		cidrs := route.cidrs
+		// The redirected resolver has to be routed through the sibling too, and it is not
+		// covered by the list's own CIDRs unless the author happened to include it. Without
+		// this, an app routing only some destinations through a VPN sends every DNS query -
+		// rewritten to the declared resolver by the nat rule - out its OWN egress in the
+		// clear, while the schema and this file both say the queries travel inside the
+		// tunnel. It goes on the first Via route, since the dnat sends all of them there.
+		if index == 0 {
+			if server := dnsRedirect(cfg); server != "" {
+				cidrs = append(append([]string{}, cidrs...), hostRoute(server))
+			}
+		}
+		if len(cidrs) == 0 || route.iface == "" {
 			continue
 		}
 		var script strings.Builder
@@ -246,7 +259,7 @@ func routeCommands(cfg schema.AppConfig, image string) []ports.Command {
 		script.WriteString("set -e\n")
 		fmt.Fprintf(&script, "gateway=$(getent hosts %s | awk '{print $1; exit}')\n", route.gateway)
 		fmt.Fprintf(&script, "test -n \"$gateway\" || { echo \"cannot resolve sibling %s on its link\" >&2; exit 1; }\n", route.gateway)
-		for _, cidr := range route.cidrs {
+		for _, cidr := range cidrs {
 			// replace, not add: a re-run of a resumed launch must not fail on an existing
 			// route, and the default route already exists on a bridge-attached pod.
 			fmt.Fprintf(&script, "ip route replace %s via \"$gateway\" dev %s\n", cidr, route.iface)
@@ -261,6 +274,14 @@ func routeCommands(cfg schema.AppConfig, image string) []ports.Command {
 		})
 	}
 	return steps
+}
+
+// hostRoute turns a bare address into the single-host CIDR `ip route` wants.
+func hostRoute(address string) string {
+	if strings.Contains(address, ":") {
+		return address + "/128"
+	}
+	return address + "/32"
 }
 
 // isLinkList reports whether a list is a tier-2 sibling link: a producer's self-scoped
@@ -331,8 +352,13 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	// input (ingress): who may reach the app's published ports. Emitted when the app
 	// publishes to the LAN or serves siblings on its own link; without either there is no
 	// input base chain at all, so ingress stays closed.
+	// An input chain is emitted whenever anything could arrive: a published or sibling-facing
+	// list, or ANY link at all. The last clause is not redundant - an app that only consumes a
+	// sibling still sits on that shared bridge, where the producer and every other consumer
+	// can reach it. Leaving the chain out does not leave inbound closed, it leaves inbound
+	// UNFILTERED, because nftables applies no policy to a hook that has no base chain.
 	own := ownLinkIface(cfg)
-	if len(ingress) > 0 || own != "" {
+	if len(ingress) > 0 || own != "" || len(linkEntries) > 0 {
 		bld.WriteString("\tchain input {\n")
 		fmt.Fprintf(&bld, "\t\ttype filter hook input priority 0; policy %s;\n", chainPolicy(ingress))
 		bld.WriteString("\t\tiif \"lo\" accept\n")
@@ -432,13 +458,16 @@ func writeDNSRules(bld *strings.Builder, servers []string) {
 			v4 = append(v4, address)
 		}
 	}
-	for family, addresses := range map[string][]string{"ip": v4, "ip6": v6} {
-		if len(addresses) == 0 {
+	for _, family := range []struct {
+		name      string
+		addresses []string
+	}{{"ip", v4}, {"ip6", v6}} {
+		if len(family.addresses) == 0 {
 			continue
 		}
 		for _, proto := range []string{"udp", "tcp"} {
 			fmt.Fprintf(bld, "\t\t%s daddr { %s } %s dport { 53, 853 } accept\n",
-				family, strings.Join(addresses, ", "), proto)
+				family.name, strings.Join(family.addresses, ", "), proto)
 		}
 	}
 	for _, proto := range []string{"udp", "tcp"} {
@@ -544,6 +573,11 @@ func portList(ports []int) string {
 func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	args := []string{"pod", "create", "--name", pod}
 	entries := links(cfg)
+	// The declared resolvers are handed to every filtered app, not only a linked one. The
+	// ruleset restricts DNS to them for ALL of them, so an app that was restricted and never
+	// given them keeps podman's own resolver in resolv.conf and has no working DNS at all -
+	// fail-closed, but only because the setting half-worked.
+	args = append(args, dnsArgs(cfg)...)
 	if len(entries) == 0 {
 		netspec := "pasta"
 		if iface := firstInterface(cfg); iface != "" {
@@ -566,11 +600,6 @@ func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	if needsOwnEgress(cfg) {
 		args = append(args, "--network", EgressNetwork(cfg.AppNameID)+":interface_name="+egressIface)
 	}
-	for _, server := range cfg.NetworkMeta.DNSServers {
-		// The app is handed these instead of the resolver podman would put on its link,
-		// which on an --internal bridge answers sibling names and forwards nothing.
-		args = append(args, "--dns", strings.TrimSpace(server))
-	}
 	if forwards(cfg) {
 		// Set here because a container cannot set it itself: /proc/sys is read-only in the
 		// namespace, so an app that agreed to route for its siblings would silently drop
@@ -584,6 +613,18 @@ func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 		args = append(args, "--network", entry.network+":interface_name="+entry.iface+",alias="+cfg.AppNameID)
 	}
 	return append(args, publishArgs(cfg)...)
+}
+
+// dnsArgs hands the app its declared resolvers. For a linked app these replace the resolver
+// podman would put on its link, which on an --internal bridge answers sibling names and
+// forwards nothing; for any other filtered app they are simply the resolvers its ruleset
+// already restricts it to.
+func dnsArgs(cfg schema.AppConfig) []string {
+	var args []string
+	for _, server := range cfg.NetworkMeta.DNSServers {
+		args = append(args, "--dns", strings.TrimSpace(server))
+	}
+	return args
 }
 
 // needsOwnEgress reports whether a linked app also carries networking that has to leave the

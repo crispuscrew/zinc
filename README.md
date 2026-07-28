@@ -54,8 +54,9 @@ before it starts:
 - ingress publish: expose the app's own ports to the LAN, filtered by source
 - sibling link: a private internal bridge between two apps, gated per-port
 
-Not yet supported (rejected, not run): host-scoped egress, gateway / multi-homing, and
-combining a sibling link with other networking on one app.
+Not yet supported (rejected, not run): host-scoped egress and gateway /
+multi-homing. (Combining a sibling link with other networking on one app is supported now -
+that is what routing through a VPN container is made of.)
 
 This is the container network model. A **VM app** does not get it - nftables in a container's
 own network namespace does not reach a guest kernel - so rather than mis-enforce it, a guest

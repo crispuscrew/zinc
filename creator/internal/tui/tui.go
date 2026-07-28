@@ -35,8 +35,14 @@ const (
 	modeKeys   // keybind-scheme picker
 )
 
+// appRow carries an app twice on purpose. cfg is the RESOLVED config - what the app
+// actually is - and drives everything the list shows and every action it offers, so an app
+// that inherits its image or its network is not listed as though it had neither. raw is the
+// file as written, and is what the edit form opens: a form that loaded the resolved config
+// would write the base's values back into the child as if the child had stated them.
 type appRow struct {
 	cfg     schema.AppConfig
+	raw     schema.AppConfig
 	running bool
 	loadErr error
 }
@@ -251,7 +257,7 @@ func (mdl Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		mdl.mode, mdl.status = modeForm, ""
 	case keys.Edit:
 		if row, ok := mdl.selected(); ok && row.loadErr == nil {
-			mdl.form = newForm(row.cfg, false)
+			mdl.form = newForm(row.raw, false) // edit what was written, not what it resolves to
 			mdl.form.scheme = mdl.keys.Scheme
 			mdl.mode, mdl.status = modeForm, ""
 		}

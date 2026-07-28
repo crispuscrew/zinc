@@ -53,7 +53,11 @@ func FromApp(cfg schema.AppConfig) (Project, []string, error) {
 	if probe := cfg.StartConditions.ReadyCheck; len(probe) > 0 {
 		service.Healthcheck = &Healthcheck{Test: append(StringList{"CMD"}, probe...)}
 		if seconds := cfg.StartConditions.ReadyTimeoutSec; seconds > 0 {
-			service.Healthcheck.Timeout = strconv.Itoa(seconds) + "s"
+			// Deliberately NOT written to healthcheck.timeout. That field bounds how long ONE
+			// probe may run; ReadyTimeoutSec bounds how long a DEPENDENT waits for the app to
+			// become ready. Putting one in the other's place would export a different promise
+			// under the same number.
+			note("StartConditions.ReadyTimeoutSec (%ds) is not represented: it bounds how long a dependent waits for this app, and compose's healthcheck.timeout bounds a single probe's run - different things, so it was not written as one.", seconds)
 		}
 	}
 	for _, dep := range cfg.StartConditions.DependsOn {
@@ -71,7 +75,8 @@ func FromApp(cfg schema.AppConfig) (Project, []string, error) {
 		service.Labels = map[string]string{"zinc.description": desc}
 	}
 
-	service.Volumes = append(service.Volumes, volumeMounts(cfg)...)
+	service.DNS = append(service.DNS, cfg.NetworkMeta.DNSServers...)
+	service.Volumes = append(service.Volumes, volumeMounts(cfg, note)...)
 	ports, expose, netNotes := networkFields(cfg)
 	service.Ports, service.Expose = ports, expose
 	notes = append(notes, netNotes...)
@@ -91,6 +96,24 @@ func FromApp(cfg schema.AppConfig) (Project, []string, error) {
 	}
 	if len(cfg.Keys) > 0 {
 		note("Keys are mounted read-only into the home of the user the app runs as; the paths below are the host's and are not portable to another machine.")
+	}
+	if len(cfg.Configs) > 0 {
+		note("Configs are not represented: they are resolved from the app's own bundle directory by the runner, which compose has no equivalent for. The described container starts without them.")
+	}
+	if cfg.ResourcesMeta.MaxSwapMiB > 0 {
+		// compose takes one memory figure; podman's --memory-swap is a TOTAL. Writing the sum
+		// into `memory` would export a larger RAM cap than the app has.
+		note("ResourcesMeta.MaxSwapMiB (%d MiB) is not represented: compose states one memory limit, and the swap allowance sits on top of it rather than inside it.", cfg.ResourcesMeta.MaxSwapMiB)
+	}
+	if cfg.InternalUserMeta.KeepUserID {
+		note("InternalUserMeta.KeepUserID is not represented: mapping the host uid into the container is `podman --userns=keep-id`, which compose has no field for.")
+	}
+	if cfg.StartConditions.Terminal || cfg.StopConditions.KeepAlive || cfg.StopConditions.Background {
+		note("The terminal and stop-condition settings (Terminal, KeepAlive, Background) are not represented: they decide how the runner launches and reaps the app, which is not something a compose file states.")
+	}
+	if len(cfg.NetworkMeta.DNSServers) > 0 {
+		// It is written out as `dns:`, but only half of what it means survives.
+		note("NetworkMeta.DNSServers is written as `dns:`, but only as a setting: in Zinc it is also a RESTRICTION - the ruleset drops DNS to anything else - and compose cannot say that half.")
 	}
 
 	project := Project{
@@ -124,10 +147,13 @@ func resourceLimits(res schema.ResourcesMeta) *Limits {
 // volumeMounts renders the app's host bind mounts and key mounts in compose's short
 // string form. The options are the ones the runner passes podman, so a reader sees the
 // same posture: read-only and noexec unless the app asked otherwise.
-func volumeMounts(cfg schema.AppConfig) StringList {
+func volumeMounts(cfg schema.AppConfig, note func(string, ...any)) StringList {
 	var mounts StringList
-	for _, volume := range cfg.Volumes {
+	for index, volume := range cfg.Volumes {
 		if !volume.HostMounted || strings.TrimSpace(volume.HostMount) == "" {
+			// An anonymous or size-limited volume has no host path to write into a compose
+			// mount, and inventing one would name a location nobody chose.
+			note("Volumes[%d] (%s) is not represented: it is not a host bind mount, and compose's short mount syntax has nothing to point at.", index, volume.InnerMount)
 			continue
 		}
 		options := "ro"
@@ -185,7 +211,24 @@ func networkFields(cfg schema.AppConfig) (ports, expose StringList, notes []stri
 				index, netList.AppName))
 		}
 	}
-	sort.Strings(ports)
-	sort.Strings(expose)
+	// Sorted by number, not as text: sort.Strings would order 443, 8080, 80.
+	sortPortSpecs(ports)
+	sortPortSpecs(expose)
 	return ports, expose, notes
+}
+
+// sortPortSpecs orders published/exposed entries by their container port. Sorting them as
+// text would put 443 before 8080 before 80.
+func sortPortSpecs(specs StringList) {
+	sort.Slice(specs, func(one, two int) bool { return specPort(specs[one]) < specPort(specs[two]) })
+}
+
+// specPort reads the container-side port out of a "N" or "HOST:N" spec.
+func specPort(spec string) int {
+	last := spec
+	if _, after, found := strings.Cut(spec, ":"); found {
+		last = after
+	}
+	port, _ := strconv.Atoi(last)
+	return port
 }

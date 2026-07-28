@@ -368,7 +368,7 @@ func TestExport_ReadyCheckBecomesHealthcheck(t *testing.T) {
 	cfg := containerApp("app")
 	cfg.StartConditions.ReadyCheck = []string{"test", "-f", "/run/ready"}
 	cfg.StartConditions.ReadyTimeoutSec = 30
-	service, _ := exportApp(t, cfg)
+	service, notes := exportApp(t, cfg)
 
 	if service.Healthcheck == nil {
 		t.Fatal("want a healthcheck")
@@ -376,8 +376,20 @@ func TestExport_ReadyCheckBecomesHealthcheck(t *testing.T) {
 	if want := (StringList{"CMD", "test", "-f", "/run/ready"}); !slices.Equal(service.Healthcheck.Test, want) {
 		t.Errorf("test = %v, want %v", service.Healthcheck.Test, want)
 	}
-	if service.Healthcheck.Timeout != "30s" {
-		t.Errorf("timeout = %q, want 30s", service.Healthcheck.Timeout)
+	// ReadyTimeoutSec must NOT be written to healthcheck.timeout. That field bounds how long
+	// one probe may run; ReadyTimeoutSec bounds how long a dependent waits for the app. Writing
+	// one as the other exports a different promise under the same number.
+	if service.Healthcheck.Timeout != "" {
+		t.Errorf("timeout = %q: ReadyTimeoutSec is a dependent's wait, not a per-probe limit", service.Healthcheck.Timeout)
+	}
+	var explained bool
+	for _, note := range notes {
+		if strings.Contains(note, "ReadyTimeoutSec") {
+			explained = true
+		}
+	}
+	if !explained {
+		t.Errorf("the dropped timeout must be stated, notes were %v", notes)
 	}
 }
 
@@ -438,5 +450,117 @@ func TestExport_VMAppRefused(t *testing.T) {
 	cfg.Type = schema.ZincVirtualization
 	if _, _, err := FromApp(cfg); err == nil {
 		t.Fatal("a VM app has no compose equivalent and must be refused")
+	}
+}
+
+// A compose file that binds a port to loopback is saying "not for the network". Publishing it
+// to the LAN would be the importer widening the sandbox from what the file asked for, which is
+// the one thing it must not do.
+func TestImport_LoopbackBoundPortIsNotPublishedToTheLAN(t *testing.T) {
+	app := importOne(t, "services:\n  app:\n    image: alpine\n    ports: [\"127.0.0.1:9000:9000\"]\n")
+	for _, list := range app.Config.NetworkMeta.NetworkLists {
+		if list.Host {
+			t.Fatalf("a loopback-bound port must not become a LAN publish: %+v", list)
+		}
+	}
+	if !hasNote(app, "bound to loopback") {
+		t.Errorf("the narrowing must be stated, notes were %v", app.Notes)
+	}
+}
+
+// NET_ADMIN lets an app flush the egress ruleset in its own netns and SYS_ADMIN contains it,
+// so neither is ever granted by an import of someone else's file. Everything else is carried
+// but said out loud - a capability on top of cap-drop ALL is a deliberate widening.
+func TestImport_DangerousCapabilitiesRefused(t *testing.T) {
+	app := importOne(t, "services:\n  app:\n    image: alpine\n    cap_add: [NET_ADMIN, CAP_SYS_ADMIN, NET_RAW]\n")
+	for _, refused := range []string{"NET_ADMIN", "SYS_ADMIN"} {
+		if slices.Contains(app.Config.Capabilities, refused) {
+			t.Errorf("%s must not be granted by an import, got %v", refused, app.Config.Capabilities)
+		}
+	}
+	if !slices.Contains(app.Config.Capabilities, "NET_RAW") {
+		t.Errorf("an ordinary capability should still come across, got %v", app.Config.Capabilities)
+	}
+	if !hasNote(app, "NET_RAW was carried over") {
+		t.Errorf("a carried capability must be stated, notes were %v", app.Notes)
+	}
+}
+
+// `1000:1000` is at least as common as a bare `1000` and means the same thing. Testing the
+// whole string let the spelling the guard refuses walk through as a "name" of "1000".
+func TestImport_NumericUserWithGroupAlsoDropped(t *testing.T) {
+	app := importOne(t, "services:\n  app:\n    image: alpine\n    user: \"1000:1000\"\n")
+	if app.Config.InternalUserMeta != (schema.InternalUserMeta{}) {
+		t.Fatalf("a numeric uid:gid must not be imported, got %+v", app.Config.InternalUserMeta)
+	}
+}
+
+// A cap the compose file set, quietly becoming no cap at all, is the worst shape for a limit
+// on the tool whose job is to bound what an app takes.
+func TestImport_UnreadableLimitIsStated(t *testing.T) {
+	app := importOne(t, `
+services:
+  app:
+    image: alpine
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: lots
+`)
+	if app.Config.ResourcesMeta.MaxRamMiB != 0 {
+		t.Fatalf("expected the unreadable limit to be dropped, got %d", app.Config.ResourcesMeta.MaxRamMiB)
+	}
+	if !hasNote(app, "NO memory limit") || !hasNote(app, "NO cpu limit") {
+		t.Errorf("both unreadable limits must be stated, notes were %v", app.Notes)
+	}
+}
+
+// `:z` is the SELinux relabel suffix, means read-WRITE, and is the spelling most likely to
+// appear on this project's own platform. It used to land read-only with no note at all.
+func TestImport_RelabelMountStillWarns(t *testing.T) {
+	app := importOne(t, "services:\n  app:\n    image: alpine\n    volumes: [\"/srv/conf:/etc/nginx:z\"]\n")
+	if app.Config.Volumes[0].Writable {
+		t.Error("a mount that does not say rw imports read-only")
+	}
+	if !hasNote(app, "read-only and noexec") {
+		t.Errorf("the tightening must be stated for :z too, notes were %v", app.Notes)
+	}
+}
+
+// `./data` is relative to the compose file and `~` is a shell's; the runner hands the path to
+// podman from wherever it happens to be, so keeping either mounts a different directory than
+// the file meant - and podman creates the missing one rather than failing.
+func TestImport_RelativeHostPathDropped(t *testing.T) {
+	app := importOne(t, "services:\n  app:\n    image: alpine\n    volumes: [\"./data:/data\", \"~/certs:/certs\"]\n")
+	if len(app.Config.Volumes) != 0 {
+		t.Fatalf("relative and ~ host paths must not be imported verbatim, got %+v", app.Config.Volumes)
+	}
+	if !hasNote(app, "relative to the compose file") {
+		t.Errorf("the drop must be stated, notes were %v", app.Notes)
+	}
+}
+
+// --service names the compose key the user is reading, which may not be the coerced app name.
+func TestImport_ServiceKeyIsRetained(t *testing.T) {
+	apps := ToApps(decode(t, "services:\n  Web App:\n    image: alpine\n"))
+	if apps[0].Service != "Web App" {
+		t.Errorf("Service = %q, want the compose key", apps[0].Service)
+	}
+	if apps[0].Config.AppNameID != "web-app" {
+		t.Errorf("AppNameID = %q, want the coerced name", apps[0].Config.AppNameID)
+	}
+}
+
+// compose's `command` replaces the image's CMD and leaves its ENTRYPOINT running; Zinc's one
+// field becomes --entrypoint, which replaces it. On postgres/redis/mysql that entrypoint is
+// what creates the data dir and drops privileges.
+func TestImport_BareCommandBecomingEntrypointIsStated(t *testing.T) {
+	app := importOne(t, "services:\n  cache:\n    image: redis\n    command: redis-server\n")
+	if app.Config.StartConditions.Entrypoint != "redis-server" {
+		t.Fatalf("Entrypoint = %q", app.Config.StartConditions.Entrypoint)
+	}
+	if !hasNote(app, "it will no longer run") {
+		t.Errorf("the semantic difference must be stated, notes were %v", app.Notes)
 	}
 }

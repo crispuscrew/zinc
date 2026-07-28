@@ -32,8 +32,9 @@ Delivered:
 - Podman-only reproducible builds, an end-to-end suite against real podman, and CI.
 
 Known gaps (honest, tracked): the network model still rejects (does not run) host-scoped
-egress, gateway / multi-homing, and combining a sibling link with other networking on one
-app; bundle-relative config mounts are deferred. Test coverage is partial away from the
+egress and gateway / multi-homing; bundle-relative config mounts are deferred. (Combining a
+sibling link with other networking on one app was lifted after 0.6 - it is what routing an app
+through a VPN sibling is built on.) Test coverage is partial away from the
 security path. (At 0.1 `launcher/` and `virtualization/creator/` did not compile either - they
 still referenced the removed `core` module. `launcher/` was rebuilt in 0.2 and 0.3; the
 virtualization skeleton was deleted in 0.4, when `zc` took over authoring both app types.)
@@ -193,10 +194,10 @@ plan. This repo ships only the Zinc core and its tools.
 
 Container work that matures alongside the releases above, not tied to one version:
 
-- **vpn-container routing:** an app routed through a sibling VPN app with per-destination
-  backend selection and fail-closed DNS (the network model already has the directional,
-  fail-closed foundation; this extends it and lifts the "combining a link with other
-  networking" restriction).
+- **vpn-container routing:** DONE after 0.6. An app is routed through a sibling VPN app with
+  per-destination backend selection (`Via` per list) and fail-closed DNS; the "combining a
+  link with other networking" restriction was lifted to make it possible. What is still open
+  is a live rather than launch-time domain allowlist (see `NetworkList.Domains`, 6.2).
 - **Trusted image layering:** curated, digest-pinned base images built locally, so an app
   can reference a known-good base without a hand-written Containerfile.
 - **Theme bundle, audio, keys, mounts:** a read-only theme bundle + env for host-matching

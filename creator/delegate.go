@@ -67,12 +67,16 @@ func delegateVM(cmd, name string, argv []string) error {
 	}
 }
 
-// loadForDelegate reads an app by store name or path, the same rule the runtimes use.
+// loadForDelegate reads an app by store name or path, the same rule the runtimes use - and
+// RESOLVED, like them. Which runtime a command goes to is decided by Type, and Type is
+// exactly the kind of field a child inherits rather than restates: read raw, a VM app that
+// takes its Type from a base looks like a container app and every delegated command goes to
+// zcr, which then has to refuse it.
 func loadForDelegate(svc backend.Service, name string) (schema.AppConfig, error) {
 	if strings.Contains(name, "/") || strings.HasSuffix(name, ".yaml") {
-		return svc.LoadFile(name)
+		return svc.LoadFileResolved(name)
 	}
-	return svc.Load(name)
+	return svc.LoadResolved(name)
 }
 
 // firstPositional returns the first non-flag argument.

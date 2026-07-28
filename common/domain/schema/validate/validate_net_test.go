@@ -168,3 +168,34 @@ func TestDomains_SatisfyThePortsNeedDestinationsRule(t *testing.T) {
 		t.Fatalf("domains are destinations for a port rule, got: %v", err)
 	}
 }
+
+// A routed app's first resolver is written into an IPv4 `dnat to` rule. An IPv6 address there
+// makes nft refuse the whole ruleset, so the launch failed with a parse error naming neither
+// the field nor the reason.
+func TestDNS_RoutedAppNeedsAnIPv4FirstResolver(t *testing.T) {
+	cfg := withList(schema.NetworkList{AppName: "vpn", Via: true, IPv4CIDR: []string{"0.0.0.0/0"}})
+	cfg.NetworkMeta.DNSServers = []string{"2606:4700:4700::1111"}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "must be IPv4") {
+		t.Fatalf("an IPv6 first resolver on a routed app should be refused, got: %v", err)
+	}
+
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1", "2606:4700:4700::1111"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("a v4 first resolver with a v6 second should pass, got: %v", err)
+	}
+}
+
+// One Via list resolves ONE gateway address and uses it for every CIDR on the list, so a v6
+// CIDR routed via a v4 gateway is rejected by `ip route` and the launch aborts.
+func TestVia_MixedFamiliesOnOneListRejected(t *testing.T) {
+	cfg := withList(schema.NetworkList{
+		AppName: "vpn", Via: true,
+		IPv4CIDR: []string{"0.0.0.0/0"}, IPv6CIDR: []string{"::/0"},
+	})
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1"}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "one Via list per family") {
+		t.Fatalf("a dual-family Via list should be refused, got: %v", err)
+	}
+}

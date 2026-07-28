@@ -25,8 +25,8 @@ type AppConfig struct {
 	//
 	// Resolution happens on every read, so editing a base changes every app built on it -
 	// which is the point, and the thing to be careful with, since a base granting a
-	// capability grants it to every child. `zc validate <app>` prints what an app actually
-	// resolves to. What is saved is always what was written, never the merged result.
+	// capability grants it to every child. `zc validate <app> --resolved` prints what an app
+	// actually resolves to. What is saved is always what was written, never the merged result.
 	Inherits string `yaml:"Inherits"`
 
 	Icon        string `yaml:"Icon"`
