@@ -16,7 +16,19 @@ type AppConfig struct {
 	SchemaVersion int  `yaml:"SchemaVersion"`
 	Type          Type `yaml:"Type"` // VM vs Container, "" interpreted as error
 
-	AppNameID   string `yaml:"AppNameID"` // Also using as container/vm name
+	AppNameID string `yaml:"AppNameID"` // Also using as container/vm name
+
+	// Inherits names another app in the store this one starts from: it states only what
+	// differs, and takes everything it does not state from that base. A key it states wins
+	// (false and an empty list included), a nested block merges field by field, and a list
+	// it states replaces the base's rather than adding to it.
+	//
+	// Resolution happens on every read, so editing a base changes every app built on it -
+	// which is the point, and the thing to be careful with, since a base granting a
+	// capability grants it to every child. `zc validate <app>` prints what an app actually
+	// resolves to. What is saved is always what was written, never the merged result.
+	Inherits string `yaml:"Inherits"`
+
 	Icon        string `yaml:"Icon"`
 	Description string `yaml:"Description"`
 	Group       string `yaml:"Group"` // optional category, for grouping in a launcher; presentation-only

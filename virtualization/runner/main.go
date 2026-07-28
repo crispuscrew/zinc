@@ -276,12 +276,14 @@ func diskDigest(path string) (string, error) { return disk.Digest(path) }
 // argument with a path separator or a .yaml suffix is read directly.
 func loadApp(svc app.Service, arg string) (schema.AppConfig, error) {
 	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".yaml") {
-		return fs.LoadFile(arg)
+		return svc.Store.LoadFileResolved(arg)
 	}
 	if !svc.Store.Exists(arg) {
 		return schema.AppConfig{}, fmt.Errorf("no app %q defined", arg)
 	}
-	return svc.Store.Load(arg)
+	// Resolved: the runner acts on what an app IS, not on the part of it written in its own
+	// file.
+	return svc.Store.LoadResolved(arg)
 }
 
 // splitFlags separates the single positional argument from the --flags around it.

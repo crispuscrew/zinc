@@ -9,6 +9,32 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- **`Inherits`: an app can start from another one.** A child names a base and states only
+  what differs, taking the rest from it - the duplication across a family of similar apps
+  drops to the part that is actually different. Resolution is live: the merge happens on
+  every read, so editing a base changes every app built on it at the next launch. That is the
+  point, and the cost is that a child's own file no longer tells you what it is, so
+  `zc validate <app> --resolved` prints exactly what it merges to.
+  **The merge is performed on the YAML rather than on a decoded config, and that is the whole
+  design.** Only the text records which keys a config actually *stated*: once decoded,
+  `HostTheme: false` is indistinguishable from an absent `HostTheme`, and an empty
+  `Capabilities` from an omitted one. Merging structs would have to read every zero value as
+  "inherit", which means a child could never turn a base's flag off and never empty a base's
+  list - a base could grant a capability or set `DisableSecurityContext` and no child could
+  walk it back. Merging nodes has no such rule, so a stated `false` wins and a stated empty
+  list wins. Nested blocks merge field by field; a stated list replaces rather than appends,
+  because capabilities that only accumulate down a chain are the wrong direction here.
+  Fail-closed throughout: a cycle, a missing base, or a chain deeper than 8 fails the read
+  rather than yielding a partial config, and `Inherits` is charset-checked before any file is
+  opened, since the name is joined into a store path.
+  Every store now exposes both reads - `Load` (the file as written) and `LoadResolved` (what
+  the app is). Launching, validating and listing take the resolved form; anything that writes
+  the config back takes the raw one. For the same reason `zc` **refuses to save an app that
+  inherits**: a form knows an app's values but not which of them it stated, so writing them
+  all back would replace everything the child inherits with zeros, silently, in a file that
+  looks normal afterwards. An inheriting app is edited as a file. Apps that inherit nothing
+  are untouched - same load, same save, byte-identical files.
+
 - **`zc compose export` and `zc compose import`: interop with the Compose specification,**
   in both directions and honest about both. Neither is lossless, so neither is silent about
   it - every field that did not cross is printed as a note.

@@ -34,7 +34,13 @@ type Result struct {
 // round-trip (Marshal a draft, LoadFile it back). Adapter: adapters/fs.
 type Store interface {
 	List() ([]string, error)
+	// Load returns an app as its file was written; LoadResolved returns what it actually
+	// is, with any Inherits chain merged in. A launch reads the resolved form; anything
+	// that will write the config back reads the raw one, since a resolved config saved
+	// over its source would flatten the inheritance away.
 	Load(name string) (schema.AppConfig, error)
+	LoadResolved(name string) (schema.AppConfig, error)
+	LoadFileResolved(path string) (schema.AppConfig, error)
 	Save(cfg schema.AppConfig) error
 	Delete(name string) error
 	Exists(name string) bool

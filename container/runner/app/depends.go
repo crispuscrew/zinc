@@ -41,7 +41,7 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 		if idx := slices.Index(chain, dep); idx >= 0 {
 			return fmt.Errorf("dependency cycle: %s -> %s", strings.Join(chain[idx:], " -> "), dep)
 		}
-		depCfg, err := svc.store.Load(dep)
+		depCfg, err := svc.store.LoadResolved(dep)
 		if err != nil {
 			return fmt.Errorf("%s depends on %q: %w", cfg.AppNameID, dep, err)
 		}

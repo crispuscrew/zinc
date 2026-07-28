@@ -185,10 +185,20 @@ func (svc Service) ensureImage(cfg schema.AppConfig) error {
 
 func (svc Service) List() ([]string, error)                    { return svc.store.List() }
 func (svc Service) Load(name string) (schema.AppConfig, error) { return svc.store.Load(name) }
-func (svc Service) Save(cfg schema.AppConfig) error            { return svc.store.Save(cfg) }
-func (svc Service) Delete(name string) error                   { return svc.store.Delete(name) }
-func (svc Service) Exists(name string) bool                    { return svc.store.Exists(name) }
-func (svc Service) Path(name string) string                    { return svc.store.Path(name) }
+
+// LoadResolved returns what an app actually is, with any Inherits chain merged in - the form
+// a launch must read. Load stays the file as written, for Rename, which writes it back.
+func (svc Service) LoadResolved(name string) (schema.AppConfig, error) {
+	return svc.store.LoadResolved(name)
+}
+
+func (svc Service) LoadFileResolved(path string) (schema.AppConfig, error) {
+	return svc.store.LoadFileResolved(path)
+}
+func (svc Service) Save(cfg schema.AppConfig) error { return svc.store.Save(cfg) }
+func (svc Service) Delete(name string) error        { return svc.store.Delete(name) }
+func (svc Service) Exists(name string) bool         { return svc.store.Exists(name) }
+func (svc Service) Path(name string) string         { return svc.store.Path(name) }
 
 func (svc Service) Marshal(cfg schema.AppConfig) ([]byte, error)   { return svc.store.Marshal(cfg) }
 func (svc Service) LoadFile(path string) (schema.AppConfig, error) { return svc.store.LoadFile(path) }

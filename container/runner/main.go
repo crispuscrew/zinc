@@ -501,14 +501,16 @@ func refuseVM(svc app.Service, name string) error {
 	return fmt.Errorf("app %q is a VM app (Type: %s); use zvr", name, cfg.Type)
 }
 
+// load reads the app a command names, with its Inherits chain applied: the runner acts on
+// what an app IS, not on the part of it that happens to be written in its own file.
 func load(svc app.Service, arg string) (schema.AppConfig, error) {
 	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".yaml") {
-		return svc.LoadFile(arg)
+		return svc.LoadFileResolved(arg)
 	}
 	if !svc.Exists(arg) {
 		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zc list)", arg)
 	}
-	return svc.Load(arg)
+	return svc.LoadResolved(arg)
 }
 
 // quoteForDisplay lightly quotes args with whitespace, for readable printing only.

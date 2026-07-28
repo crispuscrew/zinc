@@ -81,6 +81,7 @@ SchemaVersion: 2                 # must be 2 (the only version this build unders
 Type: ZincContainer              # ZincContainer today (ZincVirtualization is planned)
 
 AppNameID: firefox               # also the container/pod name; [a-z0-9._-], starts alphanumeric
+Inherits: ""                     # optional: another app this one starts from (see 3.1)
 Icon: firefox
 Description: Web browser
 
@@ -182,6 +183,54 @@ refused rather than ignored - Zinc has no notification path, so accepting `Silen
 tell an author their app is muted while it notifies freely.
 
 ---
+
+
+### 3.1 Inheritance
+
+`Inherits` names another app in the store this one starts from. The child states only what
+differs and takes the rest from its base, which cuts the duplication across a family of
+similar apps down to the part that is actually different.
+
+**Resolution is live.** The merge happens every time a config is read, so editing a base
+changes every app built on it at the next launch. That is the point of the feature and also
+the thing to be careful with: a base that grants a capability grants it to every child, and
+the child's own file will not say so. `zc validate <app> --resolved` prints exactly what an
+app merges to, which is how an inheriting app is audited.
+
+**The merge is on the YAML, not on the decoded struct**, and that is the whole design. Only
+the text records which keys a config actually STATED: once decoded, `HostTheme: false` is
+indistinguishable from an absent `HostTheme`, and an empty `Volumes` from an omitted one.
+Merging structs would therefore have to read every zero value as "inherit", which means a
+child could never turn a base's flag off and never empty a base's list - so a base could
+loosen containment in a way no child could walk back. Merging nodes has no such rule.
+
+The rules that fall out:
+
+- A key the child states wins, whatever its value - `false` included, and an empty list
+  included.
+- A key the child omits comes from the base.
+- Nested blocks merge field by field, so a child restating one field of `ResourcesMeta` keeps
+  the base's other fields rather than replacing the block.
+- A list the child states **replaces** the base's. Lists are not appended: a child could then
+  never remove an inherited volume or capability, and capabilities that only ever accumulate
+  down a chain are the wrong direction for this tool.
+- A cycle, a missing base, or a chain deeper than 8 fails the read. A config that cannot be
+  fully resolved is not run, since what it is missing could be the part that contains it.
+- `Inherits` is charset-checked before any file is opened - the name is joined into a store
+  path, so `../..` would otherwise read a config from outside the apps directory.
+
+**What is stored is always what was written.** Every store exposes both reads: `Load` returns
+the file as authored, `LoadResolved` returns what the app is. Launching, validating and
+listing use the resolved form; anything that will write the config back uses the raw one.
+Saving a resolved config over its source would flatten the inheritance the first time anyone
+touched the app.
+
+For the same reason `zc` **refuses to save an app that inherits**: a form knows the app's
+values but not which of them it stated, so writing them all back would replace everything the
+child inherits with zeros - silently, in a file that looks entirely normal afterwards. An
+inheriting app is edited as a file. That is a real limit of combining struct-based editors
+with a text-level merge, and refusing is the only version of it that cannot lose an author's
+work.
 
 ## 4. Tools and the creator / runner split
 

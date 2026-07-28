@@ -108,7 +108,7 @@ func loadItems() ([]menu.Item, error) {
 	items := make([]menu.Item, 0, len(names))
 	for _, name := range names {
 		item := menu.Item{Label: name, Marked: running[name]}
-		if cfg, err := sto.Load(name); err == nil {
+		if cfg, err := sto.LoadResolved(name); err == nil {
 			item.Description = cfg.Description
 			item.Group = cfg.Group
 			item.Icon = cfg.Icon

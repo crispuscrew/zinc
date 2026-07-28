@@ -140,6 +140,19 @@ func checkIdentity(cfg schema.AppConfig, add addFunc) {
 		add("AppNameID %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", cfg.AppNameID)
 	}
 
+	// Inherits is joined into a store path to find the base, so it is held to the same
+	// charset as the names above - a "../.." value would read a config from outside the apps
+	// directory. The resolver enforces this too, since it is the one doing the join; this is
+	// the copy that tells an author at save time rather than at launch.
+	if base := strings.TrimSpace(cfg.Inherits); base != "" {
+		switch {
+		case !nameRE.MatchString(base):
+			add("Inherits %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", base)
+		case base == strings.TrimSpace(cfg.AppNameID):
+			add("Inherits %q: an app cannot inherit from itself", base)
+		}
+	}
+
 	// NonRootUserName becomes `podman --user`; keep it a safe charset.
 	if name := cfg.InternalUserMeta.NonRootUserName; name != "" && !nameRE.MatchString(name) {
 		add("InternalUserMeta.NonRootUserName %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", name)

@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/schema/inherit"
 )
 
 // Store is a directory of app definitions, shared with the container tools: one store
@@ -95,6 +96,51 @@ func (store *Store) Load(name string) (schema.AppConfig, error) {
 	return LoadFile(store.Path(name))
 }
 
+// readRaw returns the named app's file as written, before any decoding. Inheritance is
+// resolved on the YAML rather than on decoded structs - only the bytes record which keys the
+// app actually STATED, and a decoded false is indistinguishable from an absent field.
+func (store *Store) readRaw(name string) ([]byte, error) {
+	if err := safeName(name); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(store.Path(name))
+	if err != nil {
+		return nil, fmt.Errorf("store: read %s: %w", name, err)
+	}
+	return data, nil
+}
+
+// LoadResolved decodes the named app with its Inherits chain applied: what the app does not
+// state is taken from the base it starts from. This is what a launch reads, because it is
+// what the app actually is - Load returns the file as written, which is what an editor needs
+// and what must be written back.
+func (store *Store) LoadResolved(name string) (schema.AppConfig, error) {
+	data, err := store.readRaw(name)
+	if err != nil {
+		return schema.AppConfig{}, err
+	}
+	merged, err := inherit.Resolve(data, store.readRaw)
+	if err != nil {
+		return schema.AppConfig{}, fmt.Errorf("config: %s: %w", name, err)
+	}
+	return decode(merged, store.Path(name))
+}
+
+// LoadFileResolved decodes an app YAML at an arbitrary path with its Inherits chain applied.
+// The base is still looked up in the store: a config given by path is being read as an app,
+// and where its base lives does not change because of how the app itself was named.
+func (store *Store) LoadFileResolved(path string) (schema.AppConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return schema.AppConfig{}, fmt.Errorf("config: read %s: %w", path, err)
+	}
+	merged, err := inherit.Resolve(data, store.readRaw)
+	if err != nil {
+		return schema.AppConfig{}, fmt.Errorf("config: %s: %w", path, err)
+	}
+	return decode(merged, path)
+}
+
 // LoadFile decodes an app YAML at an arbitrary path, for a CLI path argument. Unknown
 // keys are an error so a typo or a stale field cannot sit in a config doing nothing.
 func LoadFile(path string) (schema.AppConfig, error) {
@@ -102,14 +148,21 @@ func LoadFile(path string) (schema.AppConfig, error) {
 	if err != nil {
 		return schema.AppConfig{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
+	return decode(data, path)
+}
+
+// decode turns app YAML into a config. Unknown keys (typos, stale fields after a hand edit)
+// are reported as an error so dead config can't silently accumulate. origin names the file
+// for the error message; a merged config still names the app it was read for.
+func decode(data []byte, origin string) (schema.AppConfig, error) {
 	var cfg schema.AppConfig
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		if errors.Is(err, io.EOF) {
-			return schema.AppConfig{}, fmt.Errorf("config: %s: empty file", path)
+			return schema.AppConfig{}, fmt.Errorf("config: %s: empty file", origin)
 		}
-		return schema.AppConfig{}, fmt.Errorf("config: decode %s: %w", path, err)
+		return schema.AppConfig{}, fmt.Errorf("config: decode %s: %w", origin, err)
 	}
 	return cfg, nil
 }

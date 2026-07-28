@@ -71,6 +71,13 @@ func (store fakeStore) Load(name string) (schema.AppConfig, error) {
 	}
 	return cfg, nil
 }
+
+// The fake serves the same config either way: these tests are about launch ordering, and
+// inheritance is resolved by the real store from bytes it does not have.
+func (store fakeStore) LoadResolved(name string) (schema.AppConfig, error) { return store.Load(name) }
+func (store fakeStore) LoadFileResolved(path string) (schema.AppConfig, error) {
+	return store.Load(path)
+}
 func (store fakeStore) List() ([]string, error)                   { return nil, nil }
 func (store fakeStore) Save(schema.AppConfig) error               { return nil }
 func (store fakeStore) Delete(string) error                       { return nil }
