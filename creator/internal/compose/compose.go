@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,25 +40,25 @@ type Project struct {
 
 // Service is one container definition.
 type Service struct {
-	Image         string            `yaml:"image,omitempty"`
-	ContainerName string            `yaml:"container_name,omitempty"`
-	Entrypoint    StringList        `yaml:"entrypoint,omitempty"`
-	Command       StringList        `yaml:"command,omitempty"`
-	User          string            `yaml:"user,omitempty"`
-	Restart       string            `yaml:"restart,omitempty"`
-	CapDrop       []string          `yaml:"cap_drop,omitempty"`
-	CapAdd        []string          `yaml:"cap_add,omitempty"`
-	SecurityOpt   []string          `yaml:"security_opt,omitempty"`
-	PidsLimit     int64             `yaml:"pids_limit,omitempty"`
-	Ports         StringList        `yaml:"ports,omitempty"`
-	Expose        StringList        `yaml:"expose,omitempty"`
-	Volumes       StringList        `yaml:"volumes,omitempty"`
-	Networks      StringList        `yaml:"networks,omitempty"`
-	DependsOn     Dependencies      `yaml:"depends_on,omitempty"`
-	Healthcheck   *Healthcheck      `yaml:"healthcheck,omitempty"`
-	Deploy        *Deploy           `yaml:"deploy,omitempty"`
-	Labels        map[string]string `yaml:"labels,omitempty"`
-	DNS           StringList        `yaml:"dns,omitempty"`
+	Image         string       `yaml:"image,omitempty"`
+	ContainerName string       `yaml:"container_name,omitempty"`
+	Entrypoint    StringList   `yaml:"entrypoint,omitempty"`
+	Command       StringList   `yaml:"command,omitempty"`
+	User          string       `yaml:"user,omitempty"`
+	Restart       string       `yaml:"restart,omitempty"`
+	CapDrop       []string     `yaml:"cap_drop,omitempty"`
+	CapAdd        []string     `yaml:"cap_add,omitempty"`
+	SecurityOpt   []string     `yaml:"security_opt,omitempty"`
+	PidsLimit     int64        `yaml:"pids_limit,omitempty"`
+	Ports         StringList   `yaml:"ports,omitempty"`
+	Expose        StringList   `yaml:"expose,omitempty"`
+	Volumes       StringList   `yaml:"volumes,omitempty"`
+	Networks      StringList   `yaml:"networks,omitempty"`
+	DependsOn     Dependencies `yaml:"depends_on,omitempty"`
+	Healthcheck   *Healthcheck `yaml:"healthcheck,omitempty"`
+	Deploy        *Deploy      `yaml:"deploy,omitempty"`
+	Labels        Labels       `yaml:"labels,omitempty"`
+	DNS           StringList   `yaml:"dns,omitempty"`
 }
 
 // Network is a compose network. Only Internal carries meaning here: it is the compose
@@ -107,6 +108,32 @@ type Limits struct {
 	Memory string `yaml:"memory,omitempty"`
 }
 
+// Labels is compose's labels in either spelling: a mapping, or a list of "key=value".
+type Labels map[string]string
+
+func (labels *Labels) UnmarshalYAML(node *yaml.Node) error {
+	out := Labels{}
+	switch node.Kind {
+	case yaml.MappingNode:
+		if err := node.Decode((*map[string]string)(&out)); err != nil {
+			return err
+		}
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			text, err := scalarText(item)
+			if err != nil {
+				return err
+			}
+			key, value, _ := strings.Cut(text, "=")
+			out[key] = value
+		}
+	default:
+		return fmt.Errorf("line %d: labels want a mapping or a list of key=value", node.Line)
+	}
+	*labels = out
+	return nil
+}
+
 // StringList is a compose field that may be written as one scalar or as a sequence, which
 // is true of nearly every list in the specification - `command: sh -c ...` and
 // `command: ["sh", "-c", ...]` are both legal and both common in the wild. Numbers are
@@ -126,6 +153,17 @@ func (list *StringList) UnmarshalYAML(node *yaml.Node) error {
 	case yaml.SequenceNode:
 		out := make(StringList, 0, len(node.Content))
 		for _, item := range node.Content {
+			// The long syntax - `ports: [{target: 80, published: "8080"}]`,
+			// `volumes: [{type: bind, source: /a, target: /b}]` - is how modern compose files
+			// are written. Refusing it aborted the whole import over a spelling.
+			if item.Kind == yaml.MappingNode {
+				text, err := longFormEntry(item)
+				if err != nil {
+					return err
+				}
+				out = append(out, text)
+				continue
+			}
 			text, err := scalarText(item)
 			if err != nil {
 				return err
@@ -137,6 +175,42 @@ func (list *StringList) UnmarshalYAML(node *yaml.Node) error {
 	default:
 		return fmt.Errorf("line %d: want a string or a list of strings", node.Line)
 	}
+}
+
+// longFormEntry flattens compose's long port/volume syntax into the short string form the
+// rest of this package reads. Only the fields that survive the crossing into a Zinc app are
+// looked at; the others (mode, consistency, bind options) do not reach the short form either
+// and are dropped by the importer with a note, as they would have been anyway.
+func longFormEntry(node *yaml.Node) (string, error) {
+	fields := map[string]string{}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		value, err := scalarText(node.Content[index+1])
+		if err != nil {
+			continue // a nested mapping (e.g. volume driver options) has no short form
+		}
+		fields[strings.ToLower(node.Content[index].Value)] = value
+	}
+	switch {
+	case fields["target"] != "" && fields["type"] != "": // a volume
+		mount := fields["source"] + ":" + fields["target"]
+		if fields["read_only"] == "true" {
+			mount += ":ro"
+		}
+		return mount, nil
+	case fields["target"] != "": // a port
+		port := fields["target"]
+		if published := fields["published"]; published != "" {
+			port = published + ":" + port
+		}
+		if host := fields["host_ip"]; host != "" {
+			port = host + ":" + port
+		}
+		if proto := fields["protocol"]; proto != "" {
+			port += "/" + proto
+		}
+		return port, nil
+	}
+	return "", fmt.Errorf("line %d: a long-form entry needs at least a `target`", node.Line)
 }
 
 // scalarText reads one scalar as text, so a YAML integer (`expose: [5432]`) is the string

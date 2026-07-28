@@ -72,7 +72,7 @@ func FromApp(cfg schema.AppConfig) (Project, []string, error) {
 		service.DependsOn[dep] = Depend{Condition: ConditionStarted}
 	}
 	if desc := strings.TrimSpace(cfg.Description); desc != "" {
-		service.Labels = map[string]string{"zinc.description": desc}
+		service.Labels = Labels{"zinc.description": desc}
 	}
 
 	service.DNS = append(service.DNS, cfg.NetworkMeta.DNSServers...)

@@ -5,7 +5,12 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
-## [Unreleased]
+## [0.7.0] - 2026-07-28
+
+Containment, sibling routing, and interop. The 0.6 line finished the guest story; this one
+goes back to containers and closes the gap between what an app config *said* and what the
+runtime actually did - starting with two fields that had been validated and ignored since
+0.1, and ending with an app that can hold a WireGuard tunnel while holding no capabilities.
 
 ### Added
 
@@ -77,6 +82,22 @@ tracked in [RELEASES.md](RELEASES.md).
   bridge and any link it is routed through - with `masquerade` following onto each. A hop can
   pass its clients' traffic onward into another gateway rather than out to the network, and a
   relay whose every list is a link correctly has no egress bridge at all.
+
+### Fixed
+
+- **The per-app egress bridge is removed with its app.** `Teardown` took the pod down and
+  left `zinc-egress-<app>` behind, so one podman network accumulated for every app that ever
+  ran with a sibling link plus other networking. The bridge is that app's alone - a bridge
+  per app is what keeps apps off each other's L2 - so nothing else can be using it. The link
+  networks are still deliberately kept: a sibling may be on one. `ports.NetEnforcer.Teardown`
+  returns steps rather than one command's arguments, because removing a pod and removing the
+  bridge it used are two things.
+- **`zc new --entrypoint`.** Without it `zc new` could not author a runnable app for any
+  image whose default command exits immediately, which is most of them - the app started,
+  stopped, and said nothing.
+- **Compose long syntax imports.** `ports: [{target: 80, published: "8080"}]` and
+  `volumes: [{type: bind, source: ..., target: ...}]` aborted the whole import, and that is
+  how modern compose files are written. Labels in list form (`["k=v"]`) decode too.
 
 ### Security
 

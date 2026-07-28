@@ -297,15 +297,40 @@ func TestEnforcer_Unfiltered(t *testing.T) {
 	if steps := prepare(t, cfg, options.HostOptions{}); steps != nil {
 		t.Fatalf("unfiltered app has nothing to prepare, got %v", steps)
 	}
-	if got, want := (Enforcer{}).Teardown(cfg), []string{"stop", "solo"}; !slices.Equal(got, want) {
-		t.Fatalf("unfiltered teardown: got %v want %v", got, want)
+	steps := (Enforcer{}).Teardown(cfg)
+	if len(steps) != 1 || !slices.Equal(steps[0].Args, []string{"stop", "solo"}) {
+		t.Fatalf("unfiltered teardown: got %v", steps)
 	}
 }
 
 func TestEnforcer_FilteredTeardown(t *testing.T) {
 	cfg := pastaApp()
-	if got, want := (Enforcer{}).Teardown(cfg), []string{"pod", "rm", "-f", PodName(cfg.AppNameID)}; !slices.Equal(got, want) {
-		t.Fatalf("filtered teardown: got %v want %v", got, want)
+	steps := (Enforcer{}).Teardown(cfg)
+	if len(steps) != 1 || !slices.Equal(steps[0].Args, []string{"pod", "rm", "-f", PodName(cfg.AppNameID)}) {
+		t.Fatalf("filtered teardown: got %v", steps)
+	}
+}
+
+// The per-app egress bridge is this app's alone, so it goes with the app. Left behind, one
+// podman network accumulated for every app that ever ran with a link plus other networking.
+// The LINK networks are deliberately kept - a sibling may still be attached to one.
+func TestEnforcer_TeardownRemovesTheEgressBridge(t *testing.T) {
+	cfg := gatewayApp()
+	steps := (Enforcer{}).Teardown(cfg)
+	if len(steps) != 2 {
+		t.Fatalf("want pod removal and bridge removal, got %v", steps)
+	}
+	if !slices.Equal(steps[0].Args, []string{"pod", "rm", "-f", PodName(cfg.AppNameID)}) {
+		t.Errorf("the pod must go first, got %v", steps[0].Args)
+	}
+	want := []string{"network", "rm", "-f", EgressNetwork(cfg.AppNameID)}
+	if !slices.Equal(steps[1].Args, want) {
+		t.Errorf("egress bridge removal = %v, want %v", steps[1].Args, want)
+	}
+	for _, step := range steps {
+		if slices.Contains(step.Args, LinkNetwork(cfg.AppNameID)) {
+			t.Errorf("a link network must NOT be removed - a sibling may still be on it: %v", step.Args)
+		}
 	}
 }
 

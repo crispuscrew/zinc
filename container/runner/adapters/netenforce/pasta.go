@@ -186,11 +186,31 @@ func (enf Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) ([]po
 // Teardown removes the pod (owns the filtered netns - app and firewall go in one
 // step, no stale rule-less netns left behind), or just stops the container for an
 // unfiltered app.
-func (Enforcer) Teardown(cfg schema.AppConfig) []string {
-	if filtered(cfg) {
-		return []string{"pod", "rm", "-f", PodName(cfg.AppNameID)}
+func (Enforcer) Teardown(cfg schema.AppConfig) []ports.Command {
+	if !filtered(cfg) {
+		return []ports.Command{{Args: []string{"stop", cfg.AppNameID}, Desc: "stop " + cfg.AppNameID}}
 	}
-	return []string{"stop", cfg.AppNameID}
+	steps := []ports.Command{{
+		Args: []string{"pod", "rm", "-f", PodName(cfg.AppNameID)},
+		Desc: "remove pod " + PodName(cfg.AppNameID),
+	}}
+	// The per-app egress bridge goes with it. It is this app's alone - a bridge per app is
+	// what keeps apps off each other's L2 - so nothing else can be using it, and left behind
+	// it would accumulate one podman network per app that ever ran. The LINK networks are
+	// deliberately not removed: a sibling may still be on one.
+	//
+	// -f rather than --ignore, which `podman network rm` does not have (checked, not assumed
+	// - the flag exists on other podman subcommands, which is how one talks oneself into it).
+	// -f returns 0 for a network that is already gone, so a second teardown is not an error,
+	// and its other half - removing containers still on the network - has nothing to act on
+	// here, because the pod that used it was removed by the step above.
+	if needsOwnEgress(cfg) && len(links(cfg)) > 0 {
+		steps = append(steps, ports.Command{
+			Args: []string{"network", "rm", "-f", EgressNetwork(cfg.AppNameID)},
+			Desc: "remove egress network " + EgressNetwork(cfg.AppNameID),
+		})
+	}
+	return steps
 }
 
 // viaLists returns the egress lists that route through a sibling, paired with the link

@@ -194,7 +194,7 @@ plan. This repo ships only the Zinc core and its tools.
 
 Container work that matures alongside the releases above, not tied to one version:
 
-- **vpn-container routing:** DONE after 0.6. An app is routed through a sibling VPN app with
+- **vpn-container routing:** DELIVERED in 0.7. An app is routed through a sibling VPN app with
   per-destination backend selection (`Via` per list) and fail-closed DNS; the "combining a
   link with other networking" restriction was lifted to make it possible. What is still open
   is a live rather than launch-time domain allowlist (see `NetworkList.Domains`, 6.2).
