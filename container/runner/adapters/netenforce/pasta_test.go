@@ -855,3 +855,42 @@ func TestTunnel_BadConfigFailsTheLaunch(t *testing.T) {
 		t.Fatal("a missing tunnel config must fail the launch")
 	}
 }
+
+// ...and the pod is where it goes instead.
+func TestPodCreateArgs_CarriesKeepUserID(t *testing.T) {
+	cfg := pastaApp()
+	cfg.InternalUserMeta.KeepUserID = true
+	if got := podCreateArgs(cfg, "app-pod"); !slices.Contains(got, "--userns=keep-id") {
+		t.Errorf("the pod must carry keep-id for a filtered app, got %v", got)
+	}
+	plain := podCreateArgs(pastaApp(), "app-pod")
+	if slices.Contains(plain, "--userns=keep-id") {
+		t.Errorf("an app that did not ask for keep-id must not get it, got %v", plain)
+	}
+}
+
+// Every privileged helper runs as root OF THE POD'S user namespace, which is what owns the
+// netns. Without it a keep-id pod runs them as an ordinary uid and nft cannot touch the
+// namespace at all - "cache initialization failed: Operation not permitted" - so an app that
+// asked to keep its uid could not have a lock-down, which is not a trade this tool can make.
+func TestPrivilegedHelpersRunAsUsernsRoot(t *testing.T) {
+	cfg := tunnelApp(t, schema.NetworkList{AppName: "vpn", Via: true, IPv4CIDR: []string{"10.0.0.0/8"}})
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1"}
+	steps := prepare(t, cfg, options.HostOptions{})
+
+	helpers := 0
+	for _, step := range steps {
+		argv := strings.Join(step.Args, " ")
+		if !strings.Contains(argv, "--cap-add NET_ADMIN") {
+			continue
+		}
+		helpers++
+		if !strings.Contains(argv, "--user 0") {
+			t.Errorf("%s: a privileged helper must run as userns root: %s", step.Desc, argv)
+		}
+	}
+	// The tunnel, the route step and the nft lock: all three touch the namespace.
+	if helpers < 3 {
+		t.Errorf("expected the tunnel, route and nft helpers, found %d", helpers)
+	}
+}

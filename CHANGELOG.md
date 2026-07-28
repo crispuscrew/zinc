@@ -5,6 +5,22 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **`InternalUserMeta.KeepUserID` on an app with any `NetworkList` could not start at all.**
+  Shipped broken in 0.7.0: the flag went on the container, podman refuses `--userns` on a
+  container joining a pod, and because `StartApp` is detached the refusal went nowhere - the
+  app simply was not there. `zc validate` said ok and the printed plan looked right.
+  The user namespace belongs to the pod, so that is where it goes now. That alone was not
+  enough: in a keep-id pod the privileged helpers ran as an ordinary uid and nftables could
+  not touch the namespace (`cache initialization failed: Operation not permitted`), which
+  would have meant an app keeping its uid could not have a lock-down. They now run as
+  `--user 0` - root *of the pod's user namespace*, which is what owns the netns, and a no-op
+  for a pod that is not keep-id. Verified: the app comes up at uid 1000 with its
+  default-drop ruleset loaded.
+
 ## [0.7.0] - 2026-07-28
 
 Containment, sibling routing, and interop. The 0.6 line finished the guest story; this one

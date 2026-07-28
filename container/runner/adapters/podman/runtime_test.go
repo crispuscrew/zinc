@@ -499,3 +499,21 @@ func TestHealthProbeArgs(t *testing.T) {
 		t.Fatalf("HealthProbeArgs = %v", got)
 	}
 }
+
+// A pod owns the user namespace of everything that joins it, and podman refuses --userns on
+// a container joining one. An app with KeepUserID and any NetworkList used to get the flag on
+// the container and silently never start - StartApp is detached, so podman's refusal went
+// nowhere and the app just was not there.
+func TestAppRunArgs_KeepUserIDIsThePodsWhenFiltered(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:        "app",
+		ImageMeta:        schema.ImageMeta{Image: "localhost/app:local"},
+		InternalUserMeta: schema.InternalUserMeta{KeepUserID: true},
+	}
+	// Unfiltered: no pod, so the container carries it.
+	if got := appArgs(t, cfg, baseOpts(), netNone()); !slices.Contains(got, "--userns=keep-id") {
+		t.Errorf("an unfiltered app keeps its own userns flag, got %v", got)
+	}
+	// Filtered: joining a pod, so it must not.
+	mustNotContain(t, appArgs(t, cfg, baseOpts(), []string{"--pod", "app-pod"}), "--userns=keep-id")
+}
