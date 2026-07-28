@@ -53,7 +53,11 @@ func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.
 	if cfg.StartConditions.Multiterminal {
 		desc = "run holder for " + cfg.AppNameID + " (terminals exec in)"
 	}
-	return append(svc.net.Prepare(cfg, opt), ports.Command{Args: appArgs, Desc: desc}), nil
+	steps, err := svc.net.Prepare(cfg, opt)
+	if err != nil {
+		return nil, err
+	}
+	return append(steps, ports.Command{Args: appArgs, Desc: desc}), nil
 }
 
 // Launch validates cfg, auto-starts its depends_on apps (section 6.6), ensures its derived
@@ -92,7 +96,10 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 	if err := svc.ensureImage(cfg); err != nil {
 		return err
 	}
-	steps := svc.net.Prepare(cfg, opt)
+	steps, err := svc.net.Prepare(cfg, opt)
+	if err != nil {
+		return err // nothing has been created yet, so there is nothing to tear down
+	}
 	for _, cmd := range steps {
 		if err := svc.runtime.Exec(cmd); err != nil {
 			return errors.Join(fmt.Errorf("launch %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))

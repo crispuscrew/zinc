@@ -120,7 +120,12 @@ DisplayMeta:
   DisableGpuAccess: true         # true = no /dev/dri (default off; GPU weakens isolation, 5.4)
 
 NetworkMeta:
+  DNSServers: []                 # resolvers the app may use, and the only ones it may reach
   NetworkLists: []               # empty = isolated (own localhost only). See 5.3 and section 6.
+    # an egress list may name destinations by address and/or by name:
+    #   IPv4CIDR / IPv6CIDR      # addresses, as written
+    #   Domains                  # resolved AT LAUNCH into addresses; a snapshot, not name
+    #                            # filtering, and not refreshed while the app runs (5.3)
 
 NotificationMeta:                # NOT implemented - a non-default value is refused, not ignored
   Disabled: false
@@ -410,6 +415,34 @@ network alias equal to each app's `AppNameID` (so a consumer connects to `<produ
 The producer accepts only its published `Ports` inbound on that link interface; everything
 else default-drops. The consumer accepts nothing new inbound. The bridge is `--internal`, so
 neither app reaches anything else through it.
+
+**Allowing a destination by name.** An egress list may carry `Domains` alongside its CIDRs.
+Each name is resolved **at launch** and its addresses join that list's allowed set, under the
+same `Ports` - so the renderer only ever sees addresses and the ruleset is ordinary nft.
+
+Read the guarantee precisely, because it is narrower than "this app may only talk to these
+domains":
+
+- What is enforced is at the IP layer, on the addresses those names held when the app
+  started. An app that resolves somewhere else and connects is dropped. An app that connects
+  to one of those addresses **by number**, without asking DNS, is allowed. Nothing inspects a
+  hostname on the wire, and nothing here would notice one.
+- Addresses shared by other names are shared by this rule. A domain on shared hosting or
+  behind a large CDN allows every other name on the same address.
+- **The snapshot is not refreshed while the app runs.** A domain whose addresses rotate will
+  drift out of the set and the app loses access to it until it is restarted. That direction
+  is deliberate: a stale entry stops working rather than quietly allowing whoever holds the
+  address now. Making it live needs a resident process in the netns updating an nft set from
+  DNS answers, which is a different design and is not what this is.
+- A name that does not resolve **fails the launch**, naming the domain. An app that starts,
+  looks healthy, and cannot reach the one host it exists to talk to - with the reason visible
+  nowhere - is the worse outcome.
+
+Refused rather than accepted-and-mis-enforced: `Domains` on an ingress list (an incoming
+packet carries an address, not a name, so resolving would admit whoever holds that address),
+on a blacklist (blocking a name would mean blocking every address it is *not* resolved to,
+and the rule would read as a ban while stopping only today's addresses), and on a sibling
+link (gated by interface, so an address set on it enforces nothing).
 
 **DNS for a routed app.** `NetworkMeta.DNSServers`, required once a list sets `Via`. podman
 writes a container's `resolv.conf` and points it at the network's own resolver; on an

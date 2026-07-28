@@ -297,6 +297,22 @@ type NetworkList struct {
 	IPv6CIDR []string `yaml:"IPv6CIDR"`
 	Ports    []int    `yaml:"Ports"`
 
+	// Domains name hosts this egress list allows by name instead of by address. Each is
+	// resolved AT LAUNCH and its addresses join this list's allowed set, under the same
+	// Ports as the CIDRs beside it.
+	//
+	// Read the guarantee precisely, because it is narrower than "the app may only talk to
+	// these domains". What is enforced is at the IP layer, on the addresses the domains held
+	// when the app started: an app that resolves somewhere else and connects is dropped, and
+	// an app that connects to one of these addresses by number is allowed even if it never
+	// asked DNS. Nothing here inspects a hostname on the wire.
+	//
+	// The snapshot is not refreshed while the app runs. A domain whose addresses rotate -
+	// anything large and CDN-fronted - will drift out of the set, and the app loses access to
+	// it until it is restarted. That direction is deliberate: a stale entry stops working
+	// rather than quietly allowing whoever holds the address now.
+	Domains []string `yaml:"Domains"`
+
 	GatewayV4 string `yaml:"GatewayV4"` // if "" use default
 	GatewayV6 string `yaml:"GatewayV6"`
 

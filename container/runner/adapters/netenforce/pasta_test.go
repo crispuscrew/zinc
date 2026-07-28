@@ -7,7 +7,20 @@ import (
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
+	"github.com/crispuscrew/zinc/container/runner/ports"
 )
+
+// prepare runs the enforcer's pre-steps and fails the test if they could not be built. Most
+// of these cases resolve no domains, so the error path is exercised on its own in
+// domains_test.go rather than restated here.
+func prepare(t *testing.T, cfg schema.AppConfig, opt options.HostOptions) []ports.Command {
+	t.Helper()
+	steps, err := Enforcer{}.Prepare(cfg, opt)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	return steps
+}
 
 // pastaApp is a filtered app: one self-scoped whitelist list (default-drop egress,
 // allow the listed CIDRs/ports).
@@ -153,7 +166,7 @@ func TestNFTRuleset_IngressAnySource(t *testing.T) {
 func TestPodCreate_PublishesTier3Ports(t *testing.T) {
 	cfg := pastaApp()
 	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Host: true, Ports: []int{80}}}
-	steps := Enforcer{}.Prepare(cfg, options.HostOptions{})
+	steps := prepare(t, cfg, options.HostOptions{})
 	create := steps[0].Args
 	assertContainsSeq(t, create, "-p", "80:80/tcp")
 	assertContainsSeq(t, create, "-p", "80:80/udp")
@@ -164,7 +177,7 @@ func TestPodCreate_PublishesTier3Ports(t *testing.T) {
 func TestPodCreate_Tier2PublishesNothing(t *testing.T) {
 	cfg := pastaApp()
 	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
-	for _, step := range (Enforcer{}).Prepare(cfg, options.HostOptions{}) {
+	for _, step := range prepare(t, cfg, options.HostOptions{}) {
 		if slices.Contains(step.Args, "-p") {
 			t.Errorf("tier-2 producer must not publish to the host:\n%v", step.Args)
 		}
@@ -177,7 +190,7 @@ func TestTier2_ProducerPrepare(t *testing.T) {
 	cfg := pastaApp()
 	cfg.AppNameID = "db"
 	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
-	steps := Enforcer{}.Prepare(cfg, options.HostOptions{})
+	steps := prepare(t, cfg, options.HostOptions{})
 	assertContainsSeq(t, steps[0].Args, "network", "create")
 	for _, want := range []string{"--ignore", "--internal", "zinc-link-db"} {
 		if !slices.Contains(steps[0].Args, want) {
@@ -245,7 +258,7 @@ func TestEnforcer_RunFlagsAndPrepare(t *testing.T) {
 		t.Fatalf("filtered RunFlags should join the pod, got %v", got)
 	}
 
-	steps := Enforcer{}.Prepare(cfg, options.HostOptions{})
+	steps := prepare(t, cfg, options.HostOptions{})
 	if len(steps) != 2 {
 		t.Fatalf("filtered prepare should be two steps (pod create, nft lock), got %d", len(steps))
 	}
@@ -266,7 +279,7 @@ func TestEnforcer_RunFlagsAndPrepare(t *testing.T) {
 }
 
 func TestEnforcer_NetfilterImageOverride(t *testing.T) {
-	steps := Enforcer{}.Prepare(pastaApp(), options.HostOptions{NetfilterImage: "my/nft:local"})
+	steps := prepare(t, pastaApp(), options.HostOptions{NetfilterImage: "my/nft:local"})
 	if !slices.Contains(steps[1].Args, "my/nft:local") {
 		t.Fatalf("nft step should use the override image, got %v", steps[1].Args)
 	}
@@ -279,7 +292,7 @@ func TestEnforcer_Unfiltered(t *testing.T) {
 	if got := (Enforcer{}).RunFlags(cfg); !slices.Equal(got, []string{"--network", "none"}) {
 		t.Fatalf("unfiltered RunFlags: %v", got)
 	}
-	if steps := (Enforcer{}).Prepare(cfg, options.HostOptions{}); steps != nil {
+	if steps := prepare(t, cfg, options.HostOptions{}); steps != nil {
 		t.Fatalf("unfiltered app has nothing to prepare, got %v", steps)
 	}
 	if got, want := (Enforcer{}).Teardown(cfg), []string{"stop", "solo"}; !slices.Equal(got, want) {
@@ -364,7 +377,7 @@ func TestNFTRuleset_LinkDoesNotFlipABlacklistPolicy(t *testing.T) {
 // would leave isolation resting on the nft rules, and an all-blacklist app runs
 // default-accept.
 func TestPodCreate_GatewayGetsItsOwnEgressBridge(t *testing.T) {
-	steps := Enforcer{}.Prepare(gatewayApp(), options.HostOptions{})
+	steps := prepare(t, gatewayApp(), options.HostOptions{})
 
 	if !slices.Contains(steps[0].Args, "zinc-egress-vpn") {
 		t.Fatalf("the egress bridge should be created first, got %v", steps[0].Args)
@@ -397,7 +410,7 @@ func TestPodCreate_LinkOnlyAppGetsNoEgressBridge(t *testing.T) {
 	cfg.AppNameID = "db"
 	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Ports: []int{5432}}}
 
-	for _, step := range (Enforcer{}).Prepare(cfg, options.HostOptions{}) {
+	for _, step := range prepare(t, cfg, options.HostOptions{}) {
 		for _, arg := range step.Args {
 			if strings.Contains(arg, "zinc-egress-") {
 				t.Fatalf("a link-only app must stay on its private bridges alone, got %v", step.Args)
@@ -432,7 +445,7 @@ func vpnApp() schema.AppConfig {
 // when the gateway is recreated. The route step resolves it at launch through the network
 // alias podman already gives every app on a link.
 func TestVia_RouteResolvesTheGatewayAtLaunch(t *testing.T) {
-	steps := Enforcer{}.Prepare(routedApp(), options.HostOptions{})
+	steps := prepare(t, routedApp(), options.HostOptions{})
 
 	var script string
 	for _, step := range steps {
@@ -457,7 +470,7 @@ func TestVia_RouteResolvesTheGatewayAtLaunch(t *testing.T) {
 // Order matters: resolving the gateway needs DNS, and the ruleset that follows closes the
 // netns. Both still run before the app, so the app never sees an unlocked network.
 func TestVia_RouteRunsBeforeTheRulesetAndBeforeTheApp(t *testing.T) {
-	steps := Enforcer{}.Prepare(routedApp(), options.HostOptions{})
+	steps := prepare(t, routedApp(), options.HostOptions{})
 
 	route, nft := -1, -1
 	for index, step := range steps {
@@ -479,7 +492,7 @@ func TestVia_RouteRunsBeforeTheRulesetAndBeforeTheApp(t *testing.T) {
 // A container cannot set ip_forward itself - /proc/sys is read-only in the namespace - so an
 // app that agreed to route for its siblings would silently drop every packet it forwarded.
 func TestForward_GatewayGetsForwardingAndNAT(t *testing.T) {
-	steps := Enforcer{}.Prepare(vpnApp(), options.HostOptions{})
+	steps := prepare(t, vpnApp(), options.HostOptions{})
 	var podArgs []string
 	for _, step := range steps {
 		if slices.Contains(step.Args, "pod") {
@@ -513,7 +526,7 @@ func TestForward_NotImpliedForAnOrdinaryApp(t *testing.T) {
 			t.Errorf("an app that did not opt in must not get %q:\n%s", unwanted, got)
 		}
 	}
-	for _, step := range (Enforcer{}).Prepare(gatewayApp(), options.HostOptions{}) {
+	for _, step := range prepare(t, gatewayApp(), options.HostOptions{}) {
 		if slices.Contains(step.Args, "net.ipv4.ip_forward=1") {
 			t.Errorf("forwarding must be opt-in, got %v", step.Args)
 		}

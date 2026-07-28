@@ -2,6 +2,7 @@ package validate
 
 import (
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -39,8 +40,8 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 	// destinations (0.0.0.0/0 and/or ::/0 for "everywhere"), or drop the ports. An ingress
 	// list needs no CIDR - its CIDRs are a source allowlist and empty means "any source".
 	if !netList.Ingress && len(netList.Ports) > 0 &&
-		len(netList.IPv4CIDR) == 0 && len(netList.IPv6CIDR) == 0 {
-		add("NetworkLists[%d].Ports %s: set without any IPv4CIDR/IPv6CIDR; an egress port rule needs destination CIDRs (use 0.0.0.0/0 and/or ::/0 for all destinations)", index, joinPorts(netList.Ports))
+		len(netList.IPv4CIDR) == 0 && len(netList.IPv6CIDR) == 0 && len(netList.Domains) == 0 {
+		add("NetworkLists[%d].Ports %s: set without any IPv4CIDR/IPv6CIDR/Domains; an egress port rule needs destinations (use 0.0.0.0/0 and/or ::/0 for all of them)", index, joinPorts(netList.Ports))
 	}
 
 	self := !netList.Host && strings.TrimSpace(netList.AppName) == ""
@@ -48,8 +49,57 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 		add("NetworkLists[%d].AppName %q: invalid app name; allowed [a-z0-9._-], must start alphanumeric", index, netList.AppName)
 	}
 
+	checkDomains(index, netList, add)
 	checkRouting(index, netList, add)
 	checkGateway(index, netList, self, add)
+}
+
+// domainRE is a hostname in the form the resolver will be handed: lowercase labels, no
+// scheme, no port, no path, no trailing dot. Lowercase because a config that differs from
+// another only in case would read as two different rules while behaving as one.
+var domainRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
+
+// checkDomains screens a by-name egress allowance, and refuses the shapes where naming a
+// domain would promise something the enforcement cannot deliver.
+//
+// The enforcement is at the IP layer: a domain is resolved at launch and its addresses join
+// this list's allowed set. That is a real allowance and a real restriction, and it is not
+// hostname filtering - which is what makes the refusals below matter rather than being
+// tidiness.
+func checkDomains(index int, netList schema.NetworkList, add addFunc) {
+	if len(netList.Domains) == 0 {
+		return
+	}
+	for _, domain := range netList.Domains {
+		trimmed := strings.TrimSpace(domain)
+		switch {
+		case trimmed == "":
+			add("NetworkLists[%d].Domains: must not be empty", index)
+		case len(trimmed) > 253:
+			add("NetworkLists[%d].Domains %q: longer than a hostname may be (253 characters)", index, trimmed)
+		case !domainRE.MatchString(trimmed):
+			add("NetworkLists[%d].Domains %q: must be a plain lowercase hostname - no scheme, port, path or trailing dot", index, trimmed)
+		}
+	}
+	switch {
+	case netList.Ingress:
+		// An ingress list's addresses are the peers allowed to connect IN. Those arrive as
+		// packets from an address; there is no name in them to match, and resolving the
+		// domain would allow whoever holds that address rather than whoever owns the name.
+		add("NetworkLists[%d].Domains: only an egress list can allow by name - an ingress list matches the source address of an incoming packet, which carries no name", index)
+	case netList.Blacklist:
+		// A domain allowlist is the set of addresses a name resolves to. A domain BLACKLIST
+		// would have to be every address it does not, which is unknowable - and the rule
+		// would read as "this app cannot reach evil.com" while blocking only the addresses
+		// evil.com happened to hold at launch.
+		add("NetworkLists[%d].Domains: cannot be used on a blacklist - blocking a name would mean blocking every address it is not resolved to, and the rule would read as a ban while stopping only today's addresses", index)
+	case strings.TrimSpace(netList.AppName) != "":
+		// A sibling link is gated by interface, not by address, so an address set on it
+		// would be enforced by nothing at all.
+		add("NetworkLists[%d].Domains: has no meaning on a sibling link - a link is gated by its interface and its published ports, not by destination address", index)
+	case netList.Host:
+		add("NetworkLists[%d].Domains: has no meaning on a host-scoped list", index)
+	}
 }
 
 // checkDNS screens the app's resolvers, and requires them where the app cannot otherwise

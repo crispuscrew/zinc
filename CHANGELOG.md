@@ -9,6 +9,30 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- **`NetworkList.Domains`: an egress list can allow a destination by name.** Each name is
+  resolved at launch and its addresses join that list's allowed set under the same `Ports`,
+  so the ruleset renderer only ever sees addresses and stays pure - the resolution is the one
+  part of building a ruleset that can fail, so it happens before anything is rendered and a
+  launch whose allowlist could not be resolved does not proceed with a shorter one.
+  **The guarantee is narrower than "this app may only talk to these domains", and is
+  documented as such rather than left to be assumed.** What is enforced is at the IP layer, on
+  the addresses those names held when the app started: an app that resolves somewhere else
+  and connects is dropped, an app that connects to one of those addresses *by number* is
+  allowed, and nothing inspects a hostname on the wire. Addresses shared by other names are
+  shared by this rule. And the snapshot is not refreshed while the app runs, so a domain whose
+  addresses rotate drifts out of the set and the app loses access until restarted - stale
+  entries stop working rather than quietly allowing whoever holds the address now. A name that
+  does not resolve fails the launch and names itself.
+  Refused rather than accepted-and-mis-enforced: `Domains` on an ingress list (an incoming
+  packet carries an address, not a name, so resolving would admit whoever holds that address),
+  on a blacklist (blocking a name would mean blocking every address it is *not* resolved to -
+  the rule would read as a ban while stopping only today's addresses), and on a sibling link
+  (gated by interface, so an address set on it enforces nothing).
+  Measured from inside a running container rather than from the rendered argv: an app allowing
+  `example.com:443` reached both of its addresses, was blocked on `1.1.1.1:443` - the same host
+  its DNS is allowed to reach on 53 - and blocked on an unrelated address. `ports.NetEnforcer`'s
+  `Prepare` now returns an error alongside its steps.
+
 - **`Inherits`: an app can start from another one.** A child names a base and states only
   what differs, taking the rest from it - the duplication across a family of similar apps
   drops to the part that is actually different. Resolution is live: the merge happens on

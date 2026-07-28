@@ -38,9 +38,12 @@ var _ ports.NetEnforcer = Enforcer{}
 // netfilter image build (runner side).
 const DefaultNetfilterImage = "zinc/netfilter:local"
 
-// Enforcer drives an app's NetworkLists onto the network. It satisfies
-// ports.NetEnforcer and is stateless.
-type Enforcer struct{}
+// Enforcer drives an app's NetworkLists onto the network. It satisfies ports.NetEnforcer.
+//
+// Lookup resolves the Domains an egress list allows by name; a zero Enforcer uses the host
+// resolver, which is what production wants and what every existing caller gets. It is a
+// field so the resolution can be driven without a network in tests.
+type Enforcer struct{ Lookup LookupFunc }
 
 // PodName is the pod that owns a filtered app's netns.
 func PodName(app string) string { return app + "-pod" }
@@ -128,9 +131,17 @@ func (Enforcer) RunFlags(cfg schema.AppConfig) []string {
 // any app starts*. The app run itself is appended by the caller (app layer) using
 // RunFlags. An unfiltered app has nothing to prepare. Link networks are created
 // idempotently (--ignore) and left in place on teardown - a sibling may still use one.
-func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.Command {
+func (enf Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) ([]ports.Command, error) {
 	if !filtered(cfg) {
-		return nil
+		return nil, nil
+	}
+	// Names become addresses before anything is rendered, so the ruleset is only ever built
+	// from addresses and the renderer stays pure. It happens here rather than inside the
+	// renderer because it is the one part of building a ruleset that can fail, and a launch
+	// whose allowlist could not be resolved must not proceed with a shorter one.
+	cfg, err := resolveDomains(cfg, enf.Lookup)
+	if err != nil {
+		return nil, err
 	}
 	pod := PodName(cfg.AppNameID)
 	image := opt.NetfilterImage
@@ -158,7 +169,7 @@ func (Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) []ports.C
 	steps = append(steps, routeCommands(cfg, image)...)
 	return append(steps,
 		ports.Command{Args: nftApplyArgs(pod, image), Stdin: NFTRuleset(cfg), Desc: "lock netns with nft (before app)"},
-	)
+	), nil
 }
 
 // Teardown removes the pod (owns the filtered netns - app and firewall go in one

@@ -93,7 +93,10 @@ type ImageResolver interface {
 // mechanism is one more implementation; the app layer is agnostic. Callers gate
 // unsupported configs before invoking it (the app layer's checkNetwork).
 type NetEnforcer interface {
-	RunFlags(cfg schema.AppConfig) []string                          // app container network attach (--pod ... / --network ...)
-	Prepare(cfg schema.AppConfig, opt options.HostOptions) []Command // steps to establish + LOCK the netns before the app starts
-	Teardown(cfg schema.AppConfig) []string                          // tear it all down (pod rm / stop)
+	RunFlags(cfg schema.AppConfig) []string // app container network attach (--pod ... / --network ...)
+	// Prepare returns the steps that establish and LOCK the netns before the app starts.
+	// It can fail: an allowlist given by name has to be resolved first, and a launch whose
+	// allowlist could not be resolved must not proceed with a shorter one.
+	Prepare(cfg schema.AppConfig, opt options.HostOptions) ([]Command, error)
+	Teardown(cfg schema.AppConfig) []string // tear it all down (pod rm / stop)
 }
