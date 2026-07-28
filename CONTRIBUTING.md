@@ -4,8 +4,10 @@ Guidance for contributing to this repo. It is the portable,
 in-repo companion to [`docs/architecture.md`](docs/architecture.md) (the single source of
 truth) and [`README.md`](README.md).
 
-Zinc is a keyboard-first, security-focused app-sandboxing core. Every user-facing app runs
-in a **rootless Podman container** (primary) or a **qemu VM** (heavy isolation). Priority order, always:
+Zinc is a security-focused sandboxing core. Every user-facing app runs via a **rootless
+Podman container** (primary runtime) or a **qemu VM** (heavy isolation), walled off from the
+rest of the desktop through the Wayland security-context protocol. Zinc is
+compositor-agnostic and installs cleanly on any existing system. Priority order, always:
 **Stable, then Secure, then Beautiful.**
 
 ## Golden rules
@@ -35,8 +37,9 @@ in a **rootless Podman container** (primary) or a **qemu VM** (heavy isolation).
 - `container/runner` (**zcr**) - the runtime. It reads an app file and runs it via rootless
   podman, applying the network lock-down. It is a ports-and-adapters hexagon (below).
 - `creator` (**zc**) - the authoring tool (CLI + keyboard-first TUI). It depends
-  ONLY on `common` and shells out to the `zcr` binary on `$PATH` to run apps. It never
-  imports the runner; the two meet only at the on-disk YAML format.
+  ONLY on `common` and shells out to whichever runner binary on `$PATH` owns the app - `zcr`
+  for container apps, `zvr` for VM apps. It never imports a runner; they meet only at the
+  on-disk YAML format.
 - `container/e2e` - black-box end-to-end tests that drive the real binaries against podman.
 - `virtualization/runner` - `zvr`, the VM runner. Same split as the container side: it
   depends only on `common` and drives `qemu-system-x86_64` directly.
