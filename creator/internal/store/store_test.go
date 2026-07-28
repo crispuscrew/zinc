@@ -174,3 +174,152 @@ func TestDefaultPath(t *testing.T) {
 		t.Fatalf("Path = %q, want %q", sto.Path("firefox"), want)
 	}
 }
+
+// writeApp puts a raw app file in the store, which is how an inheriting app is authored:
+// what a config STATES is a property of its text, and Save deliberately refuses to
+// reconstruct that from a struct.
+func writeApp(t *testing.T, sto *Store, name, text string) {
+	t.Helper()
+	if err := os.MkdirAll(sto.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sto.Path(name), []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Load returns the file as written and LoadResolved returns what the app actually is. The
+// split is the whole safety property: the editing side reads raw, so what it writes back is
+// still the child.
+func TestLoadResolved_MergesTheBase(t *testing.T) {
+	sto := tempStore(t)
+	writeApp(t, sto, "base", "SchemaVersion: 2\nType: ZincContainer\nAppNameID: base\n"+
+		"ImageMeta:\n  Image: localhost/base:local\n"+
+		"ResourcesMeta:\n  MaxRamMiB: 256\n  PIDsLimit: 64\n"+
+		"HostTheme: true\nCapabilities: [NET_RAW]\n")
+	writeApp(t, sto, "child", "SchemaVersion: 2\nType: ZincContainer\nAppNameID: child\nInherits: base\n"+
+		"ResourcesMeta:\n  MaxRamMiB: 1024\n"+
+		"HostTheme: false\nCapabilities: []\n")
+
+	raw, err := sto.Load("child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.ImageMeta.Image != "" {
+		t.Errorf("Load must return the file as written, got Image=%q", raw.ImageMeta.Image)
+	}
+
+	resolved, err := sto.LoadResolved("child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ImageMeta.Image != "localhost/base:local" {
+		t.Errorf("Image = %q, want the base's", resolved.ImageMeta.Image)
+	}
+	if resolved.ResourcesMeta.MaxRamMiB != 1024 {
+		t.Errorf("MaxRamMiB = %d, want the child's", resolved.ResourcesMeta.MaxRamMiB)
+	}
+	if resolved.ResourcesMeta.PIDsLimit != 64 {
+		t.Errorf("PIDsLimit = %d, want the base's - a nested block merges field by field", resolved.ResourcesMeta.PIDsLimit)
+	}
+	if resolved.HostTheme {
+		t.Error("a child stating false must be able to turn a base's flag off")
+	}
+	if len(resolved.Capabilities) != 0 {
+		t.Errorf("Capabilities = %v, want the child's empty list to win", resolved.Capabilities)
+	}
+}
+
+// The data-loss guard. A decoded AppConfig no longer knows which fields its file stated, so
+// writing one back over an inheriting app would state all of them - replacing everything it
+// inherits with zeros, silently, in a file that looks perfectly normal afterwards.
+func TestSave_RefusesToRewriteAnInheritingApp(t *testing.T) {
+	sto := tempStore(t)
+	writeApp(t, sto, "base", "SchemaVersion: 2\nType: ZincContainer\nAppNameID: base\n"+
+		"ImageMeta:\n  Image: localhost/base:local\n")
+	const childText = "SchemaVersion: 2\nType: ZincContainer\nAppNameID: child\nInherits: base\nIcon: firefox\n"
+	writeApp(t, sto, "child", childText)
+
+	cfg, err := sto.Load("child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sto.Save(cfg); err == nil {
+		t.Fatal("saving an inheriting app must be refused, not silently flattened")
+	} else if !strings.Contains(err.Error(), "inherits from") {
+		t.Errorf("the refusal should say why: %v", err)
+	}
+
+	// And nothing was written: the guard runs before anything touches disk.
+	after, err := os.ReadFile(sto.Path("child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != childText {
+		t.Errorf("the file changed despite the refusal:\n%s", after)
+	}
+}
+
+// An app that inherits nothing saves exactly as it always did - the guard must not cost
+// every other app anything.
+func TestSave_UnaffectedWithoutInheritance(t *testing.T) {
+	sto := tempStore(t)
+	if err := sto.Save(sampleApp("solo")); err != nil {
+		t.Fatalf("a config with no Inherits must still save: %v", err)
+	}
+}
+
+// A base that does not exist, a cycle, and a name that would escape the apps directory all
+// fail the read rather than yielding a partial config - what is missing could be the part
+// that contains the app.
+func TestLoadResolved_FailsClosed(t *testing.T) {
+	sto := tempStore(t)
+	writeApp(t, sto, "orphan", "SchemaVersion: 2\nAppNameID: orphan\nInherits: ghost\n")
+	writeApp(t, sto, "loop-a", "SchemaVersion: 2\nAppNameID: loop-a\nInherits: loop-b\n")
+	writeApp(t, sto, "loop-b", "SchemaVersion: 2\nAppNameID: loop-b\nInherits: loop-a\n")
+	writeApp(t, sto, "escape", "SchemaVersion: 2\nAppNameID: escape\nInherits: ../../etc/evil\n")
+
+	for _, testCase := range []struct{ app, want string }{
+		{"orphan", "ghost"},
+		{"loop-a", "cycle"},
+		{"escape", "Inherits"},
+	} {
+		_, err := sto.LoadResolved(testCase.app)
+		if err == nil {
+			t.Errorf("LoadResolved(%s): want an error", testCase.app)
+			continue
+		}
+		if !strings.Contains(err.Error(), testCase.want) {
+			t.Errorf("LoadResolved(%s) = %v, want it to mention %q", testCase.app, err, testCase.want)
+		}
+	}
+}
+
+// An app must not resolve into another app's identity. AppNameID is what the runner names
+// the container, the pod and the derived image after, so a child that omitted it and took
+// its base's name would make `zcr run notes` build, and `zcr stop notes` destroy, whatever
+// `browser` is. Inheriting apps are hand-written, so nothing else keeps the two in step.
+func TestLoadResolved_RefusesToTakeTheBasesIdentity(t *testing.T) {
+	sto := tempStore(t)
+	writeApp(t, sto, "browser", "SchemaVersion: 2\nType: ZincContainer\nAppNameID: browser\n"+
+		"ImageMeta:\n  Image: localhost/browser:local\n")
+	writeApp(t, sto, "notes", "SchemaVersion: 2\nInherits: browser\nIcon: notes\n")
+
+	_, err := sto.LoadResolved("notes")
+	if err == nil {
+		t.Fatal("an app resolving to another app's AppNameID must be refused")
+	}
+	if !strings.Contains(err.Error(), "keep its own name") {
+		t.Errorf("the refusal should say why: %v", err)
+	}
+
+	// Stating its own name is all it takes.
+	writeApp(t, sto, "notes", "SchemaVersion: 2\nAppNameID: notes\nInherits: browser\nIcon: notes\n")
+	cfg, err := sto.LoadResolved("notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ImageMeta.Image != "localhost/browser:local" {
+		t.Errorf("it should still inherit everything else, got Image=%q", cfg.ImageMeta.Image)
+	}
+}

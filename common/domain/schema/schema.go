@@ -16,7 +16,19 @@ type AppConfig struct {
 	SchemaVersion int  `yaml:"SchemaVersion"`
 	Type          Type `yaml:"Type"` // VM vs Container, "" interpreted as error
 
-	AppNameID   string `yaml:"AppNameID"` // Also using as container/vm name
+	AppNameID string `yaml:"AppNameID"` // Also using as container/vm name
+
+	// Inherits names another app in the store this one starts from: it states only what
+	// differs, and takes everything it does not state from that base. A key it states wins
+	// (false and an empty list included), a nested block merges field by field, and a list
+	// it states replaces the base's rather than adding to it.
+	//
+	// Resolution happens on every read, so editing a base changes every app built on it -
+	// which is the point, and the thing to be careful with, since a base granting a
+	// capability grants it to every child. `zc validate <app> --resolved` prints what an app
+	// actually resolves to. What is saved is always what was written, never the merged result.
+	Inherits string `yaml:"Inherits"`
+
 	Icon        string `yaml:"Icon"`
 	Description string `yaml:"Description"`
 	Group       string `yaml:"Group"` // optional category, for grouping in a launcher; presentation-only
@@ -46,6 +58,21 @@ type AppConfig struct {
 
 type StartConditions struct {
 	DependsOn []string `yaml:"DependsOn"` // apps, which must be running while/starting with it
+
+	// ReadyCheck is the command that decides whether this app is ready for the apps that
+	// name it in DependsOn. It is given in exec form (["test", "-f", "/run/ready"]), not
+	// as a shell line, and becomes the container's healthcheck, so `podman ps` answers the
+	// same question the dependents wait on.
+	//
+	// Empty keeps the old meaning of DependsOn: running is ready. That is fine for a
+	// dependency whose service is up the moment its process is, and wrong for anything a
+	// dependent routes through - a VPN container is running long before its tunnel is, and
+	// a client started in that window has a default route pointing at a gateway that cannot
+	// forward yet.
+	ReadyCheck []string `yaml:"ReadyCheck"`
+	// ReadyTimeoutSec bounds how long a dependent waits for ReadyCheck to pass before its
+	// launch fails; 0 uses the runner's default. It only means anything with ReadyCheck set.
+	ReadyTimeoutSec int `yaml:"ReadyTimeoutSec"`
 
 	Autorestart bool `yaml:"Autorestart"` // Autorestart if falls, not restart if manually closed
 
@@ -242,6 +269,19 @@ type DisplayMeta struct {
 type NetworkMeta struct {
 	// The first entry is priority
 	NetworkLists []NetworkList `yaml:"NetworkLists"`
+
+	// DNSServers are the resolvers the app is given, and the only ones it may reach.
+	//
+	// An app routed through a sibling needs them. Its own link is an --internal bridge, and
+	// the resolver podman puts on one answers sibling names but cannot forward anything
+	// else - measured: an external name comes back NXDOMAIN. Naming a resolver here gives
+	// the app one it can reach, and because the address is routed through the sibling like
+	// any other destination, the queries travel inside the tunnel and stop with it.
+	//
+	// They are also the only resolvers permitted: DNS to anything else is dropped, so an app
+	// that carries a hardcoded resolver cannot step around them when it also has direct
+	// egress of its own.
+	DNSServers []string `yaml:"DNSServers"`
 }
 
 type NetworkList struct {
@@ -257,8 +297,41 @@ type NetworkList struct {
 	IPv6CIDR []string `yaml:"IPv6CIDR"`
 	Ports    []int    `yaml:"Ports"`
 
+	// Domains name hosts this egress list allows by name instead of by address. Each is
+	// resolved AT LAUNCH and its addresses join this list's allowed set, under the same
+	// Ports as the CIDRs beside it.
+	//
+	// Read the guarantee precisely, because it is narrower than "the app may only talk to
+	// these domains". What is enforced is at the IP layer, on the addresses the domains held
+	// when the app started: an app that resolves somewhere else and connects is dropped, and
+	// an app that connects to one of these addresses by number is allowed even if it never
+	// asked DNS. Nothing here inspects a hostname on the wire.
+	//
+	// The snapshot is not refreshed while the app runs. A domain whose addresses rotate -
+	// anything large and CDN-fronted - will drift out of the set, and the app loses access to
+	// it until it is restarted. That direction is deliberate: a stale entry stops working
+	// rather than quietly allowing whoever holds the address now.
+	Domains []string `yaml:"Domains"`
+
 	GatewayV4 string `yaml:"GatewayV4"` // if "" use default
 	GatewayV6 string `yaml:"GatewayV6"`
+
+	// Via turns an egress list naming an AppName from "talk TO that app" into "route
+	// THROUGH it": the listed CIDRs are sent to that sibling over their private link
+	// instead of out this app's own egress. That is how an app is put behind a VPN
+	// container without trusting it to route itself - it has no other path to those
+	// destinations, so it cannot leak past the sibling, and if the sibling stops, the
+	// traffic blackholes rather than falling back.
+	//
+	// Per list, so one app can pick a different backend per destination: work subnets
+	// through one sibling, everything else direct.
+	Via bool `yaml:"Via"`
+
+	// Forward is the other half, set on the producer's own ingress list: siblings on my
+	// link may route through me, and I will forward and masquerade their traffic out of my
+	// own egress. Explicit because forwarding for other apps is a privilege - it makes this
+	// app a router - and must never be implied by another app naming it.
+	Forward bool `yaml:"Forward"`
 }
 
 type NotificationMeta struct {

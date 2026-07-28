@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/adapters/netenforce"
@@ -18,10 +19,14 @@ import (
 // set, StartApp does NOT mark running, modelling production's detached start (the app
 // is not yet visible to Running() when a sibling branch is processed) so the
 // diamond-dependency dedup can be exercised.
+// probeFailures makes the next N readiness probes fail, modelling a dependency whose
+// container is up before its service is; probes counts how many were run.
 type fakeRuntime struct {
 	running       map[string]bool
 	started       []string
 	detachedStart bool
+	probeFailures int
+	probes        int
 }
 
 func newFakeRuntime(alreadyRunning ...string) *fakeRuntime {
@@ -44,10 +49,17 @@ func (engine *fakeRuntime) StartApp(cfg schema.AppConfig, opt options.HostOption
 	return nil
 }
 func (engine *fakeRuntime) OpenSession(string, []string, options.HostOptions, bool) error { return nil }
-func (engine *fakeRuntime) Exists(name string) bool                                       { return engine.running[name] }
-func (engine *fakeRuntime) Do([]string) error                                             { return nil }
-func (engine *fakeRuntime) Running() (map[string]bool, error)                             { return engine.running, nil }
-func (engine *fakeRuntime) Logs(string, int) (string, error)                              { return "", nil }
+func (engine *fakeRuntime) HealthProbe(name string) error {
+	engine.probes++
+	if engine.probes <= engine.probeFailures {
+		return fmt.Errorf("readiness probe for %s: unhealthy", name)
+	}
+	return nil
+}
+func (engine *fakeRuntime) Exists(name string) bool           { return engine.running[name] }
+func (engine *fakeRuntime) Do([]string) error                 { return nil }
+func (engine *fakeRuntime) Running() (map[string]bool, error) { return engine.running, nil }
+func (engine *fakeRuntime) Logs(string, int) (string, error)  { return "", nil }
 
 // fakeStore serves app definitions from an in-memory map.
 type fakeStore struct{ apps map[string]schema.AppConfig }
@@ -58,6 +70,13 @@ func (store fakeStore) Load(name string) (schema.AppConfig, error) {
 		return schema.AppConfig{}, fmt.Errorf("app %q not found", name)
 	}
 	return cfg, nil
+}
+
+// The fake serves the same config either way: these tests are about launch ordering, and
+// inheritance is resolved by the real store from bytes it does not have.
+func (store fakeStore) LoadResolved(name string) (schema.AppConfig, error) { return store.Load(name) }
+func (store fakeStore) LoadFileResolved(path string) (schema.AppConfig, error) {
+	return store.Load(path)
 }
 func (store fakeStore) List() ([]string, error)                   { return nil, nil }
 func (store fakeStore) Save(schema.AppConfig) error               { return nil }
@@ -188,16 +207,18 @@ func TestCheckNetwork_Tier2ConsumerAllowed(t *testing.T) {
 	}
 }
 
-// A tier-2 app may not also carry other networking - coexistence is deferred, fail closed.
-func TestCheckNetwork_Tier2MixRejected(t *testing.T) {
+// A tier-2 app may now also carry other networking. It could not before, because the
+// ruleset was one kind or the other and whichever ran ignored the other kind of list
+// outright. An app that serves siblings AND reaches the outside is the whole point of a
+// gateway, so refusing it refused the feature.
+func TestCheckNetwork_Tier2MayAlsoReachOut(t *testing.T) {
 	cfg := depApp("db")
 	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{
 		{Ingress: true, Ports: []int{5432}},
 		{IPv4CIDR: []string{"1.1.1.1/32"}, Ports: []int{443}},
 	}}
-	err := checkNetwork(cfg)
-	if err == nil || !strings.Contains(err.Error(), "not supported in this build yet") {
-		t.Fatalf("mixing links with other networking should fail closed, got: %v", err)
+	if err := checkNetwork(cfg); err != nil {
+		t.Fatalf("a link plus egress is enforceable now, got: %v", err)
 	}
 }
 
@@ -257,6 +278,83 @@ func TestLaunch_DiamondSharedDependencyStartsOnce(t *testing.T) {
 	}
 }
 
+// readyApp is depApp plus a readiness probe, so dependents wait for it rather than for its
+// container merely existing.
+func readyApp(name string, deps ...string) schema.AppConfig {
+	cfg := depApp(name, deps...)
+	cfg.StartConditions.ReadyCheck = []string{"test", "-f", "/run/ready"}
+	return cfg
+}
+
+// withFastPolling shortens the gap between readiness probes for the duration of a test, so
+// a wait that takes several probes does not take several seconds.
+func withFastPolling(t *testing.T) {
+	t.Helper()
+	previous := readyPollInterval
+	readyPollInterval = time.Millisecond
+	t.Cleanup(func() { readyPollInterval = previous })
+}
+
+// A dependency that is running but not yet ready holds its dependent back until it says
+// otherwise. This is the whole point of the gate: a client routed through a VPN sibling has
+// that sibling as its default route, so starting while the tunnel is still coming up gives
+// it no network at all.
+func TestLaunch_WaitsForDependencyReadiness(t *testing.T) {
+	withFastPolling(t)
+	store := fakeStore{apps: map[string]schema.AppConfig{
+		"client": depApp("client", "vpn"),
+		"vpn":    readyApp("vpn"),
+	}}
+	engine := newFakeRuntime()
+	engine.probeFailures = 3 // up, but not serving yet
+	if err := depSvc(store, engine).Launch(store.apps["client"], baseOpts()); err != nil {
+		t.Fatal(err)
+	}
+	if engine.probes != 4 {
+		t.Fatalf("expected to keep probing until ready (4 probes), got %d", engine.probes)
+	}
+	if want := []string{"vpn", "client"}; !slices.Equal(engine.started, want) {
+		t.Fatalf("start order = %v, want %v", engine.started, want)
+	}
+}
+
+// A dependency that never becomes ready fails the launch, naming itself, rather than
+// hanging or letting the dependent start with a gateway that cannot forward.
+func TestLaunch_UnreadyDependencyFailsLaunch(t *testing.T) {
+	withFastPolling(t)
+	vpn := readyApp("vpn")
+	vpn.StartConditions.ReadyTimeoutSec = 1
+	store := fakeStore{apps: map[string]schema.AppConfig{
+		"client": depApp("client", "vpn"),
+		"vpn":    vpn,
+	}}
+	engine := newFakeRuntime()
+	engine.probeFailures = 1 << 30 // never ready
+	err := depSvc(store, engine).Launch(store.apps["client"], baseOpts())
+	if err == nil || !strings.Contains(err.Error(), `dependency "vpn" was not ready`) {
+		t.Fatalf("expected an unready-dependency error, got %v", err)
+	}
+	if slices.Contains(engine.started, "client") {
+		t.Fatalf("client must not start behind an unready dependency, sequence = %v", engine.started)
+	}
+}
+
+// An app with no ReadyCheck is ready as soon as it is running - the meaning DependsOn has
+// always had - so nothing is probed and no launch pays for the gate.
+func TestLaunch_NoReadyCheckIsNotProbed(t *testing.T) {
+	store := fakeStore{apps: map[string]schema.AppConfig{
+		"web": depApp("web", "db"),
+		"db":  depApp("db"),
+	}}
+	engine := newFakeRuntime()
+	if err := depSvc(store, engine).Launch(store.apps["web"], baseOpts()); err != nil {
+		t.Fatal(err)
+	}
+	if engine.probes != 0 {
+		t.Fatalf("an app with no ReadyCheck should not be probed, got %d probes", engine.probes)
+	}
+}
+
 // The multiterminal term path must apply the same fail-closed network gate as launch:
 // OpenTerminal rejects a network shape this build cannot enforce (here host-scoped
 // egress) rather than proceeding to open a terminal for a mis-enforced app.
@@ -269,5 +367,33 @@ func TestOpenTerminal_GatesUnsupportedNetwork(t *testing.T) {
 	err := (Service{}).OpenTerminal(cfg, options.HostOptions{}, false)
 	if err == nil || !strings.Contains(err.Error(), "not supported in this build yet") {
 		t.Fatalf("OpenTerminal must gate an unsupported network shape via checkNetwork, got: %v", err)
+	}
+}
+
+// Interface scoping rides on pasta, and a linked app is on bridges instead, where podman
+// publishes by address rather than by interface name. Accepting the combination published
+// the port on EVERY host interface while the config and the authoring warning both named one.
+func TestCheckNetwork_InterfaceWithALinkRejected(t *testing.T) {
+	cfg := depApp("srv")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{
+		{Ingress: true, Ports: []int{5432}},
+		{Ingress: true, Host: true, Interface: "eth0", Ports: []int{8080}},
+	}}
+	err := checkNetwork(cfg)
+	if err == nil || !strings.Contains(err.Error(), "every host interface") {
+		t.Fatalf("Interface alongside a link must be refused, got: %v", err)
+	}
+}
+
+// A Via list becomes routes plus a blanket accept on the link; its Ports reach nothing. Left
+// accepted, the list would read as "only 443 through the VPN" while tunnelling every port.
+func TestCheckNetwork_PortsOnAViaListRejected(t *testing.T) {
+	cfg := depApp("client")
+	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{
+		{AppName: "vpn", Via: true, IPv4CIDR: []string{"0.0.0.0/0"}, Ports: []int{443}},
+	}}
+	err := checkNetwork(cfg)
+	if err == nil || !strings.Contains(err.Error(), "not applied") {
+		t.Fatalf("Ports on a routed list must be refused, got: %v", err)
 	}
 }

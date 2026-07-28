@@ -53,7 +53,11 @@ func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.
 	if cfg.StartConditions.Multiterminal {
 		desc = "run holder for " + cfg.AppNameID + " (terminals exec in)"
 	}
-	return append(svc.net.Prepare(cfg, opt), ports.Command{Args: appArgs, Desc: desc}), nil
+	steps, err := svc.net.Prepare(cfg, opt)
+	if err != nil {
+		return nil, err
+	}
+	return append(steps, ports.Command{Args: appArgs, Desc: desc}), nil
 }
 
 // Launch validates cfg, auto-starts its depends_on apps (section 6.6), ensures its derived
@@ -92,7 +96,10 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 	if err := svc.ensureImage(cfg); err != nil {
 		return err
 	}
-	steps := svc.net.Prepare(cfg, opt)
+	steps, err := svc.net.Prepare(cfg, opt)
+	if err != nil {
+		return err // nothing has been created yet, so there is nothing to tear down
+	}
 	for _, cmd := range steps {
 		if err := svc.runtime.Exec(cmd); err != nil {
 			return errors.Join(fmt.Errorf("launch %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
@@ -185,10 +192,20 @@ func (svc Service) ensureImage(cfg schema.AppConfig) error {
 
 func (svc Service) List() ([]string, error)                    { return svc.store.List() }
 func (svc Service) Load(name string) (schema.AppConfig, error) { return svc.store.Load(name) }
-func (svc Service) Save(cfg schema.AppConfig) error            { return svc.store.Save(cfg) }
-func (svc Service) Delete(name string) error                   { return svc.store.Delete(name) }
-func (svc Service) Exists(name string) bool                    { return svc.store.Exists(name) }
-func (svc Service) Path(name string) string                    { return svc.store.Path(name) }
+
+// LoadResolved returns what an app actually is, with any Inherits chain merged in - the form
+// a launch must read. Load stays the file as written, for Rename, which writes it back.
+func (svc Service) LoadResolved(name string) (schema.AppConfig, error) {
+	return svc.store.LoadResolved(name)
+}
+
+func (svc Service) LoadFileResolved(path string) (schema.AppConfig, error) {
+	return svc.store.LoadFileResolved(path)
+}
+func (svc Service) Save(cfg schema.AppConfig) error { return svc.store.Save(cfg) }
+func (svc Service) Delete(name string) error        { return svc.store.Delete(name) }
+func (svc Service) Exists(name string) bool         { return svc.store.Exists(name) }
+func (svc Service) Path(name string) string         { return svc.store.Path(name) }
 
 func (svc Service) Marshal(cfg schema.AppConfig) ([]byte, error)   { return svc.store.Marshal(cfg) }
 func (svc Service) LoadFile(path string) (schema.AppConfig, error) { return svc.store.LoadFile(path) }

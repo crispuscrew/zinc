@@ -34,7 +34,13 @@ type Result struct {
 // round-trip (Marshal a draft, LoadFile it back). Adapter: adapters/fs.
 type Store interface {
 	List() ([]string, error)
+	// Load returns an app as its file was written; LoadResolved returns what it actually
+	// is, with any Inherits chain merged in. A launch reads the resolved form; anything
+	// that will write the config back reads the raw one, since a resolved config saved
+	// over its source would flatten the inheritance away.
 	Load(name string) (schema.AppConfig, error)
+	LoadResolved(name string) (schema.AppConfig, error)
+	LoadFileResolved(path string) (schema.AppConfig, error)
 	Save(cfg schema.AppConfig) error
 	Delete(name string) error
 	Exists(name string) bool
@@ -56,10 +62,15 @@ type Runtime interface {
 	// an error, so a post-fork failure can tear down the prepared (still-filtered) netns.
 	StartApp(cfg schema.AppConfig, opt options.HostOptions, runArgs []string, onFail func()) error
 	OpenSession(app string, cmd []string, opt options.HostOptions, hold bool) error // blocking `exec -it` into a holder, in a terminal window (multiterminal); hold keeps the window open after cmd exits
-	Exists(name string) bool                                                        // does a container with this name exist (running or not)?
-	Do(args []string) error                                                         // user-facing passthrough (stop/restart/inspect/logs) with host stdio
-	Running() (map[string]bool, error)                                              // names the runtime reports as running (list view)
-	Logs(name string, tail int) (string, error)                                     // last N log lines (logs view)
+	// HealthProbe answers "is this app ready right now?" once, without blocking: nil
+	// means ready. The app layer polls it to hold a launch until the apps it depends on
+	// can actually serve it (StartConditions.ReadyCheck); how the answer is obtained is
+	// the adapter's business.
+	HealthProbe(name string) error
+	Exists(name string) bool                    // does a container with this name exist (running or not)?
+	Do(args []string) error                     // user-facing passthrough (stop/restart/inspect/logs) with host stdio
+	Running() (map[string]bool, error)          // names the runtime reports as running (list view)
+	Logs(name string, tail int) (string, error) // last N log lines (logs view)
 }
 
 // ImageBuilder builds an app's derived image (FROM ImageMeta.Image + the install
@@ -82,7 +93,10 @@ type ImageResolver interface {
 // mechanism is one more implementation; the app layer is agnostic. Callers gate
 // unsupported configs before invoking it (the app layer's checkNetwork).
 type NetEnforcer interface {
-	RunFlags(cfg schema.AppConfig) []string                          // app container network attach (--pod ... / --network ...)
-	Prepare(cfg schema.AppConfig, opt options.HostOptions) []Command // steps to establish + LOCK the netns before the app starts
-	Teardown(cfg schema.AppConfig) []string                          // tear it all down (pod rm / stop)
+	RunFlags(cfg schema.AppConfig) []string // app container network attach (--pod ... / --network ...)
+	// Prepare returns the steps that establish and LOCK the netns before the app starts.
+	// It can fail: an allowlist given by name has to be resolved first, and a launch whose
+	// allowlist could not be resolved must not proceed with a shorter one.
+	Prepare(cfg schema.AppConfig, opt options.HostOptions) ([]Command, error)
+	Teardown(cfg schema.AppConfig) []string // tear it all down (pod rm / stop)
 }

@@ -14,6 +14,8 @@
 //	zc validate <name|app.yaml>
 //	zc delete <name>
 //	zc keys list|show|set <s>|edit|validate|path   TUI keybind schemes
+//	zc compose export <name> [-o f]    describe an app as a Compose-specification file
+//	zc compose import <compose.yaml>   author app definitions from one
 //	zc run <name|app.yaml> [--exec]    ⟶ zcr run
 //	zc build <name|app.yaml>           ⟶ zcr build
 //	zc stop|restart|inspect <name>     ⟶ zcr
@@ -56,9 +58,11 @@ const usage = `usage: zc <command> [args]
              [--firmware UEFI] [--secure-boot] [--tpm] [--devices Compatible] [--vulkan]
              [--resolution WxH] [--mac ADDR] [--media disc.iso]
   list
-  validate <name|app.yaml>
+  validate <name|app.yaml> [--resolved]   --resolved prints what an inheriting app merges to
   delete <name>
   keys list|show|set <s>|edit|validate|path   TUI keybind schemes (default|vim|custom)
+  compose export <name> [-o f]      describe an app as a compose file (lossy; prints what)
+  compose import <compose.yaml>     author apps from a compose file (fail-closed; lossy)
   run <name|app.yaml> [--exec]      build the launch plan; print it, or launch    (⟶ zcr)
   build <name|app.yaml>             (re)build the derived image (ImageMeta.Install) (⟶ zcr)
   stop|restart|inspect <name>       (⟶ zcr)
@@ -142,6 +146,8 @@ func run(argv []string) error {
 		return cmdValidate(svc, rest)
 	case "delete":
 		return cmdDelete(svc, rest)
+	case "compose":
+		return cmdCompose(svc, rest)
 	default:
 		return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 	}
@@ -341,7 +347,7 @@ func cmdList(svc backend.Service) error {
 		return nil
 	}
 	for _, name := range names {
-		cfg, err := svc.Load(name)
+		cfg, err := svc.LoadResolved(name) // an inheriting app lists what it resolves to
 		if err != nil {
 			fmt.Printf("%-20s (error: %v)\n", name, err)
 			continue
@@ -352,12 +358,25 @@ func cmdList(svc backend.Service) error {
 }
 
 func cmdValidate(svc backend.Service, argv []string) error {
-	if len(argv) != 1 {
-		return fmt.Errorf("usage: zc validate <name|app.yaml>")
+	if len(argv) < 1 || len(argv) > 2 {
+		return fmt.Errorf("usage: zc validate <name|app.yaml> [--resolved]")
 	}
-	cfg, err := loadApp(svc, argv[0])
+	showResolved := len(argv) == 2 && argv[1] == "--resolved"
+	if len(argv) == 2 && !showResolved {
+		return fmt.Errorf("unknown flag %q\nusage: zc validate <name|app.yaml> [--resolved]", argv[1])
+	}
+	cfg, err := loadApp(svc, argv[0]) // resolved: an app is judged as what it actually is
 	if err != nil {
 		return err
+	}
+	// An app that inherits cannot be audited by reading its own file, which is the cost of
+	// resolving live. Printing what it merges to is how that cost is paid back.
+	if showResolved {
+		data, merr := svc.Marshal(cfg)
+		if merr != nil {
+			return merr
+		}
+		fmt.Printf("# %s as it resolves\n%s\n", cfg.AppNameID, data)
 	}
 	if verr := validate.Validate(cfg); verr != nil {
 		return fmt.Errorf("invalid config %s:\n%w", argv[0], verr)
@@ -368,6 +387,9 @@ func cmdValidate(svc backend.Service, argv []string) error {
 			cfg.AppNameID, cfg.ImageMeta.Image, virt.MemoryMiB, virt.VCPUs, virt.Display)
 	} else {
 		fmt.Printf("ok: %s - image=%s network=%s\n", cfg.AppNameID, cfg.ImageMeta.Image, netLabel(cfg))
+	}
+	if base := strings.TrimSpace(cfg.Inherits); base != "" && !showResolved {
+		fmt.Printf("      inherits from %s - `zc validate %s --resolved` prints what it merges to\n", base, cfg.AppNameID)
 	}
 	for _, warn := range validate.Warnings(cfg) {
 		fmt.Println("warning: " + warn)
@@ -510,14 +532,18 @@ func openInEditor(path string) error {
 
 // loadApp resolves an app by store name or by file path. An argument containing a path
 // separator or ending in ".yaml" is read directly; otherwise it is looked up in the store.
+// It is the RESOLVED app that comes back: every caller here is asking what an app is
+// (validate it, describe it, hand it to a runtime), not what its own file happens to say.
+// The editing paths use svc.Load, which returns the file as written - that is the one that
+// gets saved back.
 func loadApp(svc backend.Service, arg string) (schema.AppConfig, error) {
 	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".yaml") {
-		return svc.LoadFile(arg)
+		return svc.LoadFileResolved(arg)
 	}
 	if !svc.Exists(arg) {
 		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zc list)", arg)
 	}
-	return svc.Load(arg)
+	return svc.LoadResolved(arg)
 }
 
 // netLabel summarizes an app's network posture for the list/validate output: "isolated"

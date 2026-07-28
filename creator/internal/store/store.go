@@ -27,6 +27,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/schema/inherit"
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 )
 
@@ -38,14 +39,21 @@ func Load(path string) (schema.AppConfig, error) {
 	if err != nil {
 		return schema.AppConfig{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
+	return decode(data, path)
+}
+
+// decode turns app YAML into a config. Unknown keys (typos, stale fields after a hand edit)
+// are reported as an error so dead config can't silently accumulate. origin names the file
+// for the error message; a merged config still names the app it was read for.
+func decode(data []byte, origin string) (schema.AppConfig, error) {
 	var cfg schema.AppConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true) // reject unknown keys so stale/typo fields can't accumulate
+	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		if errors.Is(err, io.EOF) {
-			return schema.AppConfig{}, fmt.Errorf("config: %s: empty file", path)
+			return schema.AppConfig{}, fmt.Errorf("config: %s: empty file", origin)
 		}
-		return schema.AppConfig{}, fmt.Errorf("config: decode %s: %w", path, err)
+		return schema.AppConfig{}, fmt.Errorf("config: decode %s: %w", origin, err)
 	}
 	return cfg, nil
 }
@@ -136,6 +144,63 @@ func (sto *Store) Load(name string) (schema.AppConfig, error) {
 	return Load(sto.Path(name))
 }
 
+// readRaw returns the named app's file as written, before any decoding. Inheritance is
+// resolved on the YAML rather than on decoded structs - only the bytes record which keys the
+// app actually STATED, and a decoded false is indistinguishable from an absent field.
+func (sto *Store) readRaw(name string) ([]byte, error) {
+	if err := safeName(name); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(sto.Path(name))
+	if err != nil {
+		return nil, fmt.Errorf("store: read %s: %w", name, err)
+	}
+	return data, nil
+}
+
+// LoadResolved decodes the named app with its Inherits chain applied: what the app does not
+// state is taken from the base it starts from. This is what a launch reads, because it is
+// what the app actually is - Load returns the file as written, which is what an editor needs
+// and what must be written back.
+func (sto *Store) LoadResolved(name string) (schema.AppConfig, error) {
+	data, err := sto.readRaw(name)
+	if err != nil {
+		return schema.AppConfig{}, err
+	}
+	merged, err := inherit.Resolve(data, sto.readRaw)
+	if err != nil {
+		return schema.AppConfig{}, fmt.Errorf("config: %s: %w", name, err)
+	}
+	resolved, derr := decode(merged, sto.Path(name))
+	if derr != nil {
+		return schema.AppConfig{}, derr
+	}
+	// An app must not be able to resolve into another app's identity. A child that omits
+	// AppNameID inherits its base's, and AppNameID is what the runner names the container,
+	// the pod and the derived image after - so `zcr run notes` would build, and `zcr stop
+	// notes` would destroy, whatever `browser` is. Inheriting apps are hand-written (Save
+	// refuses to rewrite one), so nothing else keeps the filename and the name in step.
+	if resolved.AppNameID != name {
+		return schema.AppConfig{}, fmt.Errorf("config: %s: resolves to AppNameID %q - an app must keep its own name; state AppNameID in the app rather than taking the base's", name, resolved.AppNameID)
+	}
+	return resolved, nil
+}
+
+// LoadFileResolved decodes an app YAML at an arbitrary path with its Inherits chain applied.
+// The base is still looked up in the store: a config given by path is being read as an app,
+// and where its base lives does not change because of how the app itself was named.
+func (sto *Store) LoadFileResolved(path string) (schema.AppConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return schema.AppConfig{}, fmt.Errorf("config: read %s: %w", path, err)
+	}
+	merged, err := inherit.Resolve(data, sto.readRaw)
+	if err != nil {
+		return schema.AppConfig{}, fmt.Errorf("config: %s: %w", path, err)
+	}
+	return decode(merged, path)
+}
+
 // LoadFile decodes an arbitrary .yaml path (a CLI path argument, or the editor
 // round-trip temp file) - same codec as Load, no store lookup.
 func (sto *Store) LoadFile(path string) (schema.AppConfig, error) {
@@ -150,7 +215,20 @@ func (sto *Store) Marshal(cfg schema.AppConfig) ([]byte, error) {
 
 // Save validates cfg and atomically writes it to <cfg.AppNameID>.yaml. Invalid config
 // is rejected before anything touches disk.
+//
+// An app that inherits is refused, and that is a data-loss guard rather than a limitation
+// of the format. Inheritance is recorded in which keys a file STATES, and a decoded
+// AppConfig no longer knows: every field it did not state has become an ordinary zero value,
+// indistinguishable from one stated as zero. Writing that struct back would state all of
+// them, so the child would stop inheriting anything and would instead override its base with
+// zeros - silently, and looking entirely normal on disk. Refusing costs an inheriting app
+// the struct-based editors; writing would cost it its meaning.
 func (sto *Store) Save(cfg schema.AppConfig) error {
+	if base := strings.TrimSpace(cfg.Inherits); base != "" {
+		return fmt.Errorf("store: %s inherits from %q, so it is edited as a file rather than rewritten from a form: %s\n"+
+			"       (a form knows the app's values but not which of them it stated, and writing them all back would replace what it inherits with zeros)",
+			cfg.AppNameID, base, sto.Path(cfg.AppNameID))
+	}
 	if err := validate.Validate(cfg); err != nil {
 		return fmt.Errorf("store: refusing to save invalid config: %w", err)
 	}

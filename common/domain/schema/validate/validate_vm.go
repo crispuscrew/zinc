@@ -205,6 +205,8 @@ func checkContainerOnlyFields(cfg schema.AppConfig, add addFunc) {
 			"the theme bundle is a read-only bind mount, which a guest cannot take"},
 		{cfg.StartConditions.Multiterminal, "StartConditions.Multiterminal",
 			"a guest has one console; attach to it with the serial console instead"},
+		{len(cfg.StartConditions.ReadyCheck) > 0, "StartConditions.ReadyCheck",
+			"the probe runs as the container's healthcheck, and there is no way to run a command inside a guest from outside it"},
 		{cfg.InternalUserMeta != (schema.InternalUserMeta{}), "InternalUserMeta",
 			"the guest owns its own users; use VirtualizationMeta.CloudInit.UserName"},
 		{cfg.ResourcesMeta != (schema.ResourcesMeta{}), "ResourcesMeta",

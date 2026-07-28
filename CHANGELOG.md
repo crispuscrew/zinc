@@ -5,6 +5,242 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [Unreleased]
+
+### Security
+
+- **A linked app kept its inbound filter.** While this branch was in progress, an app that
+  only *consumed* a sibling (a link list naming another app, nothing published of its own)
+  came out with no `input` base chain at all. In nftables a hook with no base chain is not
+  filtered - so "no chain" meant unfiltered inbound, not closed, and every other app on that
+  shared bridge could reach any port it listened on. An input chain is now emitted whenever
+  the app has any link, published or not. Found by review before release; never shipped.
+- **The resolver a routed app's DNS is redirected to is now routed through the sibling.** The
+  nat rule sent every query to the declared resolver, but nothing put that address on the
+  tunnel unless the author happened to include it in a `Via` list's CIDRs - so an app routing
+  only some destinations through a VPN sent its DNS out its own egress in the clear, while the
+  schema and the renderer both said the queries travel inside the tunnel. The redirect target
+  now gets a host route through the sibling.
+- **Two configs that read as restrictions and enforced nothing are refused.** `Ports` on a
+  routed (`Via`) list, which becomes a blanket accept on the link and would read as "only 443
+  through the VPN" while tunnelling every port; and `Interface` on an app that also has a
+  sibling link, where the app is on bridges rather than pasta and the port was published on
+  every host interface while the config and the authoring warning both named one.
+- **An app can no longer resolve into another app's identity.** `AppNameID` is what the runner
+  names the container, the pod and the derived image after, and a child that omitted it took
+  its base's - so `zcr run notes` would have built, and `zcr stop notes` destroyed, whatever
+  `browser` was. A resolved config whose `AppNameID` is not the name it was loaded under is
+  now refused.
+
+### Fixed
+
+- `NetworkMeta.DNSServers` reached only linked apps. The ruleset restricts DNS to the declared
+  resolvers for *every* filtered app, so one that was restricted and never handed them kept
+  podman's resolver and had no working DNS at all - fail-closed, but only because the setting
+  half-worked.
+- `zc` routed an inheriting VM app to the container runtime: which runner a command goes to is
+  decided by `Type`, and `Type` is exactly the kind of field a child takes from its base. The
+  delegate now reads the resolved config, like the runners do.
+- The `zc` TUI listed an inheriting app by its own file rather than what it resolves to, so an
+  app that inherited its image or network showed as blank and "isolated", and actions were
+  gated on fields it appeared not to have. The list now shows the resolved app while the edit
+  form still opens the file as written.
+- The rendered nft ruleset was not byte-identical between runs when both a v4 and a v6 resolver
+  were declared - map iteration order leaked into it.
+- An IPv6 first resolver on a routed app is rejected at validation instead of failing the whole
+  `nft -f -` load with a parse error naming neither the field nor the reason; a `Via` list
+  carrying both address families is rejected too, since one list resolves one gateway.
+- `ReadyTimeoutSec` is bounded above: large enough values overflowed the runner's nanosecond
+  duration to a negative one, turning a very long timeout into no timeout at all.
+
+### Added
+
+- **`NetworkList.Domains`: an egress list can allow a destination by name.** Each name is
+  resolved at launch and its addresses join that list's allowed set under the same `Ports`,
+  so the ruleset renderer only ever sees addresses and stays pure - the resolution is the one
+  part of building a ruleset that can fail, so it happens before anything is rendered and a
+  launch whose allowlist could not be resolved does not proceed with a shorter one.
+  **The guarantee is narrower than "this app may only talk to these domains", and is
+  documented as such rather than left to be assumed.** What is enforced is at the IP layer, on
+  the addresses those names held when the app started: an app that resolves somewhere else
+  and connects is dropped, an app that connects to one of those addresses *by number* is
+  allowed, and nothing inspects a hostname on the wire. Addresses shared by other names are
+  shared by this rule. And the snapshot is not refreshed while the app runs, so a domain whose
+  addresses rotate drifts out of the set and the app loses access until restarted - stale
+  entries stop working rather than quietly allowing whoever holds the address now. A name that
+  does not resolve fails the launch and names itself.
+  Refused rather than accepted-and-mis-enforced: `Domains` on an ingress list (an incoming
+  packet carries an address, not a name, so resolving would admit whoever holds that address),
+  on a blacklist (blocking a name would mean blocking every address it is *not* resolved to -
+  the rule would read as a ban while stopping only today's addresses), and on a sibling link
+  (gated by interface, so an address set on it enforces nothing).
+  Measured from inside a running container rather than from the rendered argv: an app allowing
+  `example.com:443` reached both of its addresses, was blocked on `1.1.1.1:443` - the same host
+  its DNS is allowed to reach on 53 - and blocked on an unrelated address. `ports.NetEnforcer`'s
+  `Prepare` now returns an error alongside its steps.
+
+- **`Inherits`: an app can start from another one.** A child names a base and states only
+  what differs, taking the rest from it - the duplication across a family of similar apps
+  drops to the part that is actually different. Resolution is live: the merge happens on
+  every read, so editing a base changes every app built on it at the next launch. That is the
+  point, and the cost is that a child's own file no longer tells you what it is, so
+  `zc validate <app> --resolved` prints exactly what it merges to.
+  **The merge is performed on the YAML rather than on a decoded config, and that is the whole
+  design.** Only the text records which keys a config actually *stated*: once decoded,
+  `HostTheme: false` is indistinguishable from an absent `HostTheme`, and an empty
+  `Capabilities` from an omitted one. Merging structs would have to read every zero value as
+  "inherit", which means a child could never turn a base's flag off and never empty a base's
+  list - a base could grant a capability or set `DisableSecurityContext` and no child could
+  walk it back. Merging nodes has no such rule, so a stated `false` wins and a stated empty
+  list wins. Nested blocks merge field by field; a stated list replaces rather than appends,
+  because capabilities that only accumulate down a chain are the wrong direction here.
+  Fail-closed throughout: a cycle, a missing base, or a chain deeper than 8 fails the read
+  rather than yielding a partial config, and `Inherits` is charset-checked before any file is
+  opened, since the name is joined into a store path.
+  Every store now exposes both reads - `Load` (the file as written) and `LoadResolved` (what
+  the app is). Launching, validating and listing take the resolved form; anything that writes
+  the config back takes the raw one. For the same reason `zc` **refuses to save an app that
+  inherits**: a form knows an app's values but not which of them it stated, so writing them
+  all back would replace everything the child inherits with zeros, silently, in a file that
+  looks normal afterwards. An inheriting app is edited as a file. Apps that inherit nothing
+  are untouched - same load, same save, byte-identical files.
+
+- **`zc compose export` and `zc compose import`: interop with the Compose specification,**
+  in both directions and honest about both. Neither is lossless, so neither is silent about
+  it - every field that did not cross is printed as a note.
+  *Export* describes an app in the format other tools read. Image, entrypoint, user,
+  capabilities, resource limits, mounts, published ports, resolvers, `depends_on` and the
+  `ReadyCheck` (as a `healthcheck`) all carry. `ReadyTimeoutSec` deliberately does not: it
+  bounds how long a *dependent* waits, and compose's `healthcheck.timeout` bounds one probe's
+  run, so writing either as the other would export a different promise under the same number. The egress lock-down does not, and cannot: a compose file
+  has no way to say "an nftables ruleset is applied to this netns and locked before the
+  process starts". The generated file therefore leads with a comment saying it DESCRIBES an
+  app rather than sandboxing it, and an app carrying NetworkLists exports with that stated in
+  capitals. A VM app is refused rather than half-rendered - a guest is not a container.
+  Verified by feeding the output back to the real `podman-compose config`, which parses and
+  normalises it cleanly.
+  *Import* onboards an existing compose service, and tightens as it goes. Compose cannot say
+  what a service may reach, so reading its silence as "full network access" would import a
+  posture nobody chose: an imported app arrives with no network at all, and published ports
+  are the only exception because they are the only thing stated. The same reading applies
+  throughout: a mount that does not say `ro` becomes read-only and noexec (compose's default
+  is read-write, and `:z` means read-write too); a port the file bound to loopback is imported
+  as sibling-only rather than published to the LAN; `cap_add: ALL` is dropped, and so are
+  `NET_ADMIN` and `SYS_ADMIN`, which would let an imported app remove its own network
+  lock-down; a numeric `user` is dropped - including the `1000:1000` spelling - since Zinc
+  passes the user to podman by name; a relative or `~` host path is dropped rather than
+  resolved against the wrong directory; and a mutable tag is pinned to its digest before the
+  app is saved. Anything carried that widens the sandbox says so, including every capability. Multi-service files import as one app each; `--service` takes just one and
+  `--dry-run` prints instead of saving.
+  The polymorphism of real compose files is handled rather than rejected: `depends_on` in
+  both its list and map forms, and every list field written as either a scalar or a sequence,
+  because `expose: 5432` and `command: nginx -g daemon off;` are how people actually write
+  them. That last one was a bug found by running it: taken whole, the command became an
+  Entrypoint that is a filename with spaces in it - valid on paper, unexecutable in fact. It
+  is now split the way compose itself splits it, reduced to the executable, with the dropped
+  arguments named.
+
+- **`StartConditions.ReadyCheck`: `DependsOn` can wait for ready, not just for running.** A
+  dependency counted as up the moment its container was, which is true enough for a service
+  whose process is its readiness and false for anything a dependent routes through. A VPN
+  container is running long before its tunnel is, and a client started in that window comes up
+  with a default route and a resolver pointing at a gateway that cannot forward yet - it fails
+  closed, but it fails, and nothing says why.
+  `ReadyCheck` is a command in exec form (`["sh", "-c", "ip link show wg0 | grep -q UP"]`),
+  and `ReadyTimeoutSec` bounds the wait (default 60s). Reused rather than reinvented: the probe
+  is installed as the container's own healthcheck, so `podman ps` reports the last probe's
+  answer for exactly the command the launch sequence waits on, instead of a readiness notion
+  only the runner knows about. Its interval is disabled and the check is driven on demand, so
+  no app gains a background timer exec'ing into it forever for an answer that matters at one
+  moment - the state is a snapshot rather than monitoring, which is the right trade for a
+  start-order gate and the wrong one for health monitoring.
+  A dependency that never becomes ready fails the dependent's launch and names itself, rather
+  than starting an app whose every connection will fail. Only a dependency this launch started
+  is waited on: one that was already running was gated the same way by whoever started it, and
+  re-probing it would turn every launch behind a momentarily-unhealthy dependency into a
+  failure rather than closing the start-order race. Apps that set nothing are unaffected - no
+  probe, no wait, and the same podman argv as before.
+
+- **`ResourcesMeta` and `InternalUserMeta` are enforced.** Both shipped in the schema at 0.1,
+  were range- and charset-validated ever since, and never reached podman: the runtime emitted
+  no `--cpus`, `--memory`, `--pids-limit` or `--user` anywhere. So an app could set
+  `UseNonRootUser: true` and `MaxRamMiB: 2048`, be told the config was valid, and run as root
+  with no memory limit. On a sandboxing tool that is the worst shape a setting can have -
+  a security control that reads as if it were in force. What made it an oversight rather than
+  a decision is that VM apps already *reject* these fields as container-only, so the schema
+  knew they meant something; only the container runtime never looked.
+  `MaxSwapMiB` is granted on top of `MaxRamMiB` rather than passed through. podman's
+  `--memory-swap` is the total of memory and swap, so forwarding the swap figure alone would
+  have capped an app asking for 2048 MiB of RAM and 512 of swap at 512 MiB - the opposite of
+  granting it swap. It now requires a memory limit alongside, and the runtime sends the sum.
+  Key mounts follow the user: an app running as `app` gets its keys under `/home/app`, not
+  `/root`, where they would have been present and unreadable and looked like a broken key.
+  Verified against the kernel rather than the argv: a new end-to-end scenario launches an app
+  with a 128 MiB cap, 32 MiB of swap, 50 PIDs and `NonRootUserName: nobody`, and the app
+  reports back what it was actually granted - `UID=65534`, `memory.max=134217728`,
+  `memory.swap.max=33554432`, `pids.max=50`. Emitting a flag is not the same as a limit
+  existing: rootless podman needs cgroup v2 delegation for any of it to be real, and a host
+  without it would grant nothing and say nothing.
+
+- **DNS for a routed app** - `NetworkMeta.DNSServers`, required once any list sets `Via`.
+  Measured first, which changed the fix: a routed app was not leaking DNS, it could not
+  resolve at all. podman writes the container's `resolv.conf` and points it at the network's
+  own resolver, and on an `--internal` bridge that resolver answers sibling names and forwards
+  nothing - an external name comes back NXDOMAIN. Handing the pod a resolver is necessary and
+  not sufficient: what settles where a query goes is the netns, not the file.
+  So the query is redirected in the app's own netns rather than fought over in a file: DNS to
+  any address is rewritten to the declared resolver, which is routed through the sibling like
+  any other destination. It travels inside the tunnel and stops with it - verified end to end,
+  including that names stop resolving the moment the gateway is stopped. Anything not
+  redirected is dropped, so an app carrying a hardcoded resolver cannot step around it.
+  Only a routed app is redirected. For an ordinary one the network's resolver works and is the
+  only thing that knows its siblings' names, so taking it away would cost something and buy
+  nothing. The cost for a routed app is that it resolves through the declared server alone,
+  sibling names included; it has already lost those to the NXDOMAIN above.
+
+- **Route an app through a sibling** - `Via: true` on an egress list naming another app.
+  Its CIDRs go to that sibling over their private link instead of out the app's own egress,
+  which is how an app is put behind a VPN container without trusting it to route itself. Per
+  list, so one app can send work subnets through one sibling and everything else direct.
+  The guarantees come from the topology rather than from rules being right: the link is an
+  `--internal` bridge, so a client whose only interface is that bridge has no other path to
+  those destinations and cannot leak past the sibling; and when the sibling stops, its traffic
+  blackholes rather than falling back. Both measured end to end through `zcr`.
+  The sibling must agree, with `Forward: true` on its own link ingress list - forwarding for
+  other apps makes an app a router, so it is never implied by another app naming it. Such an
+  app gets `net.ipv4.ip_forward=1` at pod creation (a container cannot set it itself:
+  `/proc/sys` is read-only in the namespace, so it would have dropped every packet it was
+  meant to forward), a default-drop `forward` chain, and `masquerade` out of its own bridge -
+  without which replies would be addressed to a private link address the outside cannot route
+  back to.
+  No address is ever written into a config. podman assigns the gateway's and it changes when
+  the gateway is recreated, so the route is resolved at launch through the network alias
+  podman already gives every app on a link. That step runs before the ruleset, because
+  resolving needs DNS and the ruleset closes the netns; both still run before the app, so the
+  app never sees an unlocked network.
+
+- **A sibling link may coexist with other networking on one app.** It could not before: the
+  ruleset was interface-gated or address-gated, never both, and whichever ran ignored the
+  other kind of list outright - so a linked app's egress rules simply vanished, which is why
+  the combination was rejected at launch rather than mis-enforced. The renderer now gates both
+  at once. This is the prerequisite for routing through a sibling: a gateway app has to serve
+  its siblings over a private link *and* reach the outside to be worth routing through.
+  Chain policy is taken from the non-link lists alone. A link list is structurally a whitelist,
+  so counting it would flip an app that pairs a link with an all-blacklist egress to
+  default-drop and silently deny everything the blacklist meant to leave open.
+  Such an app also cannot use pasta - podman refuses more than one network outside bridge mode
+  ("cannot set multiple networks without bridge network mode") - so it gets `zinc-egress-<app>`,
+  a routable bridge of its own. Its own, rather than the shared default one: apps on a single
+  bridge can reach each other over L2, which would leave isolation resting on the nft rules,
+  and an all-blacklist app runs default-accept. Link-only and ordinary apps are untouched.
+
+### Changed
+
+- **`NotificationMeta` is refused instead of ignored.** Nothing in Zinc proxies, silences or
+  prefixes an app's notifications, so every field in the block is inert. Accepting `Silenced`
+  told an author their app was muted while it notified freely. A non-default value is now a
+  validation error naming the reason; the zero value every existing app has stays legal.
+
 ## [0.6.0] - 2026-07-27
 
 Windows-class guests. The VM runner now describes a machine rather than assuming one, and

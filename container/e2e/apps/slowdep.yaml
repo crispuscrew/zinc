@@ -1,0 +1,12 @@
+SchemaVersion: 2
+Type: ZincContainer
+AppNameID: slowdep
+Description: readiness scenario - a dependency whose service comes up long after its container
+ImageMeta:
+  Image: localhost/zinc/e2e-app:local
+StartConditions:
+  Entrypoint: /slowdep.sh
+  # Running is not ready. Without this the app counts as up the moment podman starts it,
+  # which is five seconds before it can serve anything.
+  ReadyCheck: ["test", "-f", "/run/ready"]
+  ReadyTimeoutSec: 60

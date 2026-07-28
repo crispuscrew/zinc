@@ -48,6 +48,7 @@ github.com/clipperhouse/uax29/v2/graphemes
 # github.com/crispuscrew/zinc/common v0.0.0 => ../common
 ## explicit; go 1.24.2
 github.com/crispuscrew/zinc/common/domain/schema
+github.com/crispuscrew/zinc/common/domain/schema/inherit
 github.com/crispuscrew/zinc/common/domain/schema/validate
 # github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f
 ## explicit; go 1.16

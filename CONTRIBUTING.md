@@ -30,7 +30,7 @@ in a **rootless Podman container** (primary) or a **qemu VM** (heavy isolation).
 
 ## Repo layout and the zc/zcr split
 
-- `common/` - the shared library: the app-config schema and its validation, pure stdlib.
+- `common/` - the shared library: the app-config schema, its validation, and the config-inheritance resolver. Pure (no I/O); its one dependency is the YAML codec the resolver merges with.
   Both the creator and the runner depend on it and nothing else shared.
 - `container/runner` (**zcr**) - the runtime. It reads an app file and runs it via rootless
   podman, applying the network lock-down. It is a ports-and-adapters hexagon (below).

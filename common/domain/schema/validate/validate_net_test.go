@@ -31,8 +31,8 @@ func TestEgressPortsWithoutCIDRRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("egress ports with no CIDR: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "destination CIDRs") {
-		t.Fatalf("want a destination-CIDR error, got: %v", err)
+	if !strings.Contains(err.Error(), "needs destinations") {
+		t.Fatalf("want a missing-destinations error, got: %v", err)
 	}
 }
 
@@ -102,5 +102,100 @@ func TestEgressEmptyBlacklistWarns(t *testing.T) {
 	warns := Warnings(withList(schema.NetworkList{Blacklist: true}))
 	if len(warns) != 1 || !strings.Contains(warns[0], "egress blacklist") {
 		t.Fatalf("want an egress allow-all warning, got: %v", warns)
+	}
+}
+
+// A domain is handed to a resolver, so it must be a plain hostname: a URL, a port, or a
+// trailing dot would either fail to resolve or resolve to something other than what the
+// author read when they wrote it.
+func TestDomains_MustBePlainHostnames(t *testing.T) {
+	for _, bad := range []string{
+		"https://example.com", "example.com:443", "example.com/path", "example.com.",
+		"Example.com", "", "-example.com",
+	} {
+		err := Validate(withList(schema.NetworkList{Domains: []string{bad}, Ports: []int{443}}))
+		if err == nil || !strings.Contains(err.Error(), "Domains") {
+			t.Errorf("Domains %q: want a Domains error, got: %v", bad, err)
+		}
+	}
+	for _, good := range []string{"example.com", "api.example.com", "a-b.example.co.uk", "localhost"} {
+		if err := Validate(withList(schema.NetworkList{Domains: []string{good}, Ports: []int{443}})); err != nil {
+			t.Errorf("Domains %q should be accepted, got: %v", good, err)
+		}
+	}
+}
+
+// The refusals are about what the enforcement can actually deliver, not tidiness. Allowing
+// by name is resolving a name to addresses and permitting those; every shape below would
+// read as something else.
+func TestDomains_RefusedWhereTheyWouldMislead(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		list schema.NetworkList
+		want string
+	}{
+		{
+			// An incoming packet carries an address, not a name; resolving the domain would
+			// admit whoever holds that address rather than whoever owns the name.
+			name: "ingress",
+			list: schema.NetworkList{Ingress: true, Domains: []string{"example.com"}, Ports: []int{443}},
+			want: "only an egress list can allow by name",
+		},
+		{
+			// A domain blacklist would have to be every address the name does NOT resolve to.
+			name: "blacklist",
+			list: schema.NetworkList{Blacklist: true, Domains: []string{"example.com"}, Ports: []int{443}},
+			want: "cannot be used on a blacklist",
+		},
+		{
+			// A sibling link is gated by interface, so an address set on it enforces nothing.
+			name: "link",
+			list: schema.NetworkList{AppName: "db", Domains: []string{"example.com"}, Ports: []int{443}},
+			want: "no meaning on a sibling link",
+		},
+	} {
+		err := Validate(withList(testCase.list))
+		if err == nil || !strings.Contains(err.Error(), testCase.want) {
+			t.Errorf("%s: want %q, got: %v", testCase.name, testCase.want, err)
+		}
+	}
+}
+
+// Domains are destinations, so ports alongside them are anchored to something - the rule
+// that rejects ports with no destination must not fire.
+func TestDomains_SatisfyThePortsNeedDestinationsRule(t *testing.T) {
+	if err := Validate(withList(schema.NetworkList{Domains: []string{"example.com"}, Ports: []int{443}})); err != nil {
+		t.Fatalf("domains are destinations for a port rule, got: %v", err)
+	}
+}
+
+// A routed app's first resolver is written into an IPv4 `dnat to` rule. An IPv6 address there
+// makes nft refuse the whole ruleset, so the launch failed with a parse error naming neither
+// the field nor the reason.
+func TestDNS_RoutedAppNeedsAnIPv4FirstResolver(t *testing.T) {
+	cfg := withList(schema.NetworkList{AppName: "vpn", Via: true, IPv4CIDR: []string{"0.0.0.0/0"}})
+	cfg.NetworkMeta.DNSServers = []string{"2606:4700:4700::1111"}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "must be IPv4") {
+		t.Fatalf("an IPv6 first resolver on a routed app should be refused, got: %v", err)
+	}
+
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1", "2606:4700:4700::1111"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("a v4 first resolver with a v6 second should pass, got: %v", err)
+	}
+}
+
+// One Via list resolves ONE gateway address and uses it for every CIDR on the list, so a v6
+// CIDR routed via a v4 gateway is rejected by `ip route` and the launch aborts.
+func TestVia_MixedFamiliesOnOneListRejected(t *testing.T) {
+	cfg := withList(schema.NetworkList{
+		AppName: "vpn", Via: true,
+		IPv4CIDR: []string{"0.0.0.0/0"}, IPv6CIDR: []string{"::/0"},
+	})
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1"}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "one Via list per family") {
+		t.Fatalf("a dual-family Via list should be refused, got: %v", err)
 	}
 }

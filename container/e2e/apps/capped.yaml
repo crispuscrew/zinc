@@ -1,0 +1,15 @@
+SchemaVersion: 2
+Type: ZincContainer
+AppNameID: capped
+Description: containment scenario - resource caps and a non-root user, read back from the kernel
+ImageMeta:
+  Image: localhost/zinc/e2e-app:local
+StartConditions:
+  Entrypoint: /capped.sh
+ResourcesMeta:
+  MaxRamMiB: 128
+  MaxSwapMiB: 32
+  PIDsLimit: 50
+InternalUserMeta:
+  UseNonRootUser: true
+  NonRootUserName: nobody

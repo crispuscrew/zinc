@@ -75,7 +75,7 @@ func TestE2E(t *testing.T) {
 	if err := os.MkdirAll(apps, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"sleeper", "producer", "consumer"} {
+	for _, name := range []string{"sleeper", "producer", "consumer", "capped", "slowdep", "waiter"} {
 		data, err := os.ReadFile(filepath.Join(here, "apps", name+".yaml"))
 		if err != nil {
 			t.Fatal(err)
@@ -89,7 +89,7 @@ func TestE2E(t *testing.T) {
 		filepath.Join(creator, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	t.Cleanup(func() {
-		for _, app := range []string{"consumer", "producer", "sleeper"} {
+		for _, app := range []string{"consumer", "producer", "sleeper", "waiter", "slowdep"} {
 			tool(zcr, "stop", app)
 			tool("podman", "pod", "rm", "-f", app+"-pod")
 			tool("podman", "rm", "-f", app)
@@ -172,6 +172,74 @@ func TestE2E(t *testing.T) {
 		}
 		if !strings.Contains(verdict, "9999=closed") {
 			t.Error("consumer should be DROPPED on the unpublished port 9999")
+		}
+	})
+
+	t.Run("containment", func(t *testing.T) {
+		// ResourcesMeta and InternalUserMeta were validated and dropped on the floor until
+		// 0.7. The runtime's unit tests prove the flags are emitted; only the kernel can say
+		// they took effect, so the app reports its own cgroup values and uid back through
+		// the logs. Rootless podman needs cgroup v2 delegation for any of this to be real -
+		// a host without it would give the app no limits and say nothing.
+		must(t, zc, "run", "capped", "--exec")
+		if !waitFor(func() bool { return running("capped") }) {
+			t.Fatal("capped should be running after `zc run --exec`")
+		}
+		defer func() { _, _ = tool(zc, "stop", "capped") }()
+
+		var out string
+		waitFor(func() bool {
+			out, _ = tool(zc, "logs", "capped")
+			return strings.Contains(out, "capped up")
+		})
+		t.Logf("capped reported:\n%s", out)
+
+		// 128 MiB, and swap on top of it rather than instead of it: --memory-swap is the
+		// total of the two, so a 128 MiB limit with 32 MiB of swap leaves a 32 MiB swap
+		// ceiling. Passing the swap figure through unsummed would have capped the app at
+		// 32 MiB of memory outright.
+		for _, want := range []string{
+			"UID=65534",            // nobody, not root
+			"MEMORY_MAX=134217728", // 128 MiB
+			"SWAP_MAX=33554432",    // 160 MiB total - 128 MiB memory
+			"PIDS_MAX=50",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("expected %q in the app's own report of what it was granted", want)
+			}
+		}
+	})
+
+	t.Run("readiness", func(t *testing.T) {
+		// DependsOn used to mean "running", and slowdep is the case where running is the
+		// wrong question: its container is up five seconds before the file its ReadyCheck
+		// looks for exists, the way a VPN container is up before its tunnel is. The launch
+		// of waiter must sit in that gap rather than start into it.
+		defer func() {
+			_, _ = tool(zc, "stop", "waiter")
+			_, _ = tool(zc, "stop", "slowdep")
+		}()
+
+		start := time.Now()
+		must(t, zc, "run", "waiter", "--exec")
+		waited := time.Since(start)
+
+		// The fixture sleeps 5s before declaring itself ready. Asserting against a floor
+		// well under that keeps the test honest about the wait without making it a race on
+		// a loaded machine.
+		if waited < 3*time.Second {
+			t.Errorf("launch returned after %s: waiter did not wait for slowdep's readiness", waited)
+		}
+		t.Logf("waiter's launch waited %s for slowdep", waited)
+
+		// The other half: the wait ended because the dependency became ready, not because
+		// it timed out and gave up. podman's own view is the one being waited on.
+		health, _ := tool("podman", "inspect", "--format", "{{.State.Health.Status}}", "slowdep")
+		if strings.TrimSpace(health) != "healthy" {
+			t.Errorf("slowdep health = %q, want healthy - the ReadyCheck is the container's healthcheck", strings.TrimSpace(health))
+		}
+		if !waitFor(func() bool { return running("waiter") }) {
+			t.Fatal("waiter should be running once its dependency is ready")
 		}
 	})
 }

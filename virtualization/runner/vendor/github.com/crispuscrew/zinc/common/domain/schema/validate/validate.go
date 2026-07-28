@@ -18,6 +18,7 @@ func Validate(cfg schema.AppConfig) error {
 	checkLifecycle(cfg, add)
 	checkInstall(cfg.ImageMeta.Install, add)
 	checkDepends(cfg.StartConditions.DependsOn, add)
+	checkReadiness(cfg.StartConditions, add)
 
 	// The two app types share their identity, lifecycle and setup rules above and diverge
 	// below: each rejects what the other's runtime cannot honour, so a field is never
@@ -31,7 +32,10 @@ func Validate(cfg schema.AppConfig) error {
 	checkVirtualizationUnset(cfg, add)
 	checkContainerImage(cfg.ImageMeta.Image, add)
 	checkResources(cfg.ResourcesMeta, add)
+	checkInternalUser(cfg.InternalUserMeta, add)
+	checkNotifications(cfg.NotificationMeta, add)
 
+	checkDNS(cfg.NetworkMeta, add)
 	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		checkNetworkList(index, netList, add)
 	}
@@ -79,6 +83,32 @@ func checkDepends(dependsOn []string, add addFunc) {
 	}
 }
 
+// maxReadyTimeoutSec is a day. Anything beyond it is a typo rather than a wait, and the
+// nanosecond duration the runner builds from it must not overflow.
+const maxReadyTimeoutSec = 86400
+
+// checkReadiness screens the readiness gate a dependent waits on. ReadyCheck is exec form
+// and reaches podman as one JSON argument, so it needs no quoting rules - only that every
+// word is a word. A timeout on its own is the inert-field case: nothing waits without a
+// probe to wait for, so the number would read as a bound that is not in force.
+func checkReadiness(start schema.StartConditions, add addFunc) {
+	for index, arg := range start.ReadyCheck {
+		if strings.TrimSpace(arg) == "" {
+			add("StartConditions.ReadyCheck[%d]: must not be empty", index)
+		}
+	}
+	// Bounded at both ends. The upper bound is not tidiness: the runner turns this into a
+	// time.Duration in nanoseconds, and a large enough value overflows to a NEGATIVE duration,
+	// so the deadline is already past and the wait would end on the first failed probe - a
+	// very long timeout silently becoming no timeout at all.
+	if start.ReadyTimeoutSec < 0 || start.ReadyTimeoutSec > maxReadyTimeoutSec {
+		add("StartConditions.ReadyTimeoutSec %d: must be between 0 and %d (0 = the runner's default)", start.ReadyTimeoutSec, maxReadyTimeoutSec)
+	}
+	if start.ReadyTimeoutSec > 0 && len(start.ReadyCheck) == 0 {
+		add("StartConditions.ReadyTimeoutSec %d: has no effect without ReadyCheck - with no probe, a dependency counts as ready once it is running and nothing waits", start.ReadyTimeoutSec)
+	}
+}
+
 // checkNetworkCapabilities forbids network-administration capabilities on a filtered
 // app. A filtered app (one with NetworkLists) runs inside the pod whose network
 // namespace carries the nftables egress lock-down; granting CAP_NET_ADMIN (or the
@@ -116,6 +146,19 @@ func checkIdentity(cfg schema.AppConfig, add addFunc) {
 		add("AppNameID: must not be empty")
 	case !nameRE.MatchString(cfg.AppNameID):
 		add("AppNameID %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", cfg.AppNameID)
+	}
+
+	// Inherits is joined into a store path to find the base, so it is held to the same
+	// charset as the names above - a "../.." value would read a config from outside the apps
+	// directory. The resolver enforces this too, since it is the one doing the join; this is
+	// the copy that tells an author at save time rather than at launch.
+	if base := strings.TrimSpace(cfg.Inherits); base != "" {
+		switch {
+		case !nameRE.MatchString(base):
+			add("Inherits %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", base)
+		case base == strings.TrimSpace(cfg.AppNameID):
+			add("Inherits %q: an app cannot inherit from itself", base)
+		}
 	}
 
 	// NonRootUserName becomes `podman --user`; keep it a safe charset.
@@ -170,6 +213,42 @@ func checkResources(res schema.ResourcesMeta, add addFunc) {
 	if res.PIDsLimit < 0 {
 		add("ResourcesMeta.PIDsLimit %d: must be >= 0 (0 = unlimited)", res.PIDsLimit)
 	}
+	// A swap allowance on its own has no meaning to enforce. The runtime tells podman the
+	// TOTAL of memory and swap, because that is the only figure podman takes, and with no
+	// memory limit there is no total to state - podman would either refuse the flag or read
+	// the swap figure as the app's whole memory ceiling, which is the opposite of what
+	// asking for swap means. Naming the missing field beats either.
+	if res.MaxSwapMiB > 0 && res.MaxRamMiB <= 0 {
+		add("ResourcesMeta.MaxSwapMiB %d: needs MaxRamMiB set too - swap is allowed on top of the memory limit, so without one there is nothing to add it to",
+			res.MaxSwapMiB)
+	}
+}
+
+// checkInternalUser screens who the app runs as. Both halves have to agree: the runtime
+// passes the name to podman, so asking for a non-root user without naming one leaves
+// nothing to pass, and naming one without asking leaves a field that reads as if it were in
+// force. Either way the config would say something the launch does not do, which is the
+// whole reason these fields were worth wiring up.
+func checkInternalUser(user schema.InternalUserMeta, add addFunc) {
+	if user.UseNonRootUser && strings.TrimSpace(user.NonRootUserName) == "" {
+		add("InternalUserMeta.UseNonRootUser: set NonRootUserName too - the user is passed to podman by name, and it must exist in the image")
+	}
+	if !user.UseNonRootUser && strings.TrimSpace(user.NonRootUserName) != "" {
+		add("InternalUserMeta.NonRootUserName %q: has no effect without UseNonRootUser", user.NonRootUserName)
+	}
+}
+
+// checkNotifications fails closed on a block that is defined and does nothing. Zinc has no
+// notification path yet - nothing proxies, silences or prefixes an app's notifications - so
+// every field here is inert. Silently accepting Silenced would tell an author their app is
+// muted while it notifies freely, and the honest answer for an unimplemented mechanism is to
+// refuse the config rather than mis-enforce it. The zero value stays legal, so an app that
+// never touched the block is unaffected.
+func checkNotifications(notify schema.NotificationMeta, add addFunc) {
+	if notify == (schema.NotificationMeta{}) {
+		return
+	}
+	add("NotificationMeta: not implemented - Zinc does not proxy or filter app notifications yet, so none of these fields would be enforced; leave the block at its defaults")
 }
 
 // Warnings returns non-fatal create-time advisories (zc); nothing here blocks save or

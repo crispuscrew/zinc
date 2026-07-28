@@ -54,8 +54,9 @@ before it starts:
 - ingress publish: expose the app's own ports to the LAN, filtered by source
 - sibling link: a private internal bridge between two apps, gated per-port
 
-Not yet supported (rejected, not run): host-scoped egress, gateway / multi-homing, and
-combining a sibling link with other networking on one app.
+Not yet supported (rejected, not run): host-scoped egress and gateway /
+multi-homing. (Combining a sibling link with other networking on one app is supported now -
+that is what routing through a VPN container is made of.)
 
 This is the container network model. A **VM app** does not get it - nftables in a container's
 own network namespace does not reach a guest kernel - so rather than mis-enforce it, a guest
@@ -96,6 +97,11 @@ zc tui                        # keyboard-first manager: create / edit / run / st
 # find and pin an image (third-party images must be digest-pinned)
 zc image search alpine
 zc image resolve alpine:3.20  # gives docker.io/library/alpine@sha256:... to paste in
+
+# compose interop, both ways. Lossy in both directions, and it prints exactly how:
+# exporting cannot carry the egress lock-down, importing invents no network access.
+zc compose export firefox -o compose.yaml
+zc compose import ./stack.yaml --dry-run   # one app per service; --service picks one
 
 # run: zc forwards these to zcr. run without --exec prints the podman plan first
 zc run firefox --exec

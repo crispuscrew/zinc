@@ -101,7 +101,7 @@ func loadApps() ([]tui.App, error) {
 	apps := make([]tui.App, 0, len(names))
 	for _, name := range names {
 		app := tui.App{Name: name}
-		if cfg, err := sto.Load(name); err == nil {
+		if cfg, err := sto.LoadResolved(name); err == nil {
 			app.Description = cfg.Description
 		}
 		apps = append(apps, app)

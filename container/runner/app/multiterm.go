@@ -113,15 +113,18 @@ func (svc Service) ensureHolder(cfg schema.AppConfig, opt options.HostOptions) e
 	if svc.runtime.Exists(cfg.AppNameID) {
 		return nil
 	}
-	steps := svc.net.Prepare(cfg, opt)
+	steps, err := svc.net.Prepare(cfg, opt)
+	if err != nil {
+		return err // nothing created yet, so there is nothing to tear down
+	}
 	for _, cmd := range steps {
 		if err := svc.runtime.Exec(cmd); err != nil {
 			return errors.Join(fmt.Errorf("start %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
 		}
 	}
-	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, svc.net.RunFlags(cfg))
-	if err != nil {
-		return errors.Join(err, svc.teardown(cfg, len(steps) > 0))
+	appArgs, aerr := svc.runtime.AppRunArgs(cfg, opt, svc.net.RunFlags(cfg))
+	if aerr != nil {
+		return errors.Join(aerr, svc.teardown(cfg, len(steps) > 0))
 	}
 	if err := svc.runtime.Exec(ports.Command{Args: appArgs, Desc: "start holder"}); err != nil {
 		return errors.Join(fmt.Errorf("start %s holder: %w", cfg.AppNameID, err), svc.teardown(cfg, len(steps) > 0))
