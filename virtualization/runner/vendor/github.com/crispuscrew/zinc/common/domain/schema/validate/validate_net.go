@@ -62,6 +62,31 @@ func checkNetworkList(index int, netList schema.NetworkList, add addFunc) {
 	checkGateway(index, netList, self, add)
 }
 
+// checkTunnel screens the WireGuard interface Zinc builds for an app. The file's own contents
+// are the runner's business - it parses them at launch, where a bad line can name its line
+// number - so this checks only what the schema can: that the path is usable, and that the app
+// is one a tunnel can be built for.
+func checkTunnel(cfg schema.AppConfig, add addFunc) {
+	tunnel := cfg.NetworkMeta.Tunnel
+	if tunnel.IsZero() {
+		return
+	}
+	path := strings.TrimSpace(tunnel.WireGuardConf)
+	switch {
+	case !strings.HasPrefix(path, "/"):
+		// Resolved by the runner, which runs from wherever it was invoked - a relative path
+		// would name a different file depending on the caller's directory.
+		add("NetworkMeta.Tunnel.WireGuardConf %q: must be an absolute path", path)
+	case hasUnsafe(path):
+		add("NetworkMeta.Tunnel.WireGuardConf %q: must be a single-line path (no whitespace or control characters)", path)
+	}
+	if len(cfg.NetworkMeta.NetworkLists) == 0 {
+		// An app with no lists gets --network none: no namespace to build an interface in,
+		// and nothing for the tunnel to carry.
+		add("NetworkMeta.Tunnel: needs at least one NetworkList - an app with none runs with no network at all, so there is nothing to build a tunnel in")
+	}
+}
+
 // checkForwarding screens a gateway's agreement to route for its siblings. ForwardPorts is
 // the gateway's half of the bound - what it will carry - and is meaningless without the
 // agreement itself, so a value there with no Forward would read as a restriction on

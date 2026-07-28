@@ -499,6 +499,36 @@ A gateway's **own** egress rules deliberately do not bound what it forwards. The
 sent it. The `forward` hook is a separate chain from `output`, so the two never see each
 other's rules - that is a design line, not an oversight.
 
+**Zinc builds the tunnel, so the app never holds the capability that builds it.**
+`NetworkMeta.Tunnel.WireGuardConf` points at a wg-quick-format config; the runner reads it at
+launch, creates `wg0` inside the app's netns, applies the config, assigns the addresses and
+routes the peers' `AllowedIPs` into it - all in the same privileged helper that already
+installs routes and loads the ruleset, and all before the app exists.
+
+That split is the whole reason this exists. A tunnel needs `CAP_NET_ADMIN` to create, and an
+app with `NetworkLists` may never hold it: `NET_ADMIN` in the pod netns would let the app
+flush the ruleset that contains it, so validation refuses the pairing. Which meant a gateway
+could be a NAT hop and never an actual tunnel endpoint. Now the capability lives in a
+container that has exited by the time the app starts, and the app inherits a working tunnel
+with an empty capability set (measured: `CapEff: 0000000000000000`, a completed handshake,
+and traffic crossing).
+
+Three details that are not incidental:
+
+- **The private key travels on the helper's stdin**, the same channel the nft ruleset uses.
+  Not in an argv - every process on the host can read that out of `/proc` - not in an image,
+  and not in a mount the app could open.
+- **The endpoint keeps its pre-tunnel route.** Before the peers' `AllowedIPs` are routed into
+  `wg0`, each peer endpoint is pinned to whatever the namespace already routed by. Without
+  that, a `AllowedIPs = 0.0.0.0/0` config would send the encrypted packets carrying the
+  tunnel into the tunnel. It is also why an `Endpoint` must be an address and not a name: the
+  pin happens before the namespace closes, and a name could resolve elsewhere by then.
+- **wg-quick's script directives are refused, not ignored** - `PostUp`, `PreUp`, `PostDown`,
+  `PreDown`, `SaveConfig`, `Table`. The first four are arbitrary shell and the helper that
+  would run them holds `NET_ADMIN` in the app's namespace; a config file is not a place to
+  accept code from. `DNS` is refused too: `NetworkMeta.DNSServers` is the one place to say
+  that, and two would disagree.
+
 **Gateways chain.** The forward chain accepts out of every interface the gateway's own routes
 can use - its egress bridge, and any link it is itself routed through - with `masquerade`
 following onto each. So a hop can pass its clients' traffic onward into another gateway

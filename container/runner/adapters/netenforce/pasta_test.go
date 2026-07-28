@@ -1,6 +1,8 @@
 package netenforce
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -709,5 +711,122 @@ func TestForward_ChainsIntoAnUpstreamSibling(t *testing.T) {
 	// must not claim one.
 	if strings.Contains(ruleset, "zegress0") {
 		t.Errorf("a pure relay has no egress bridge to name:\n%s", ruleset)
+	}
+}
+
+// tunnelApp writes a wg config to a temp file and returns an app that uses it.
+func tunnelApp(t *testing.T, extra ...schema.NetworkList) schema.AppConfig {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "wg.conf")
+	conf := "[Interface]\nPrivateKey = SECRETKEYVALUE\nAddress = 10.9.0.2/24\nMTU = 1420\n" +
+		"[Peer]\nPublicKey = peerkey\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 0.0.0.0/0\n"
+	if err := os.WriteFile(path, []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := pastaApp()
+	cfg.AppNameID = "tun"
+	cfg.NetworkMeta.Tunnel = schema.TunnelMeta{WireGuardConf: path}
+	cfg.NetworkMeta.NetworkLists = append([]schema.NetworkList{
+		{IPv4CIDR: []string{"203.0.113.7/32"}, Ports: []int{51820}},
+	}, extra...)
+	return cfg
+}
+
+// The point of the feature: Zinc builds the interface, so the APP never holds the capability
+// that builds it. The privileged helper is a separate container that is gone before the app
+// starts.
+func TestTunnel_BuiltByTheHelperNotTheApp(t *testing.T) {
+	cfg := tunnelApp(t)
+	steps := prepare(t, cfg, options.HostOptions{})
+
+	var step ports.Command
+	for _, candidate := range steps {
+		if strings.Contains(candidate.Desc, "wireguard") {
+			step = candidate
+		}
+	}
+	if step.Desc == "" {
+		t.Fatalf("no tunnel step in %v", steps)
+	}
+	argv := strings.Join(step.Args, " ")
+	if !strings.Contains(argv, "--cap-add NET_ADMIN") || !strings.Contains(argv, "--cap-drop all") {
+		t.Errorf("the helper needs exactly NET_ADMIN and nothing else: %s", argv)
+	}
+	// The private key must not be an argument: /proc makes every argv on the host readable.
+	if strings.Contains(argv, "SECRETKEYVALUE") {
+		t.Fatalf("the private key must never reach the argv: %s", argv)
+	}
+	if !strings.Contains(step.Stdin, "SECRETKEYVALUE") {
+		t.Errorf("the key should travel on stdin, got stdin %q", step.Stdin)
+	}
+	// wg-quick's own keys must not reach `wg setconf`, which rejects them.
+	if strings.Contains(step.Stdin, "Address") || strings.Contains(step.Stdin, "MTU") {
+		t.Errorf("Address/MTU must be applied as ip commands, not passed to setconf: %q", step.Stdin)
+	}
+	for _, want := range []string{
+		"ip link add wg0 type wireguard",
+		"wg setconf wg0 /dev/stdin",
+		"ip address add 10.9.0.2/24 dev wg0",
+		"ip link set mtu 1420 dev wg0",
+		"ip link set wg0 up",
+		"ip route replace default dev wg0",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("tunnel script missing %q:\n%s", want, argv)
+		}
+	}
+	// The endpoint must keep its pre-tunnel route, or the packets carrying the tunnel would
+	// be sent into it.
+	if !strings.Contains(argv, "ip route replace 203.0.113.7/32 via") {
+		t.Errorf("the endpoint must be pinned outside the tunnel:\n%s", argv)
+	}
+}
+
+// The tunnel goes up while the namespace is still open - the handshake is real traffic - and
+// the ruleset that closes it comes after. Both are still before the app.
+func TestTunnel_BuiltBeforeTheRulesetLocksTheNetns(t *testing.T) {
+	steps := prepare(t, tunnelApp(t), options.HostOptions{})
+	tunnelAt, lockAt := -1, -1
+	for index, step := range steps {
+		switch {
+		case strings.Contains(step.Desc, "wireguard"):
+			tunnelAt = index
+		case strings.Contains(step.Desc, "lock netns"):
+			lockAt = index
+		}
+	}
+	if tunnelAt < 0 || lockAt < 0 || tunnelAt > lockAt {
+		t.Fatalf("tunnel must be built before the lock, got tunnel=%d lock=%d", tunnelAt, lockAt)
+	}
+}
+
+// The app's own traffic into the tunnel has to be accepted: the output chain default-drops,
+// and what rides the tunnel is already bounded by the peers' AllowedIPs.
+func TestTunnel_AcceptedInTheOutputChain(t *testing.T) {
+	if ruleset := NFTRuleset(tunnelApp(t)); !strings.Contains(ruleset, `oifname "wg0" accept`) {
+		t.Errorf("the tunnel must be accepted outbound:\n%s", ruleset)
+	}
+}
+
+// A gateway with a tunnel exists to send its clients into it, so the tunnel is an exit for
+// forwarded traffic and needs NAT like any other.
+func TestTunnel_IsAForwardExitForAGateway(t *testing.T) {
+	cfg := tunnelApp(t, schema.NetworkList{Ingress: true, Forward: true})
+	ruleset := NFTRuleset(cfg)
+	if !strings.Contains(ruleset, `oifname "wg0" accept`) {
+		t.Errorf("clients must be forwarded into the tunnel:\n%s", ruleset)
+	}
+	if !strings.Contains(ruleset, `oifname "wg0" masquerade`) {
+		t.Errorf("forwarded traffic entering the tunnel needs NAT:\n%s", ruleset)
+	}
+}
+
+// A missing or malformed config fails the launch rather than starting an app whose tunnel
+// silently does not exist.
+func TestTunnel_BadConfigFailsTheLaunch(t *testing.T) {
+	cfg := pastaApp()
+	cfg.NetworkMeta.Tunnel = schema.TunnelMeta{WireGuardConf: "/nonexistent/wg.conf"}
+	if _, err := (Enforcer{}).Prepare(cfg, options.HostOptions{}); err == nil {
+		t.Fatal("a missing tunnel config must fail the launch")
 	}
 }

@@ -9,6 +9,32 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- **`NetworkMeta.Tunnel`: Zinc builds an app's WireGuard interface, so the app never holds
+  the capability that builds it.** A tunnel needs `CAP_NET_ADMIN` to create, and an app with
+  `NetworkLists` may never hold it - `NET_ADMIN` in the pod netns would let the app flush the
+  ruleset that contains it, so validation refuses the pairing. The consequence, until now,
+  was that a "VPN container" could only ever be a NAT hop: nothing in Zinc could be an actual
+  tunnel endpoint.
+  Point `WireGuardConf` at a wg-quick-format config and the runner creates `wg0` in the app's
+  netns, applies it, assigns the addresses and routes the peers' `AllowedIPs` into it - in
+  the same privileged helper that already installs routes and loads the ruleset, and before
+  the app exists. Measured end to end against a real WireGuard peer: handshake completed,
+  3/3 pings across the tunnel, and the app reporting `CapEff: 0000000000000000`.
+  The private key travels on the helper's stdin, the channel the nft ruleset already uses -
+  not an argv, which every process on the host can read out of `/proc`, not an image, not a
+  mount the app could open. Each peer endpoint is pinned to its pre-tunnel route first, or an
+  `AllowedIPs = 0.0.0.0/0` config would send the encrypted packets carrying the tunnel into
+  the tunnel; that is also why an `Endpoint` must be an address rather than a name, since the
+  pin happens before the namespace closes.
+  wg-quick's script directives are refused rather than run - `PostUp`, `PreUp`, `PostDown`,
+  `PreDown`, `SaveConfig`, `Table`. The helper that would run them holds `NET_ADMIN` in the
+  app's namespace, and a config file is not a place to accept code from. `DNS` is refused
+  too, because `NetworkMeta.DNSServers` is already the one place to say it. The parser rejects
+  unknown keys outright: this file decides what an app can reach, and a typo in it must not
+  quietly widen or narrow that.
+  The netfilter helper image gains `iproute2` and `wireguard-tools` (busybox `ip` cannot
+  create a wireguard link).
+
 - **`NetworkList.ForwardPorts`: a gateway bounds what it carries.** A forwarding app's
   `forward` chain was a blanket accept - `iifname zlink0 oifname zegress0 accept`, no
   destination, no port - so a client routed through a gateway reached anything on any port.

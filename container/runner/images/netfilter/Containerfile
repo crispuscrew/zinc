@@ -1,4 +1,5 @@
-# Minimal helper image carrying nft, for the pasta network lock-down init step
+# Minimal helper image carrying nft - and the tools to build a WireGuard interface - for the
+# privileged init steps that run in the app pod's network namespace before the app
 # (docs/architecture.md 5.3). It runs once per launch inside the app pod's network
 # namespace (with namespaced CAP_NET_ADMIN), loads the ruleset zcr pipes in on
 # stdin, and exits - the rules persist in the pod netns for the app that starts
@@ -16,7 +17,11 @@ FROM docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9b
 # Pinned to the version in the pinned base's repo (alpine v3.22/main) for
 # reproducibility - this image runs with CAP_NET_ADMIN and writes the egress
 # ruleset. apk resolves the dep tree, so only the top-level package is pinned.
-RUN apk add --no-cache nftables=1.1.3-r0
+# iproute2 and wireguard-tools are here for the tunnel step: Zinc creates and configures the
+# app's WireGuard interface itself, in this helper, so the APP never needs CAP_NET_ADMIN -
+# which it may not have anyway, since NET_ADMIN in the pod netns would let it flush the very
+# ruleset that contains it. busybox's `ip` cannot create a wireguard link, hence iproute2.
+RUN apk add --no-cache nftables=1.1.3-r0 iproute2 wireguard-tools
 
 # No ENTRYPOINT: zcr invokes `nft -f -` explicitly (the netenforce adapter builds
 # the apply args).

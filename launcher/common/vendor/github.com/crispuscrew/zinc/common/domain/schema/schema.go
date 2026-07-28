@@ -1,5 +1,7 @@
 package schema
 
+import "strings"
+
 // SchemaVersion is the only app-config schema version this build understands.
 const SchemaVersion = 2
 
@@ -267,9 +269,40 @@ type DisplayMeta struct {
 	DisableGpuAccess       bool `yaml:"DisableGpuAccess"`
 }
 
+// TunnelMeta gives an app a WireGuard interface that ZINC creates and configures in the
+// app's network namespace before the app starts - not the app itself.
+//
+// That split is the whole point. A tunnel needs CAP_NET_ADMIN to exist, and an app with
+// NetworkLists may never hold it: NET_ADMIN in the pod netns would let the app flush the
+// egress ruleset that contains it, so validation refuses the combination. Which meant a
+// gateway could be a NAT hop and never an actual tunnel endpoint. Zinc builds the interface
+// in the same privileged helper that already installs routes and loads the ruleset, and it
+// is gone before the app exists - so the app inherits a working tunnel and still holds no
+// capability at all.
+type TunnelMeta struct {
+	// WireGuardConf is a host path to a wg-quick-format config: the [Interface] and [Peer]
+	// sections a VPN provider hands out. Zinc reads it at launch and applies it inside the
+	// netns; the private key travels on the helper's STDIN, so it never appears in an
+	// argument list, an image, or a mount the app could read.
+	//
+	// The wg-quick script directives are refused rather than run - PostUp, PreUp, PostDown,
+	// PreDown, SaveConfig and Table. The first four are arbitrary shell, and the helper that
+	// would run them holds NET_ADMIN in the app's namespace; a config file is not a place to
+	// accept code from. DNS is refused too, because Zinc already has one place to say that
+	// and two would disagree: use NetworkMeta.DNSServers.
+	WireGuardConf string `yaml:"WireGuardConf"`
+}
+
+// IsZero reports whether no tunnel was asked for.
+func (tunnel TunnelMeta) IsZero() bool { return strings.TrimSpace(tunnel.WireGuardConf) == "" }
+
 type NetworkMeta struct {
 	// The first entry is priority
 	NetworkLists []NetworkList `yaml:"NetworkLists"`
+
+	// Tunnel, when set, is a WireGuard interface Zinc creates in the app's netns before the
+	// app starts. See TunnelMeta - the app never holds the capability that builds it.
+	Tunnel TunnelMeta `yaml:"Tunnel"`
 
 	// DNSServers are the resolvers the app is given, and the only ones it may reach.
 	//

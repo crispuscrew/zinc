@@ -167,6 +167,16 @@ func (enf Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) ([]po
 	// Routes first, rules second: resolving the gateway needs DNS, and the ruleset that
 	// follows closes the netns. Both are done before the app starts, so the app still never
 	// sees an unlocked network.
+	// The tunnel goes up before the routes that may point into it, and both before the
+	// ruleset - building it needs the netns open (the handshake is real traffic), and the
+	// ruleset is what closes it. All of it still happens before the app exists.
+	tunnelStep, err := tunnelCommand(cfg, image)
+	if err != nil {
+		return nil, err
+	}
+	if tunnelStep != nil {
+		steps = append(steps, *tunnelStep)
+	}
 	steps = append(steps, routeCommands(cfg, image)...)
 	return append(steps,
 		ports.Command{Args: nftApplyArgs(pod, image), Stdin: NFTRuleset(cfg), Desc: "lock netns with nft (before app)"},
@@ -343,6 +353,12 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	for _, entry := range linkEntries {
 		fmt.Fprintf(&bld, "\t\toifname %q accept\n", entry.iface)
 	}
+	// The tunnel is accepted as a whole, like a link bridge and for the same reason: what
+	// rides it is already bounded, here by the peers' AllowedIPs, and the app cannot reach
+	// anything through it that the tunnel does not carry.
+	if hasTunnel(cfg) {
+		fmt.Fprintf(&bld, "\t\toifname %q accept\n", tunnelIface)
+	}
 	for _, netList := range egress {
 		verdict := verdictFor(netList)
 		writeRules(&bld, "ip", netList.IPv4CIDR, netList.Ports, verdict)
@@ -468,6 +484,11 @@ func forwardPorts(cfg schema.AppConfig) []int {
 // egress bridge and drop everything the gateway's own Via routes sent to a link.
 func forwardExits(cfg schema.AppConfig) []string {
 	var exits []string
+	if hasTunnel(cfg) {
+		// First: a gateway with a tunnel exists to send its clients into it, and a rule list
+		// is read in order.
+		exits = append(exits, tunnelIface)
+	}
 	if needsOwnEgress(cfg) {
 		exits = append(exits, egressIface)
 	}
