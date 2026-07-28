@@ -9,6 +9,7 @@
 package podman
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -185,6 +186,7 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 	// with the capability drop rather than among the optional wiring below.
 	args = append(args, userArgs(cfg.InternalUserMeta)...)
 	args = append(args, resourceArgs(cfg.ResourcesMeta)...)
+	args = append(args, healthArgs(cfg.StartConditions)...)
 
 	// Network attachment is the enforcer's decision (section 5.3) - we only splice it in.
 	args = append(args, netFlags...)
@@ -303,6 +305,47 @@ func userArgs(user schema.InternalUserMeta) []string {
 		args = append(args, "--user", user.NonRootUserName)
 	}
 	return args
+}
+
+// healthArgs installs StartConditions.ReadyCheck as the container's healthcheck, which is
+// what a dependent's readiness wait probes (HealthProbeArgs). Reusing podman's healthcheck
+// rather than exec'ing the probe ourselves means the answer is recorded in container state:
+// `podman ps` shows the result of the last probe for the same command the launch sequence
+// waits on, instead of a readiness notion only the runner knows about. A snapshot, not
+// monitoring - see the interval below.
+//
+// The command is passed in podman's JSON exec form, ["CMD", ...], so it runs directly with
+// the author's words as argv. The string form would be handed to a shell inside the
+// container, where an argument with a space or a quote in it means something other than
+// itself.
+//
+// The interval is disabled because the check is driven on demand: podman would otherwise
+// schedule a transient systemd timer per app and exec into the container forever after,
+// for an answer that matters at one moment - when something is waiting to start behind it.
+// A manual `podman healthcheck run` updates the recorded state just the same. The trade is
+// that the state in `podman ps` is the last probe's answer rather than a live one, which is
+// the right trade for a start-order gate and the wrong one for monitoring.
+func healthArgs(start schema.StartConditions) []string {
+	if len(start.ReadyCheck) == 0 {
+		return nil
+	}
+	probe, err := json.Marshal(append([]string{"CMD"}, start.ReadyCheck...))
+	if err != nil { // unreachable: a []string always marshals
+		return nil
+	}
+	return []string{"--health-cmd", string(probe), "--health-interval", "disable"}
+}
+
+// HealthProbeArgs builds `podman healthcheck run <name>`: run the container's healthcheck
+// once, now, and exit 0 only if it passed. This is the readiness probe the app layer polls.
+func HealthProbeArgs(name string) []string { return []string{"healthcheck", "run", name} }
+
+// HealthProbe runs the app's healthcheck once and reports whether it passed. A container
+// that does not exist yet is a failed probe rather than a special case: a dependency is
+// started detached, so "no such container" is the ordinary first answer during the moment
+// the caller is waiting through, and it stops being the answer on its own.
+func (rt Runtime) HealthProbe(name string) error {
+	return rt.Exec(ports.Command{Args: HealthProbeArgs(name), Desc: "readiness probe for " + name})
 }
 
 // resourceArgs caps what one app may take from the machine. A container with no limits can

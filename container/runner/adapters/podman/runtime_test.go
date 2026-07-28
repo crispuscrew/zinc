@@ -446,3 +446,41 @@ func TestAppRunArgs_NoCapsNoFlags(t *testing.T) {
 		mustNotContain(t, got, flag)
 	}
 }
+
+// A readiness probe becomes the container's healthcheck, in podman's JSON exec form. The
+// string form would be run through a shell inside the container, where an argument with a
+// space in it stops meaning itself; the exec form passes the author's words as argv.
+func TestAppRunArgs_ReadyCheckBecomesHealthcheck(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID: "vpn",
+		ImageMeta: schema.ImageMeta{Image: "localhost/vpn:local"},
+		StartConditions: schema.StartConditions{
+			ReadyCheck: []string{"sh", "-c", "ip link show wg0 | grep -q UP"},
+		},
+	}
+	got := appArgs(t, cfg, baseOpts(), netNone())
+
+	assertContainsSeq(t, got, "--health-cmd", `["CMD","sh","-c","ip link show wg0 | grep -q UP"]`)
+	// The check is run on demand by the readiness wait. Left on its default interval podman
+	// would also schedule a transient timer per app and exec into the container forever.
+	assertContainsSeq(t, got, "--health-interval", "disable")
+}
+
+// No ReadyCheck, no healthcheck: an app that never asked for one must get the argv it
+// always got.
+func TestAppRunArgs_NoReadyCheckNoHealthFlags(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID: "app",
+		ImageMeta: schema.ImageMeta{Image: "localhost/app:local"},
+	}
+	got := appArgs(t, cfg, baseOpts(), netNone())
+	mustNotContain(t, got, "--health-cmd")
+	mustNotContain(t, got, "--health-interval")
+}
+
+// The probe the app layer polls: one run of the container's own healthcheck, now.
+func TestHealthProbeArgs(t *testing.T) {
+	if got := HealthProbeArgs("vpn"); !slices.Equal(got, []string{"healthcheck", "run", "vpn"}) {
+		t.Fatalf("HealthProbeArgs = %v", got)
+	}
+}

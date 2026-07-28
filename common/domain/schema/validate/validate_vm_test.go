@@ -438,3 +438,14 @@ func TestVM_MacAddressScreened(t *testing.T) {
 		})
 	}
 }
+
+// A readiness probe runs as the container's healthcheck. There is no way to run a command
+// inside a guest from outside it, so on a VM app the field would be inert.
+func TestVM_ReadyCheckRejected(t *testing.T) {
+	cfg := baseVM()
+	cfg.StartConditions.ReadyCheck = []string{"true"}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "StartConditions.ReadyCheck") {
+		t.Fatalf("ReadyCheck on a VM app: want a not-supported error, got: %v", err)
+	}
+}

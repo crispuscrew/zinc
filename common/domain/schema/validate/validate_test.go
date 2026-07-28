@@ -146,3 +146,37 @@ func TestNotifications_RefusedUntilImplemented(t *testing.T) {
 		t.Fatalf("an untouched notification block should pass, got: %v", err)
 	}
 }
+
+// The readiness gate: a probe is exec form and every word must be a word, and a timeout
+// with no probe is the inert-field case - nothing waits, so the number would read as a
+// bound that is not in force.
+func TestReadyCheck_ProbeAndTimeoutAgree(t *testing.T) {
+	empty := baseCfg()
+	empty.StartConditions.ReadyCheck = []string{"test", ""}
+	err := Validate(empty)
+	if err == nil || !strings.Contains(err.Error(), "ReadyCheck[1]") {
+		t.Fatalf("an empty word in ReadyCheck: want a ReadyCheck error, got: %v", err)
+	}
+
+	orphan := baseCfg()
+	orphan.StartConditions.ReadyTimeoutSec = 30
+	err = Validate(orphan)
+	if err == nil || !strings.Contains(err.Error(), "no effect without ReadyCheck") {
+		t.Fatalf("a timeout with no probe: want a no-effect error, got: %v", err)
+	}
+
+	negative := baseCfg()
+	negative.StartConditions.ReadyCheck = []string{"true"}
+	negative.StartConditions.ReadyTimeoutSec = -1
+	err = Validate(negative)
+	if err == nil || !strings.Contains(err.Error(), "ReadyTimeoutSec") {
+		t.Fatalf("a negative timeout: want a ReadyTimeoutSec error, got: %v", err)
+	}
+
+	both := baseCfg()
+	both.StartConditions.ReadyCheck = []string{"sh", "-c", "ip link show wg0 | grep -q UP"}
+	both.StartConditions.ReadyTimeoutSec = 90
+	if err := Validate(both); err != nil {
+		t.Fatalf("a probe with a timeout should pass, got: %v", err)
+	}
+}

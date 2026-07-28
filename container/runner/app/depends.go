@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
@@ -12,9 +13,10 @@ import (
 // startDependencies brings up everything cfg needs before cfg itself launches (docs
 // section 6.6: "auto-starts dependencies first"). Each name in StartConditions.DependsOn
 // that is not already running is loaded from the store and launched first,
-// depth-first, so a dependency's own dependencies come up before it. An
-// already-running dependency is left untouched. A dependency cycle is reported as an
-// error rather than recursed into forever.
+// depth-first, so a dependency's own dependencies come up before it, and then - if it
+// declares a ReadyCheck - waited for until it says it is ready. An already-running
+// dependency is left untouched. A dependency cycle is reported as an error rather than
+// recursed into forever.
 //
 // chain is the stack of apps currently mid-launch (root → cfg's parent); cfg is
 // appended before recursing, so a name reappearing in it is a cycle.
@@ -47,8 +49,61 @@ func (svc Service) startDependencies(cfg schema.AppConfig, opt options.HostOptio
 			return fmt.Errorf("starting dependency %q of %s: %w", dep, cfg.AppNameID, err)
 		}
 		running[dep] = true // so a name listed twice is not started twice
+		if err := svc.waitReady(depCfg, cfg.AppNameID); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// readyPollInterval is the gap between readiness probes. Each probe execs into the
+// dependency's container, so this trades a little startup latency against not hammering a
+// container that is busy doing the very thing being waited for.
+var readyPollInterval = 500 * time.Millisecond
+
+// defaultReadyTimeout bounds a wait whose app did not set StartConditions.ReadyTimeoutSec.
+// Long enough for a VPN handshake over a slow link, short enough that a dependency which is
+// never going to be ready fails the launch with a message instead of hanging.
+const defaultReadyTimeout = 60 * time.Second
+
+// waitReady holds the launch of dependent until depCfg reports itself ready, and fails the
+// launch if it does not within its timeout. An app with no ReadyCheck is ready as soon as it
+// is running, which is what DependsOn meant before and still means for most apps.
+//
+// The failure is deliberately fatal rather than a warning that lets the dependent start
+// anyway. The case this exists for is a gateway: a client routed through a sibling has that
+// sibling as its default route and its DNS, so starting it before the tunnel is up gives it
+// no working network at all - fail closed and say which dependency was not ready, rather
+// than start an app whose every connection will fail for a reason nothing reported.
+//
+// Only a dependency this launch started is waited on. One that was already running was
+// either gated the same way by whoever started it, or started by hand, and re-probing it
+// would turn every launch behind a momentarily-unhealthy dependency into a failure rather
+// than the start-order race this closes.
+//
+// A dependency that failed to become ready is left running, like every other dependency an
+// aborted launch had already started. Its logs are how an author finds out why it never came
+// up, and stopping it would also stop it for anything else already routed through it.
+func (svc Service) waitReady(depCfg schema.AppConfig, dependent string) error {
+	if len(depCfg.StartConditions.ReadyCheck) == 0 {
+		return nil
+	}
+	timeout := defaultReadyTimeout
+	if seconds := depCfg.StartConditions.ReadyTimeoutSec; seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		err := svc.runtime.HealthProbe(depCfg.AppNameID)
+		if err == nil {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("%s: dependency %q was not ready within %s: %w",
+				dependent, depCfg.AppNameID, timeout, err)
+		}
+		time.Sleep(readyPollInterval)
+	}
 }
 
 // checkNetwork fails closed on NetworkLists this build cannot enforce yet. Supported:

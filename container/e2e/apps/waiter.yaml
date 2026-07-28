@@ -1,0 +1,10 @@
+SchemaVersion: 2
+Type: ZincContainer
+AppNameID: waiter
+Description: readiness scenario - must not start until slowdep says it is ready
+ImageMeta:
+  Image: localhost/zinc/e2e-app:local
+StartConditions:
+  Entrypoint: /sleeper.sh
+  DependsOn:
+    - slowdep

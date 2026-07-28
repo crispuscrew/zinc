@@ -9,6 +9,27 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- **`StartConditions.ReadyCheck`: `DependsOn` can wait for ready, not just for running.** A
+  dependency counted as up the moment its container was, which is true enough for a service
+  whose process is its readiness and false for anything a dependent routes through. A VPN
+  container is running long before its tunnel is, and a client started in that window comes up
+  with a default route and a resolver pointing at a gateway that cannot forward yet - it fails
+  closed, but it fails, and nothing says why.
+  `ReadyCheck` is a command in exec form (`["sh", "-c", "ip link show wg0 | grep -q UP"]`),
+  and `ReadyTimeoutSec` bounds the wait (default 60s). Reused rather than reinvented: the probe
+  is installed as the container's own healthcheck, so `podman ps` reports the last probe's
+  answer for exactly the command the launch sequence waits on, instead of a readiness notion
+  only the runner knows about. Its interval is disabled and the check is driven on demand, so
+  no app gains a background timer exec'ing into it forever for an answer that matters at one
+  moment - the state is a snapshot rather than monitoring, which is the right trade for a
+  start-order gate and the wrong one for health monitoring.
+  A dependency that never becomes ready fails the dependent's launch and names itself, rather
+  than starting an app whose every connection will fail. Only a dependency this launch started
+  is waited on: one that was already running was gated the same way by whoever started it, and
+  re-probing it would turn every launch behind a momentarily-unhealthy dependency into a
+  failure rather than closing the start-order race. Apps that set nothing are unaffected - no
+  probe, no wait, and the same podman argv as before.
+
 - **`ResourcesMeta` and `InternalUserMeta` are enforced.** Both shipped in the schema at 0.1,
   were range- and charset-validated ever since, and never reached podman: the runtime emitted
   no `--cpus`, `--memory`, `--pids-limit` or `--user` anywhere. So an app could set

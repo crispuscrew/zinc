@@ -18,6 +18,7 @@ func Validate(cfg schema.AppConfig) error {
 	checkLifecycle(cfg, add)
 	checkInstall(cfg.ImageMeta.Install, add)
 	checkDepends(cfg.StartConditions.DependsOn, add)
+	checkReadiness(cfg.StartConditions, add)
 
 	// The two app types share their identity, lifecycle and setup rules above and diverge
 	// below: each rejects what the other's runtime cannot honour, so a field is never
@@ -79,6 +80,24 @@ func checkDepends(dependsOn []string, add addFunc) {
 		if !nameRE.MatchString(dep) {
 			add("StartConditions.DependsOn[%d] %q: only lowercase [a-z0-9._-] allowed, must start alphanumeric", index, dep)
 		}
+	}
+}
+
+// checkReadiness screens the readiness gate a dependent waits on. ReadyCheck is exec form
+// and reaches podman as one JSON argument, so it needs no quoting rules - only that every
+// word is a word. A timeout on its own is the inert-field case: nothing waits without a
+// probe to wait for, so the number would read as a bound that is not in force.
+func checkReadiness(start schema.StartConditions, add addFunc) {
+	for index, arg := range start.ReadyCheck {
+		if strings.TrimSpace(arg) == "" {
+			add("StartConditions.ReadyCheck[%d]: must not be empty", index)
+		}
+	}
+	if start.ReadyTimeoutSec < 0 {
+		add("StartConditions.ReadyTimeoutSec %d: must be >= 0 (0 = the runner's default)", start.ReadyTimeoutSec)
+	}
+	if start.ReadyTimeoutSec > 0 && len(start.ReadyCheck) == 0 {
+		add("StartConditions.ReadyTimeoutSec %d: has no effect without ReadyCheck - with no probe, a dependency counts as ready once it is running and nothing waits", start.ReadyTimeoutSec)
 	}
 }
 

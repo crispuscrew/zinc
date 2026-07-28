@@ -86,6 +86,8 @@ Description: Web browser
 
 StartConditions:
   DependsOn: []                  # other apps that must be up first (auto-started, see 6.6)
+  ReadyCheck: []                 # exec-form probe deciding this app is ready for its dependents
+  ReadyTimeoutSec: 0             # how long a dependent waits for it; 0 = 60s (see 6.6)
   Autorestart: false             # restart only on failure (a clean exit / manual stop is final)
   Entrypoint: firefox            # process to run; empty = the image's default command
   Terminal: false                # CLI/TUI app: launch in a host terminal-emulator window
@@ -392,6 +394,10 @@ podman already gives every app on a link. It runs before the ruleset, because re
 DNS and the ruleset closes the netns - and both run before the app, so the app still never
 sees an unlocked network.
 
+A gateway is worth a `StartConditions.ReadyCheck` (6.6): a routed client whose gateway is up
+but whose tunnel is not has nowhere to send anything, and the readiness gate is what makes
+`DependsOn` wait for the tunnel rather than for the container.
+
 **A linked app may also reach the outside.** One app is gated both ways at once: the `zlink*`
 bridges by interface, everything else by address and port. Chain policy comes from the
 non-link lists alone - a link list is structurally a whitelist, so counting it would flip an
@@ -453,6 +459,22 @@ brings them up first, depth-first, so a dependency's own dependencies come up be
 already-running dependency is left untouched; a dependency cycle is reported as an error
 rather than recursed into forever. This is why launch is a single orchestrated path (the app
 layer, section 13) rather than a bare `podman run`.
+
+**Running is not ready.** By default a dependency counts as up once its container is, which is
+true enough for a service whose process is its readiness and false for anything a dependent
+routes through: a VPN container is running long before its tunnel is, and a client started in
+that window has a default route and a resolver pointing at a gateway that cannot forward yet
+(5.3, routing). `StartConditions.ReadyCheck` closes that window. It is a command in exec form
+(`["sh", "-c", "ip link show wg0 | grep -q UP"]`) which the runner installs as the container's
+healthcheck, so `podman ps` reports the last answer to the same question the launch sequence
+waits on, and which a dependent polls until it passes or `ReadyTimeoutSec` (default 60s) runs
+out. The healthcheck's own interval is disabled and the probe is driven on demand, so the
+recorded state is a snapshot from the last wait, not continuous monitoring.
+
+A dependency that never becomes ready fails the dependent's launch rather than letting it
+start anyway: for the routed case, starting is not degraded operation, it is an app whose
+every connection fails for a reason nothing reported. Only a dependency this launch started is
+waited on - one that was already running was gated the same way by whoever started it.
 
 ---
 

@@ -56,10 +56,15 @@ type Runtime interface {
 	// an error, so a post-fork failure can tear down the prepared (still-filtered) netns.
 	StartApp(cfg schema.AppConfig, opt options.HostOptions, runArgs []string, onFail func()) error
 	OpenSession(app string, cmd []string, opt options.HostOptions, hold bool) error // blocking `exec -it` into a holder, in a terminal window (multiterminal); hold keeps the window open after cmd exits
-	Exists(name string) bool                                                        // does a container with this name exist (running or not)?
-	Do(args []string) error                                                         // user-facing passthrough (stop/restart/inspect/logs) with host stdio
-	Running() (map[string]bool, error)                                              // names the runtime reports as running (list view)
-	Logs(name string, tail int) (string, error)                                     // last N log lines (logs view)
+	// HealthProbe answers "is this app ready right now?" once, without blocking: nil
+	// means ready. The app layer polls it to hold a launch until the apps it depends on
+	// can actually serve it (StartConditions.ReadyCheck); how the answer is obtained is
+	// the adapter's business.
+	HealthProbe(name string) error
+	Exists(name string) bool                    // does a container with this name exist (running or not)?
+	Do(args []string) error                     // user-facing passthrough (stop/restart/inspect/logs) with host stdio
+	Running() (map[string]bool, error)          // names the runtime reports as running (list view)
+	Logs(name string, tail int) (string, error) // last N log lines (logs view)
 }
 
 // ImageBuilder builds an app's derived image (FROM ImageMeta.Image + the install

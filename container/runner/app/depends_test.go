@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/adapters/netenforce"
@@ -18,10 +19,14 @@ import (
 // set, StartApp does NOT mark running, modelling production's detached start (the app
 // is not yet visible to Running() when a sibling branch is processed) so the
 // diamond-dependency dedup can be exercised.
+// probeFailures makes the next N readiness probes fail, modelling a dependency whose
+// container is up before its service is; probes counts how many were run.
 type fakeRuntime struct {
 	running       map[string]bool
 	started       []string
 	detachedStart bool
+	probeFailures int
+	probes        int
 }
 
 func newFakeRuntime(alreadyRunning ...string) *fakeRuntime {
@@ -44,10 +49,17 @@ func (engine *fakeRuntime) StartApp(cfg schema.AppConfig, opt options.HostOption
 	return nil
 }
 func (engine *fakeRuntime) OpenSession(string, []string, options.HostOptions, bool) error { return nil }
-func (engine *fakeRuntime) Exists(name string) bool                                       { return engine.running[name] }
-func (engine *fakeRuntime) Do([]string) error                                             { return nil }
-func (engine *fakeRuntime) Running() (map[string]bool, error)                             { return engine.running, nil }
-func (engine *fakeRuntime) Logs(string, int) (string, error)                              { return "", nil }
+func (engine *fakeRuntime) HealthProbe(name string) error {
+	engine.probes++
+	if engine.probes <= engine.probeFailures {
+		return fmt.Errorf("readiness probe for %s: unhealthy", name)
+	}
+	return nil
+}
+func (engine *fakeRuntime) Exists(name string) bool           { return engine.running[name] }
+func (engine *fakeRuntime) Do([]string) error                 { return nil }
+func (engine *fakeRuntime) Running() (map[string]bool, error) { return engine.running, nil }
+func (engine *fakeRuntime) Logs(string, int) (string, error)  { return "", nil }
 
 // fakeStore serves app definitions from an in-memory map.
 type fakeStore struct{ apps map[string]schema.AppConfig }
@@ -256,6 +268,83 @@ func TestLaunch_DiamondSharedDependencyStartsOnce(t *testing.T) {
 		if !slices.Contains(engine.started, name) {
 			t.Fatalf("%s did not start; sequence = %v", name, engine.started)
 		}
+	}
+}
+
+// readyApp is depApp plus a readiness probe, so dependents wait for it rather than for its
+// container merely existing.
+func readyApp(name string, deps ...string) schema.AppConfig {
+	cfg := depApp(name, deps...)
+	cfg.StartConditions.ReadyCheck = []string{"test", "-f", "/run/ready"}
+	return cfg
+}
+
+// withFastPolling shortens the gap between readiness probes for the duration of a test, so
+// a wait that takes several probes does not take several seconds.
+func withFastPolling(t *testing.T) {
+	t.Helper()
+	previous := readyPollInterval
+	readyPollInterval = time.Millisecond
+	t.Cleanup(func() { readyPollInterval = previous })
+}
+
+// A dependency that is running but not yet ready holds its dependent back until it says
+// otherwise. This is the whole point of the gate: a client routed through a VPN sibling has
+// that sibling as its default route, so starting while the tunnel is still coming up gives
+// it no network at all.
+func TestLaunch_WaitsForDependencyReadiness(t *testing.T) {
+	withFastPolling(t)
+	store := fakeStore{apps: map[string]schema.AppConfig{
+		"client": depApp("client", "vpn"),
+		"vpn":    readyApp("vpn"),
+	}}
+	engine := newFakeRuntime()
+	engine.probeFailures = 3 // up, but not serving yet
+	if err := depSvc(store, engine).Launch(store.apps["client"], baseOpts()); err != nil {
+		t.Fatal(err)
+	}
+	if engine.probes != 4 {
+		t.Fatalf("expected to keep probing until ready (4 probes), got %d", engine.probes)
+	}
+	if want := []string{"vpn", "client"}; !slices.Equal(engine.started, want) {
+		t.Fatalf("start order = %v, want %v", engine.started, want)
+	}
+}
+
+// A dependency that never becomes ready fails the launch, naming itself, rather than
+// hanging or letting the dependent start with a gateway that cannot forward.
+func TestLaunch_UnreadyDependencyFailsLaunch(t *testing.T) {
+	withFastPolling(t)
+	vpn := readyApp("vpn")
+	vpn.StartConditions.ReadyTimeoutSec = 1
+	store := fakeStore{apps: map[string]schema.AppConfig{
+		"client": depApp("client", "vpn"),
+		"vpn":    vpn,
+	}}
+	engine := newFakeRuntime()
+	engine.probeFailures = 1 << 30 // never ready
+	err := depSvc(store, engine).Launch(store.apps["client"], baseOpts())
+	if err == nil || !strings.Contains(err.Error(), `dependency "vpn" was not ready`) {
+		t.Fatalf("expected an unready-dependency error, got %v", err)
+	}
+	if slices.Contains(engine.started, "client") {
+		t.Fatalf("client must not start behind an unready dependency, sequence = %v", engine.started)
+	}
+}
+
+// An app with no ReadyCheck is ready as soon as it is running - the meaning DependsOn has
+// always had - so nothing is probed and no launch pays for the gate.
+func TestLaunch_NoReadyCheckIsNotProbed(t *testing.T) {
+	store := fakeStore{apps: map[string]schema.AppConfig{
+		"web": depApp("web", "db"),
+		"db":  depApp("db"),
+	}}
+	engine := newFakeRuntime()
+	if err := depSvc(store, engine).Launch(store.apps["web"], baseOpts()); err != nil {
+		t.Fatal(err)
+	}
+	if engine.probes != 0 {
+		t.Fatalf("an app with no ReadyCheck should not be probed, got %d probes", engine.probes)
 	}
 }
 

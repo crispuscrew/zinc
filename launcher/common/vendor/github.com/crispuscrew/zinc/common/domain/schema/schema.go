@@ -47,6 +47,21 @@ type AppConfig struct {
 type StartConditions struct {
 	DependsOn []string `yaml:"DependsOn"` // apps, which must be running while/starting with it
 
+	// ReadyCheck is the command that decides whether this app is ready for the apps that
+	// name it in DependsOn. It is given in exec form (["test", "-f", "/run/ready"]), not
+	// as a shell line, and becomes the container's healthcheck, so `podman ps` answers the
+	// same question the dependents wait on.
+	//
+	// Empty keeps the old meaning of DependsOn: running is ready. That is fine for a
+	// dependency whose service is up the moment its process is, and wrong for anything a
+	// dependent routes through - a VPN container is running long before its tunnel is, and
+	// a client started in that window has a default route pointing at a gateway that cannot
+	// forward yet.
+	ReadyCheck []string `yaml:"ReadyCheck"`
+	// ReadyTimeoutSec bounds how long a dependent waits for ReadyCheck to pass before its
+	// launch fails; 0 uses the runner's default. It only means anything with ReadyCheck set.
+	ReadyTimeoutSec int `yaml:"ReadyTimeoutSec"`
+
 	Autorestart bool `yaml:"Autorestart"` // Autorestart if falls, not restart if manually closed
 
 	Entrypoint              string `yaml:"Entrypoint"`              // if empty use app default
