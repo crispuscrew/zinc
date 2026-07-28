@@ -564,3 +564,60 @@ func TestImport_BareCommandBecomingEntrypointIsStated(t *testing.T) {
 		t.Errorf("the semantic difference must be stated, notes were %v", app.Notes)
 	}
 }
+
+// The long syntax is how modern compose files are written. Refusing it aborted the entire
+// import over a spelling, which is not the same thing as a file Zinc cannot represent.
+func TestDecode_LongSyntax(t *testing.T) {
+	app := importOne(t, `
+services:
+  web:
+    image: alpine
+    ports:
+      - target: 80
+        published: "8080"
+        protocol: tcp
+      - target: 5000
+        host_ip: 127.0.0.1
+        published: "5000"
+    volumes:
+      - type: bind
+        source: /srv/site
+        target: /usr/share/nginx/html
+        read_only: true
+    labels:
+      - com.example.role=frontend
+`)
+	lists := app.Config.NetworkMeta.NetworkLists
+	if len(lists) == 0 {
+		t.Fatalf("the long-form ports should have imported, got %+v", lists)
+	}
+	var published, sibling []int
+	for _, list := range lists {
+		if list.Host {
+			published = list.Ports
+		} else {
+			sibling = list.Ports
+		}
+	}
+	if !slices.Contains(published, 80) {
+		t.Errorf("long-form port 80 should publish to the LAN, got %v", published)
+	}
+	// host_ip 127.0.0.1 keeps its meaning through the long form too: not for the network.
+	if !slices.Contains(sibling, 5000) {
+		t.Errorf("a loopback-bound long-form port should stay sibling-only, got %v", sibling)
+	}
+	if len(app.Config.Volumes) != 1 || app.Config.Volumes[0].HostMount != "/srv/site" {
+		t.Fatalf("the long-form volume should have imported, got %+v", app.Config.Volumes)
+	}
+	if app.Config.Volumes[0].Writable {
+		t.Error("read_only: true must import read-only")
+	}
+}
+
+// Labels are written both ways in the wild, and the description round-trips through them.
+func TestDecode_ListFormLabels(t *testing.T) {
+	project := decode(t, "services:\n  app:\n    image: alpine\n    labels:\n      - zinc.description=my app\n")
+	if got := project.Services["app"].Labels["zinc.description"]; got != "my app" {
+		t.Errorf("list-form label = %q, want %q", got, "my app")
+	}
+}

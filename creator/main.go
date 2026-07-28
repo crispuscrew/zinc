@@ -9,7 +9,7 @@
 // runtime must be on $PATH for the run/manage commands; authoring works without it.
 //
 //	zc tui                             keyboard-first manager (create/edit/run/stop/logs)
-//	zc new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
+//	zc new <name> --image <img> [--desc d] [--icon i] [--entrypoint cmd] [--tunnel wg.conf]
 //	zc list
 //	zc validate <name|app.yaml>
 //	zc delete <name>
@@ -53,7 +53,7 @@ import (
 const usage = `usage: zc <command> [args]
 
   tui                               keyboard-first manager (create/edit/run/stop/logs)
-  new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
+  new <name> --image <img> [--desc d] [--icon i] [--entrypoint cmd] [--tunnel wg.conf]
   new <name> --vm --image <base.qcow2> --base-digest sha256:... [--memory MiB]
              [--vcpus N] [--disk GiB] [--display None|Window|Accelerated|Compatible]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
@@ -206,6 +206,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 	resolution := fset.String("resolution", "", "VM only: fixed guest screen size as WxH (e.g. 1920x1080); for --display Compatible, whose guest has no driver to resize itself")
 	mac := fset.String("mac", "", "VM only: guest NIC address, or \"random\"; the default is derived per-app under QEMU's 52:54:00 prefix, so set this to present something that names no vendor")
 	media := fset.String("media", "", "VM only: ISO attached read-only as a CD-ROM on every run (e.g. a virtio-win driver disc), repeatable with commas")
+	entrypoint := fset.String("entrypoint", "", "the process to run; empty uses the image's default command (which for many images exits immediately)")
 	tunnelConf := fset.String("tunnel", "", "container only: path to a wg-quick config; Zinc builds the WireGuard interface for the app (the app itself never gets NET_ADMIN)")
 	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
 	if err := fset.Parse(flags); err != nil {
@@ -226,6 +227,7 @@ func cmdNew(svc backend.Service, argv []string) error {
 		Icon:          *icon,
 	}
 	cfg.ImageMeta.Image = *image
+	cfg.StartConditions.Entrypoint = strings.TrimSpace(*entrypoint)
 	// ';' rather than ',' because these are shell lines and commas are ordinary in them.
 	for _, step := range strings.Split(*install, ";") {
 		if trimmed := strings.TrimSpace(step); trimmed != "" {

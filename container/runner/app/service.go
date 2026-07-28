@@ -122,7 +122,7 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 // netns for a filtered app, the container otherwise). Output is captured, so it is
 // safe to call from a UI.
 func (svc Service) Stop(cfg schema.AppConfig) error {
-	return svc.runtime.Exec(ports.Command{Args: svc.net.Teardown(cfg), Desc: "stop " + cfg.AppNameID})
+	return svc.runAll(svc.net.Teardown(cfg))
 }
 
 // teardown removes a half-built netns after a failed launch (fail-closed). It only
@@ -133,7 +133,20 @@ func (svc Service) teardown(cfg schema.AppConfig, hadSteps bool) error {
 	if !hadSteps {
 		return nil
 	}
-	return svc.runtime.Exec(ports.Command{Args: svc.net.Teardown(cfg), Desc: "teardown " + cfg.AppNameID})
+	return svc.runAll(svc.net.Teardown(cfg))
+}
+
+// runAll executes steps in order and joins whatever failed. Teardown is the caller that
+// needs the joining: removing the pod and removing the bridge it used are two commands, and
+// a failure of the second must not hide the first having worked - or the other way round.
+func (svc Service) runAll(steps []ports.Command) error {
+	var errs []error
+	for _, step := range steps {
+		if err := svc.runtime.Exec(step); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Rename changes an app's identity from oldName to newName. There is no atomic file

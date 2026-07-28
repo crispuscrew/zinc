@@ -98,5 +98,8 @@ type NetEnforcer interface {
 	// It can fail: an allowlist given by name has to be resolved first, and a launch whose
 	// allowlist could not be resolved must not proceed with a shorter one.
 	Prepare(cfg schema.AppConfig, opt options.HostOptions) ([]Command, error)
-	Teardown(cfg schema.AppConfig) []string // tear it all down (pod rm / stop)
+	// Teardown returns the steps that remove everything the launch created, in order. More
+	// than one, because a pod is not the only thing an app can own: the per-app egress
+	// bridge outlives it otherwise, and one podman network accumulates per app that ever ran.
+	Teardown(cfg schema.AppConfig) []Command
 }
