@@ -9,7 +9,6 @@
 package podman
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -310,30 +309,26 @@ func userArgs(user schema.InternalUserMeta) []string {
 // healthArgs installs StartConditions.ReadyCheck as the container's healthcheck, which is
 // what a dependent's readiness wait probes (HealthProbeArgs). Reusing podman's healthcheck
 // rather than exec'ing the probe ourselves means the answer is recorded in container state:
-// `podman ps` shows the result of the last probe for the same command the launch sequence
-// waits on, instead of a readiness notion only the runner knows about. A snapshot, not
-// monitoring - see the interval below.
+// `podman ps` reports health for the same command the launch sequence waits on, instead of a
+// readiness notion only the runner knows about.
 //
-// The command is passed in podman's JSON exec form, ["CMD", ...], so it runs directly with
-// the author's words as argv. The string form would be handed to a shell inside the
-// container, where an argument with a space or a quote in it means something other than
-// itself.
+// Written in the CMD-SHELL form, with every word of the author's command single-quoted by
+// shellJoin so an argument containing a space or a quote still means itself. The JSON exec
+// form (["CMD", ...]) is tidier and needs no shell in the image, and it is NOT used here: it
+// works on podman 5 and does not on the podman 4.9 that Ubuntu LTS ships, where the whole
+// bracketed string is handed to a shell instead and the check can never pass. CMD-SHELL is
+// the oldest and most portable spelling, and this is a launch-blocking gate - it has to work
+// on the podman people actually have.
 //
-// The interval is disabled because the check is driven on demand: podman would otherwise
-// schedule a transient systemd timer per app and exec into the container forever after,
-// for an answer that matters at one moment - when something is waiting to start behind it.
-// A manual `podman healthcheck run` updates the recorded state just the same. The trade is
-// that the state in `podman ps` is the last probe's answer rather than a live one, which is
-// the right trade for a start-order gate and the wrong one for monitoring.
+// The interval is left at podman's own default for the same reason. Disabling it (the check
+// is driven on demand by the readiness wait, so a timer is not needed) is accepted by both
+// versions but is one more thing to differ; keeping the timer also means `podman ps` reports
+// live health rather than the last probe's answer, which is worth more than the saved execs.
 func healthArgs(start schema.StartConditions) []string {
 	if len(start.ReadyCheck) == 0 {
 		return nil
 	}
-	probe, err := json.Marshal(append([]string{"CMD"}, start.ReadyCheck...))
-	if err != nil { // unreachable: a []string always marshals
-		return nil
-	}
-	return []string{"--health-cmd", string(probe), "--health-interval", "disable"}
+	return []string{"--health-cmd", "CMD-SHELL " + shellJoin(start.ReadyCheck)}
 }
 
 // HealthProbeArgs builds `podman healthcheck run <name>`: run the container's healthcheck

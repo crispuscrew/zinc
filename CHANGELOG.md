@@ -148,12 +148,13 @@ tracked in [RELEASES.md](RELEASES.md).
   closed, but it fails, and nothing says why.
   `ReadyCheck` is a command in exec form (`["sh", "-c", "ip link show wg0 | grep -q UP"]`),
   and `ReadyTimeoutSec` bounds the wait (default 60s). Reused rather than reinvented: the probe
-  is installed as the container's own healthcheck, so `podman ps` reports the last probe's
-  answer for exactly the command the launch sequence waits on, instead of a readiness notion
-  only the runner knows about. Its interval is disabled and the check is driven on demand, so
-  no app gains a background timer exec'ing into it forever for an answer that matters at one
-  moment - the state is a snapshot rather than monitoring, which is the right trade for a
-  start-order gate and the wrong one for health monitoring.
+  is installed as the container's own healthcheck, so `podman ps` reports health for exactly
+  the command the launch sequence waits on, instead of a readiness notion only the runner
+  knows about. It goes in as `CMD-SHELL` with each word quoted, not as the tidier JSON exec
+  form: podman 5 parses that and podman 4.9 - what Ubuntu LTS ships, and what CI runs - hands
+  the whole bracketed string to a shell instead, so the check could never pass. A
+  launch-blocking gate has to work on the podman people actually have; the cost is that the
+  image needs a shell.
   A dependency that never becomes ready fails the dependent's launch and names itself, rather
   than starting an app whose every connection will fail. Only a dependency this launch started
   is waited on: one that was already running was gated the same way by whoever started it, and

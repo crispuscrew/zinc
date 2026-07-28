@@ -567,11 +567,13 @@ true enough for a service whose process is its readiness and false for anything 
 routes through: a VPN container is running long before its tunnel is, and a client started in
 that window has a default route and a resolver pointing at a gateway that cannot forward yet
 (6.2, routing). `StartConditions.ReadyCheck` closes that window. It is a command in exec form
-(`["sh", "-c", "ip link show wg0 | grep -q UP"]`) which the runner installs as the container's
-healthcheck, so `podman ps` reports the last answer to the same question the launch sequence
-waits on, and which a dependent polls until it passes or `ReadyTimeoutSec` (default 60s) runs
-out. The healthcheck's own interval is disabled and the probe is driven on demand, so the
-recorded state is a snapshot from the last wait, not continuous monitoring.
+(`["sh", "-c", "ip link show wg0 | grep -q UP"]`) which the runner quotes word by word and
+installs as the container's healthcheck, so `podman ps` reports health for the same question
+the launch sequence waits on, and which a dependent polls until it passes or `ReadyTimeoutSec`
+(default 60s) runs out. It is installed in the `CMD-SHELL` form rather than the tidier JSON
+exec form, which podman 5 understands and podman 4.9 - what Ubuntu LTS ships - does not; a
+launch-blocking gate has to work on the podman people actually have, so the image needs a
+shell.
 
 A dependency that never becomes ready fails the dependent's launch rather than letting it
 start anyway: for the routed case, starting is not degraded operation, it is an app whose

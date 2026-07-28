@@ -60,9 +60,10 @@ type StartConditions struct {
 	DependsOn []string `yaml:"DependsOn"` // apps, which must be running while/starting with it
 
 	// ReadyCheck is the command that decides whether this app is ready for the apps that
-	// name it in DependsOn. It is given in exec form (["test", "-f", "/run/ready"]), not
-	// as a shell line, and becomes the container's healthcheck, so `podman ps` answers the
-	// same question the dependents wait on.
+	// name it in DependsOn. It is written as a list of words (["test", "-f", "/run/ready"])
+	// rather than as one shell line, so an argument containing a space still means itself;
+	// the runner quotes each word and installs it as the container's healthcheck, so
+	// `podman ps` answers the same question the dependents wait on. The image needs a shell.
 	//
 	// Empty keeps the old meaning of DependsOn: running is ready. That is fine for a
 	// dependency whose service is up the moment its process is, and wrong for anything a

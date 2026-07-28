@@ -460,10 +460,25 @@ func TestAppRunArgs_ReadyCheckBecomesHealthcheck(t *testing.T) {
 	}
 	got := appArgs(t, cfg, baseOpts(), netNone())
 
-	assertContainsSeq(t, got, "--health-cmd", `["CMD","sh","-c","ip link show wg0 | grep -q UP"]`)
-	// The check is run on demand by the readiness wait. Left on its default interval podman
-	// would also schedule a transient timer per app and exec into the container forever.
-	assertContainsSeq(t, got, "--health-interval", "disable")
+	// CMD-SHELL, with every word single-quoted. The JSON exec form is tidier and needs no
+	// shell in the image, but podman 4.9 - what Ubuntu LTS ships, and what CI runs - hands the
+	// whole bracketed string to a shell instead, so the check could never pass. This is a
+	// launch-blocking gate; it has to work on the podman people actually have.
+	assertContainsSeq(t, got, "--health-cmd", `CMD-SHELL 'sh' '-c' 'ip link show wg0 | grep -q UP'`)
+	// No --health-interval: podman's own default is one less thing to differ between versions,
+	// and keeping the timer means `podman ps` reports live health rather than the last probe.
+	mustNotContain(t, got, "--health-interval")
+}
+
+// A word with a space or a quote in it must still mean itself once a shell has read it.
+func TestAppRunArgs_ReadyCheckQuoting(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:       "app",
+		ImageMeta:       schema.ImageMeta{Image: "localhost/app:local"},
+		StartConditions: schema.StartConditions{ReadyCheck: []string{"test", "-f", "/run/a b"}},
+	}
+	assertContainsSeq(t, appArgs(t, cfg, baseOpts(), netNone()),
+		"--health-cmd", `CMD-SHELL 'test' '-f' '/run/a b'`)
 }
 
 // No ReadyCheck, no healthcheck: an app that never asked for one must get the argv it
