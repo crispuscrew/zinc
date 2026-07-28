@@ -299,6 +299,12 @@ func routeCommands(cfg schema.AppConfig, image string) []ports.Command {
 			Args: []string{
 				"run", "--pod", PodName(cfg.AppNameID), "--rm", "--pull", "never",
 				"--security-opt", "no-new-privileges", "--cap-drop", "all", "--cap-add", "NET_ADMIN",
+				// --user 0 is root OF THE POD'S user namespace, which is what owns the netns.
+				// Without it a keep-id pod runs this helper as an ordinary uid, and nft cannot
+				// touch the namespace at all ("cache initialization failed: Operation not
+				// permitted"). A no-op for a pod that is not keep-id, where the default already is
+				// that root.
+				"--user", "0",
 				image, "sh", "-c", script.String(),
 			},
 			Desc: "route through sibling " + route.gateway,
@@ -680,6 +686,13 @@ func portList(ports []int) string {
 // their ports as `-p` forwards here (pod ports live on the pod, not the container).
 func podCreateArgs(cfg schema.AppConfig, pod string) []string {
 	args := []string{"pod", "create", "--name", pod}
+	// The pod owns the user namespace of everything that joins it: podman refuses --userns on
+	// a container joining a pod, so an app that asked to keep its uid gets it here or not at
+	// all. Before this it got the flag on the container, and the launch failed with nothing
+	// said - StartApp is detached, so podman's refusal went nowhere.
+	if cfg.InternalUserMeta.KeepUserID {
+		args = append(args, "--userns=keep-id")
+	}
 	entries := links(cfg)
 	// The declared resolvers are handed to every filtered app, not only a linked one. The
 	// ruleset restricts DNS to them for ALL of them, so an app that was restricted and never
@@ -784,6 +797,12 @@ func nftApplyArgs(pod, image string) []string {
 	return []string{
 		"run", "--pod", pod, "--rm", "-i", "--pull", "never",
 		"--security-opt", "no-new-privileges", "--cap-drop", "all", "--cap-add", "NET_ADMIN",
+		// --user 0 is root OF THE POD'S user namespace, which is what owns the netns.
+		// Without it a keep-id pod runs this helper as an ordinary uid, and nft cannot
+		// touch the namespace at all ("cache initialization failed: Operation not
+		// permitted"). A no-op for a pod that is not keep-id, where the default already is
+		// that root.
+		"--user", "0",
 		image, "nft", "-f", "-",
 	}
 }

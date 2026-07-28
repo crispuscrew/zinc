@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -183,7 +184,11 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 	// The rest of the containment baseline: who the app runs as, and how much of the
 	// machine it may take. Both are part of the sandbox rather than tuning, so they sit
 	// with the capability drop rather than among the optional wiring below.
-	args = append(args, userArgs(cfg.InternalUserMeta)...)
+	// A pod owns the user namespace of everything that joins it, and podman refuses
+	// `--userns` on a container joining one ("cannot set user namespace mode when joining pod
+	// with infra container"). So a filtered app's keep-id is put on the pod instead, by the
+	// enforcer, and left off here - without this the app silently never started.
+	args = append(args, userArgs(cfg.InternalUserMeta, slices.Contains(netFlags, "--pod"))...)
 	args = append(args, resourceArgs(cfg.ResourcesMeta)...)
 	args = append(args, healthArgs(cfg.StartConditions)...)
 
@@ -292,9 +297,9 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 // owned by the host user either way; what --userns=keep-id changes is that the container
 // sees the SAME uid as the host, which is what an app sharing a host directory with the
 // desktop needs in order to agree about ownership.
-func userArgs(user schema.InternalUserMeta) []string {
+func userArgs(user schema.InternalUserMeta, inPod bool) []string {
 	var args []string
-	if user.KeepUserID {
+	if user.KeepUserID && !inPod {
 		args = append(args, "--userns=keep-id")
 	}
 	if user.UseNonRootUser && user.NonRootUserName != "" {

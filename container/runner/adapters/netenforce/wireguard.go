@@ -84,6 +84,12 @@ func tunnelCommand(cfg schema.AppConfig, image string) (*ports.Command, error) {
 		Args: []string{
 			"run", "--pod", PodName(cfg.AppNameID), "--rm", "-i", "--pull", "never",
 			"--security-opt", "no-new-privileges", "--cap-drop", "all", "--cap-add", "NET_ADMIN",
+			// --user 0 is root OF THE POD'S user namespace, which is what owns the netns.
+			// Without it a keep-id pod runs this helper as an ordinary uid, and nft cannot
+			// touch the namespace at all ("cache initialization failed: Operation not
+			// permitted"). A no-op for a pod that is not keep-id, where the default already is
+			// that root.
+			"--user", "0",
 			image, "sh", "-c", script.String(),
 		},
 		Stdin: conf.SetConf,
