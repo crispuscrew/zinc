@@ -12,10 +12,15 @@ concurrency:
 permissions:
   contents: read
 
+# The runner image is pinned rather than `ubuntu-latest`: every job here drives podman, so
+# the runner's podman/crun pair is part of this build's toolchain, and `latest` moves it
+# without warning. Two skews have already cost us a red build - podman 4.9 not
+# understanding the `--health-cmd` exec form, and crun rejecting the OCI spec version
+# podman handed it. Bump this deliberately, with the podman version in mind.
 jobs:
   common:
     name: common (schema + validate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -36,7 +41,7 @@ jobs:
 
   check:
     name: check + build (${{ matrix.module }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -56,7 +61,7 @@ jobs:
 
   launcher-common:
     name: launcher/common (shared launcher lib)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Ensure podman
@@ -68,7 +73,7 @@ jobs:
 
   menu:
     name: menu (menu lib)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Ensure podman
@@ -80,7 +85,7 @@ jobs:
 
   e2e:
     name: end-to-end (podman)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
