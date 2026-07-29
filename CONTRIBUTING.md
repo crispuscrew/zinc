@@ -104,4 +104,3 @@ the two tools plus the podman-backed scenarios.
 - [`README.md`](README.md) - overview and quickstart.
 - [`ROADMAP.md`](ROADMAP.md) and [`RELEASES.md`](RELEASES.md) - what is planned and the
   release plan.
-- [`llms.txt`](llms.txt) - this doc set as a link index for LLM tooling.
