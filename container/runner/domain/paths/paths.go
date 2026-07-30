@@ -96,7 +96,14 @@ func (addr Address) Runtime() string {
 // The one case it cannot decide: an app literally named "notes.work" AND an app "notes" run
 // as instance "work", both defined at once. The whole-name reading wins there, because that
 // name is definitely an app; nothing in the runtime name distinguishes the two, so this is
-// stated rather than papered over.
+// stated rather than papered over. Those two apps already collide on their podman container
+// name, so that ambiguity is a symptom of a naming conflict Zinc cannot support rather than
+// a decision made here.
+//
+// Two callers need this. Attribution maps a running proxy back to the app it serves, and the
+// Wayland security context needs the halves apart after they were folded into AppNameID:
+// app_id must be the SAME string for every instance of an app, and instance_id must differ
+// between them (section 5.2).
 func ParseRuntime(name string, defined func(string) bool) Address {
 	name = strings.TrimSpace(name)
 	if defined == nil || defined(name) {

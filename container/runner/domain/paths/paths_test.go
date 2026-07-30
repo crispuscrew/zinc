@@ -111,6 +111,8 @@ func TestParseRuntime_RecoversTheAddress(t *testing.T) {
 		{"gone.work", "gone.work"},               // neither reading is a defined app: reported as itself
 		{"firefox.Work", "firefox.Work"},         // not a legal instance, so not read as one
 		{"firefox.work.two", "firefox.work.two"}, // "firefox.work" is not a defined app
+		{"notes.local.work", "notes.local@work"}, // an instance OF the dotted app name
+		{"firefox.", "firefox."},                 // a trailing separator is not an instance
 	} {
 		if got := ParseRuntime(testCase.runtime, defined).String(); got != testCase.want {
 			t.Errorf("ParseRuntime(%q) = %q, want %q", testCase.runtime, got, testCase.want)

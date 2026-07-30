@@ -22,9 +22,12 @@ import (
 // diamond-dependency dedup can be exercised.
 // probeFailures makes the next N readiness probes fail, modelling a dependency whose
 // container is up before its service is; probes counts how many were run.
+// startOpts records the HostOptions each start was built from, which is how the display
+// tests see whether the Wayland socket the broker produced actually reached the argv.
 type fakeRuntime struct {
 	running       map[string]bool
 	started       []string
+	startOpts     []options.HostOptions
 	detachedStart bool
 	probeFailures int
 	probes        int
@@ -47,6 +50,7 @@ func (engine *fakeRuntime) Capture(ports.Command) (string, error) {
 }
 func (engine *fakeRuntime) StartApp(cfg schema.AppConfig, opt options.HostOptions, runArgs []string, onFail func()) error {
 	engine.started = append(engine.started, cfg.AppNameID)
+	engine.startOpts = append(engine.startOpts, opt)
 	if !engine.detachedStart {
 		engine.running[cfg.AppNameID] = true
 	}
@@ -113,8 +117,11 @@ func depApp(name string, deps ...string) schema.AppConfig {
 	}
 }
 
+// depSvc has no DisplayBroker: the real one re-execs this binary to hold a security context,
+// which under `go test` would re-exec the test binary. The display wiring has its own tests
+// (display_test.go) with a broker that only records.
 func depSvc(store ports.Store, engine ports.Runtime) Service {
-	return New(store, engine, nil, nil, netenforce.Enforcer{}, dbusproxy.Broker{})
+	return New(store, engine, nil, nil, netenforce.Enforcer{}, dbusproxy.Broker{}, nil)
 }
 
 // web → vpn → base: each dependency (and its own dependencies) must come up before the

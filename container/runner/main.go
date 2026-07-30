@@ -32,6 +32,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 	"github.com/crispuscrew/zinc/container/runner/adapters/host"
 	"github.com/crispuscrew/zinc/container/runner/adapters/podman"
+	"github.com/crispuscrew/zinc/container/runner/adapters/waylandctx"
 	"github.com/crispuscrew/zinc/container/runner/app"
 	"github.com/crispuscrew/zinc/container/runner/domain/derived"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
@@ -172,6 +173,11 @@ func run(argv []string) error {
 		// Hidden: the per-terminal waiter spawned by OpenTerminal. It blocks until the
 		// terminal closes and does the last-one-out stop.
 		return cmdTermWaiter(svc, opt, rest)
+	case waylandctx.HoldCommand:
+		// Hidden: the per-app Wayland security context holder spawned by the launch path.
+		// It creates the app's own compositor socket, reports back, and holds the
+		// revocation descriptor open until the app container is gone.
+		return cmdWaylandHolder(opt, rest)
 	case "ps":
 		return cmdPs(svc)
 	case "net":
@@ -221,6 +227,15 @@ func cmdRun(svc app.Service, opt options.HostOptions, argv []string) error {
 	}
 	for _, warn := range validate.Warnings(cfg) {
 		fmt.Println("# WARNING: " + warn)
+	}
+	// The plan below mounts the compositor's own Wayland socket, because a dry run must not
+	// create a security context and a socket that does not exist could not be pasted into a
+	// shell. Saying what a real launch does instead keeps the printed commands runnable
+	// without the plan quietly understating the sandbox (section 5.2).
+	if waylandctx.Applies(cfg, opt) {
+		fmt.Println("# a real launch first registers a per-instance Wayland socket with the compositor")
+		fmt.Println("# (a detached `zcr " + waylandctx.HoldCommand + "` holder) and mounts THAT in place of " + opt.WaylandDisplay + " below;")
+		fmt.Println("# it falls back to exactly what is shown here if the compositor has no wp_security_context_v1")
 	}
 	plan, err := svc.Plan(cfg, opt)
 	if err != nil {
@@ -488,6 +503,28 @@ func cmdTermWaiter(svc app.Service, opt options.HostOptions, argv []string) erro
 		return err
 	}
 	return svc.Term(cfg, opt, shell)
+}
+
+// cmdWaylandHolder is the hidden holder process: it owns one app's Wayland security context
+// for as long as the app runs (docs/architecture.md section 5.2). It exists because `zcr run`
+// detaches and exits, and a security context is revoked by closing a descriptor - so
+// something has to still be there holding it, the same reason the multiterminal path has
+// `__term`.
+//
+// It takes the ADDRESS rather than the runtime name, because the two halves are exactly what
+// it has to tell the compositor: app_id is stable across instances, instance_id is not.
+func cmdWaylandHolder(opt options.HostOptions, argv []string) error {
+	if len(argv) != 1 {
+		return fmt.Errorf("usage: zcr %s <app[@instance]>", waylandctx.HoldCommand)
+	}
+	addr, err := paths.ParseAddress(argv[0])
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(addr.App) == "" {
+		return fmt.Errorf("usage: zcr %s <app[@instance]>", waylandctx.HoldCommand)
+	}
+	return waylandctx.Hold(addr, opt, podman.WaitGone)
 }
 
 // cmdPs prints the apps podman reports as running, one per line and sorted, so a

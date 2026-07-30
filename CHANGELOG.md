@@ -9,6 +9,7 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+
 - **Bus attribution: `zcr bus [--json]`, and `zcr where` now reports the bus.** Given
   something observed on the host session bus, a desktop can now say which Zinc app and
   instance it is. `zcr bus` prints every running D-Bus proxy with its host pid and the
@@ -81,12 +82,46 @@ tracked in [RELEASES.md](RELEASES.md).
   so `stop`, `restart` and any failed launch reset them to zero. The output says so in both
   forms rather than leaving it to be assumed.
 
+- **A real Wayland security context per app instance.** Zinc no longer just labels the
+  container and hands over the compositor's own socket. It connects to the real compositor,
+  binds a socket of its own under `$XDG_RUNTIME_DIR/zinc/wayland/<instance>/`, and registers
+  it with `wp_security_context_v1` before the app container is created. The app mounts that
+  socket at the same container-side path with the same `WAYLAND_DISPLAY`, so nothing inside
+  the app changes - but every connection it makes is tagged by the compositor with an
+  identity the app cannot forge.
+
+  The identity is `sandbox_engine=com.github.crispuscrew.zinc`, `app_id` = the app name
+  (stable across instances, as the protocol requires) and `instance_id` = the runtime name,
+  which is deliberately the same string that names the podman container and that `zcr where`
+  reports - so a compositor holding an `instance_id` can find the container behind the window
+  instead of holding an opaque uuid.
+
+  A hidden `zcr __wayland <app[@instance]>` process holds the context open for the app's
+  lifetime and revokes it when the container is gone, the same shape `__term` uses, because
+  `zcr run` detaches and a context is revoked by closing a descriptor.
+
+  **Observable:** `podman inspect <app> --format '{{.Config.Labels}}'` reports
+  `zinc.wayland=security-context`, its bind is the derived socket, and a client connecting
+  through it sees a restricted global set (measured: 39 globals versus 62 on Hyprland 0.51.1,
+  29 versus 42 on niri 26.04, with `wp_security_context_manager_v1` withheld in both).
+
 ### Changed
 
 - **`zcr where` requires the app to be defined.** It now loads the config, because whether
   there is a bus socket to report is a fact about the config; guessing for an unknown name
   would report a path with the same confidence as a real one. A VM app is refused there for
   the same reason every other `zcr` command refuses one.
+
+- **The `zinc.wayland` label is now honest about which mode happened.** It was applied
+  whenever an app had not opted out, which claimed a security context on every launch
+  including the ones that never created one. It is now `security-context` or `passthrough`,
+  always present when a Wayland socket is mounted at all. A label that is wrong is worse than
+  no label - it is what a desktop reads to decide how much to trust a client.
+
+- **A compositor without `wp_security_context_v1` falls back to the raw socket with a warning
+  on stderr** rather than failing the launch, so Zinc stays usable on desktops that have not
+  adopted the protocol. Every other failure - a socket that cannot be bound, a compositor that
+  cannot be reached, a rejected request - fails the launch instead.
 
 ## [0.8.2] - 2026-07-31
 

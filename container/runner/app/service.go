@@ -18,6 +18,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 	"github.com/crispuscrew/zinc/container/runner/domain/derived"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
+	"github.com/crispuscrew/zinc/container/runner/domain/paths"
 	"github.com/crispuscrew/zinc/container/runner/ports"
 )
 
@@ -29,11 +30,49 @@ type Service struct {
 	resolver ports.ImageResolver
 	net      ports.NetEnforcer
 	bus      ports.DBusBroker
+	display  ports.DisplayBroker
 }
 
 // New wires the ports into a Service.
-func New(store ports.Store, runtime ports.Runtime, builder ports.ImageBuilder, resolver ports.ImageResolver, net ports.NetEnforcer, bus ports.DBusBroker) Service {
-	return Service{store: store, runtime: runtime, builder: builder, resolver: resolver, net: net, bus: bus}
+func New(store ports.Store, runtime ports.Runtime, builder ports.ImageBuilder, resolver ports.ImageResolver, net ports.NetEnforcer, bus ports.DBusBroker, display ports.DisplayBroker) Service {
+	return Service{store: store, runtime: runtime, builder: builder, resolver: resolver, net: net, bus: bus, display: display}
+}
+
+// address recovers the app and instance halves of a runtime name. The instance rides on
+// AppNameID from the moment a command resolves an address, which is what makes every runtime
+// object per-instance without threading a second identifier through every adapter; the
+// Wayland security context is the one consumer that needs the halves back, because app_id
+// must be the same for every instance and instance_id must not be (section 5.2).
+//
+// The store is the authority on which readings of a dotted name are real apps. A Service
+// built without one (the plan-only test wiring) gets the whole name as the app, which is the
+// same answer a config run from a file path gets and is correct for both.
+func (svc Service) address(name string) paths.Address {
+	defined := func(string) bool { return false }
+	if svc.store != nil {
+		defined = svc.store.Exists
+	}
+	return paths.ParseRuntime(name, defined)
+}
+
+// withDisplay establishes the app's Wayland security context and returns the options its
+// container should be built from. It runs immediately before the container is created: the
+// socket it produces is a bind-mount source, so it must exist first, and nothing later in the
+// launch can invalidate it.
+//
+// opt is taken and returned by value, so a dependency launched from the same launch never
+// inherits the socket of the app that depends on it - a per-app result must not travel down a
+// recursion as though it were a host fact.
+func (svc Service) withDisplay(cfg schema.AppConfig, opt options.HostOptions) (options.HostOptions, error) {
+	if svc.display == nil {
+		return opt, nil
+	}
+	socket, err := svc.display.Establish(svc.address(cfg.AppNameID), cfg, opt)
+	if err != nil {
+		return opt, err
+	}
+	opt.WaylandSocket = socket
+	return opt, nil
 }
 
 // attachFlags are the app-container flags that attach it to everything Zinc prepared on its
@@ -69,6 +108,11 @@ func (svc Service) teardownSteps(cfg schema.AppConfig) []ports.Command {
 // Plan returns the ordered runtime commands a launch would run, without running them
 // - the NetEnforcer's pre-steps (establish + lock the netns) followed by the app
 // container. Used for dry-run so what will happen is fully visible.
+//
+// It shows the compositor's own Wayland socket even for an app that will get a security
+// context, because creating one is a side effect a dry run must not have and the derived
+// socket would not exist for anyone who pasted the printed command. The dry run says so in
+// as many words instead (see cmdRun); what is printed stays something that can be run.
 func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.Command, error) {
 	if err := validate.Validate(cfg); err != nil { // never compose commands from unvalidated config (section 3)
 		return nil, fmt.Errorf("%s: %w", cfg.AppNameID, err)
@@ -135,6 +179,10 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 		if err := svc.runtime.Exec(cmd); err != nil {
 			return errors.Join(fmt.Errorf("launch %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
 		}
+	}
+	opt, err = svc.withDisplay(cfg, opt)
+	if err != nil {
+		return errors.Join(fmt.Errorf("launch %s: %w", cfg.AppNameID, err), svc.teardown(cfg, len(steps) > 0))
 	}
 	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, svc.attachFlags(cfg))
 	if err != nil {
