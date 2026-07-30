@@ -40,7 +40,7 @@ import (
 
 const usage = `usage: zcr <command> [args]
 
-  run <app> [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
+  run <app[@instance]> [--instance NAME] [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
                             print the launch plan, or launch it (--exec)
                             -v/--volume adds a runtime-only bind mount (repeatable;
                             OPTIONS default ro,noexec - use rw and/or exec)
@@ -213,6 +213,11 @@ const runUsage = "usage: zcr run <app> [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
 // use). The separated (-v VALUE) and attached (-v=VALUE, --volume=VALUE) forms are both
 // accepted.
 func parseRunArgs(argv []string) (name string, execute bool, volumes []schema.Volume, err error) {
+	// --instance is the flag form of the "app@instance" address. Both exist because they are
+	// convenient in different places - a flag reads better in a hand-typed command, an address
+	// travels better through a script that already has one string - and they fold into the same
+	// address here so nothing downstream has to know which was used.
+	var instance string
 	for idx := 0; idx < len(argv); idx++ {
 		arg := argv[idx]
 		switch {
@@ -240,6 +245,14 @@ func parseRunArgs(argv []string) (name string, execute bool, volumes []schema.Vo
 				return "", false, nil, verr
 			}
 			volumes = append(volumes, vol)
+		case arg == "--instance":
+			idx++
+			if idx >= len(argv) {
+				return "", false, nil, fmt.Errorf("--instance: missing value (want a name like 'work')")
+			}
+			instance = argv[idx]
+		case strings.HasPrefix(arg, "--instance="):
+			instance = strings.TrimPrefix(arg, "--instance=")
 		case strings.HasPrefix(arg, "-"):
 			return "", false, nil, fmt.Errorf("unknown flag %q\n%s", arg, runUsage)
 		case name == "":
@@ -250,6 +263,12 @@ func parseRunArgs(argv []string) (name string, execute bool, volumes []schema.Vo
 	}
 	if name == "" {
 		return "", false, nil, fmt.Errorf("%s", runUsage)
+	}
+	if instance != "" {
+		if strings.Contains(name, "@") {
+			return "", false, nil, fmt.Errorf("%q already names an instance, so --instance would have to override it; give one or the other", name)
+		}
+		name += "@" + instance
 	}
 	return name, execute, volumes, nil
 }
@@ -543,12 +562,32 @@ func refuseVM(svc app.Service, name string) error {
 // what an app IS, not on the part of it that happens to be written in its own file.
 func load(svc app.Service, arg string) (schema.AppConfig, error) {
 	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".yaml") {
+		// A path names a file, and a file is one definition. Instances address the store,
+		// where a name can be run more than once.
 		return svc.LoadFileResolved(arg)
 	}
-	if !svc.Exists(arg) {
-		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zc list)", arg)
+	addr, err := paths.ParseAddress(arg)
+	if err != nil {
+		return schema.AppConfig{}, err
 	}
-	return svc.LoadResolved(arg)
+	if !svc.Exists(addr.App) {
+		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zc list)", addr.App)
+	}
+	cfg, err := svc.LoadResolved(addr.App)
+	if err != nil {
+		return schema.AppConfig{}, err
+	}
+	// The instance rides on AppNameID from here down, because AppNameID is what every
+	// runtime name already derives from: the pod, the app container, the healthcheck the
+	// dependents wait on, the D-Bus proxy and its socket directory, and everything teardown
+	// removes. Rewriting it once here is what makes an instance a first-class running thing
+	// without threading a second identifier through every adapter - and, more to the point,
+	// without leaving one adapter that forgot to thread it and quietly shares a pod between
+	// two instances that were supposed to be separate.
+	//
+	// An un-instanced app is unchanged: Runtime() gives back the bare name.
+	cfg.AppNameID = addr.Runtime()
+	return cfg, nil
 }
 
 // quoteForDisplay lightly quotes args with whitespace, for readable printing only.
