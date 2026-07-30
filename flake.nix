@@ -82,6 +82,14 @@
 
         subPackages = [ "." ];
 
+        # `go build .` names the binary after the module's last path element, so this would
+        # otherwise install bin/creator, bin/tui, and - twice - bin/runner, which collide the
+        # moment the tools are joined into one package. The Makefile renames on the way out of
+        # the build container for the same reason; this is that rename.
+        postInstall = ''
+          mv "$out/bin/${baseNameOf tool.modRoot}" "$out/bin/${name}"
+        '';
+
         # The test suites are the repo's own gate and run in the pinned container via
         # `make check`, where podman and a writable HOME are available. Running them again
         # inside the Nix sandbox would test the sandbox, not the code, so this build only
