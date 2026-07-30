@@ -103,3 +103,45 @@ func StateDir(addr Address) (string, error) {
 	}
 	return dir, nil
 }
+
+// Template placeholders a mount path may use. They exist so one app definition can serve many
+// instances: ZDE's desk manifests carry a mounts field per desk, and without templating every
+// desk would need its own copy of the app just to point at its own directory.
+//
+// {state} is the one that matters, and it is why this lives next to StateDir rather than in a
+// string-utility package: it expands to the same directory `zcr where` reports, so a mount and
+// the answer to "where does this instance keep things" cannot disagree.
+const (
+	PlaceholderApp      = "{app}"
+	PlaceholderInstance = "{instance}"
+	PlaceholderState    = "{state}"
+)
+
+// Expand substitutes the placeholders in one path. An un-instanced app expands {instance} to
+// the empty string, which collapses "…/{instance}" to a trailing separator rather than to the
+// literal text - a path with "{instance}" left in it would be created on disk under that name
+// and look like a Zinc bug from the outside.
+//
+// It reports an error rather than silently leaving a placeholder unexpanded, because a mount
+// that was meant to be per-instance and quietly is not would share one directory between two
+// instances that exist precisely so they do not share.
+func (addr Address) Expand(path string) (string, error) {
+	if !strings.Contains(path, "{") {
+		return path, nil
+	}
+	stateDir, err := StateDir(addr)
+	if err != nil {
+		return "", err
+	}
+	expanded := strings.NewReplacer(
+		PlaceholderState, stateDir,
+		PlaceholderApp, addr.App,
+		PlaceholderInstance, addr.Instance,
+	).Replace(path)
+	expanded = filepath.Clean(expanded)
+	if strings.Contains(expanded, "{") {
+		return "", fmt.Errorf("%q: unknown placeholder; the ones that exist are %s, %s and %s",
+			path, PlaceholderState, PlaceholderApp, PlaceholderInstance)
+	}
+	return expanded, nil
+}

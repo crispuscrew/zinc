@@ -587,7 +587,36 @@ func load(svc app.Service, arg string) (schema.AppConfig, error) {
 	//
 	// An un-instanced app is unchanged: Runtime() gives back the bare name.
 	cfg.AppNameID = addr.Runtime()
+	if err := expandMounts(&cfg, addr); err != nil {
+		return schema.AppConfig{}, err
+	}
 	return cfg, nil
+}
+
+// expandMounts resolves {state}/{app}/{instance} in the app's host mount paths, so one
+// definition can serve many instances without each one needing its own copy of the config
+// just to point at its own directory.
+//
+// Only the HOST side is templated. The container side is the path the app looks at, which is
+// the same for every instance by design - the whole point is that the app is unaware there is
+// more than one of it, and an app told to find its profile at a different path per instance
+// would have to be configured per instance too.
+func expandMounts(cfg *schema.AppConfig, addr paths.Address) error {
+	for index := range cfg.Volumes {
+		expanded, err := addr.Expand(cfg.Volumes[index].HostMount)
+		if err != nil {
+			return fmt.Errorf("Volumes[%d]: %w", index, err)
+		}
+		cfg.Volumes[index].HostMount = expanded
+	}
+	for index := range cfg.Configs {
+		expanded, err := addr.Expand(cfg.Configs[index].HostMount)
+		if err != nil {
+			return fmt.Errorf("Configs[%d]: %w", index, err)
+		}
+		cfg.Configs[index].HostMount = expanded
+	}
+	return nil
 }
 
 // quoteForDisplay lightly quotes args with whitespace, for readable printing only.
