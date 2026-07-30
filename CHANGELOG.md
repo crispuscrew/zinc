@@ -7,6 +7,39 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-instance filtered D-Bus session bus (`DBusMeta`).** An app gets no session bus at all
+  unless it names one, which is the default worth keeping: the host bus reaches the keyring,
+  the portal, the compositor and every other service the user runs, so mounting it into a
+  sandbox undoes most of the sandbox. `Talk` lists names the app may call, `Own` names it may
+  claim. `zcr` runs `xdg-dbus-proxy` in the helper image, in a container it owns, holding the
+  real socket and serving the app a filtered one.
+
+  The proxy is deliberately not a member of the app's pod: a pod shares the PID namespace, so
+  a proxy inside it would be a process the app could signal or ptrace. Measured against a live
+  bus, an app granted one name sees 2 names through its socket where the host bus has 77 - the
+  ungranted ones are invisible, not merely denied.
+
+  Authored from either surface: `zc new --dbus-talk a.b.C --dbus-own a.b.C`, or the `dbus.talk`
+  and `dbus.own` rows in the TUI. Both set `InternalUserMeta.KeepUserID`, which a filtered bus
+  requires, and say so - validation refuses the pair without it rather than having the runner
+  change who an app runs as at launch. `DBusMeta` on a VM app is a validation error.
+
+- **Apache License 2.0.** The project had no licence file at all.
+
+### Changed
+
+- **CI pins its runner image and picks a working OCI runtime.** Every job drives podman, so the
+  runner's podman/crun pair is part of the build toolchain. `ubuntu-latest` moved it twice in
+  three days: podman 4.9.3 not understanding the `--health-cmd` exec form, then podman 5.8.4
+  against a crun that rejects the OCI spec version it emits, which failed `podman run` outright
+  before any Go ran. The image is pinned, and a pre-flight script probes the runtime and falls
+  back to runc when the default cannot start a container.
+
+- **Dropped `llms.txt`.** Nothing consumed it, and it was a fourth copy of the project
+  description that had already gone stale. `CONTRIBUTING.md` is the contributor entry point.
+
 ### Fixed
 
 - **`InternalUserMeta.KeepUserID` on an app with any `NetworkList` could not start at all.**

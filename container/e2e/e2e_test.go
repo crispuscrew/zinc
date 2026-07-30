@@ -210,6 +210,73 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("dbus", func(t *testing.T) {
+		// Needs two things this suite cannot create: a real session bus to proxy, and the
+		// helper image carrying xdg-dbus-proxy (the proxy runs --pull never, by design). A
+		// GitHub runner has neither, so this scenario is mostly a local gate - which is worth
+		// saying out loud rather than having it quietly always-skip and look like coverage.
+		busPath := os.Getenv("XDG_RUNTIME_DIR")
+		if busPath == "" {
+			t.Skip("no XDG_RUNTIME_DIR; skipping the session-bus scenario")
+		}
+		busPath = filepath.Join(busPath, "bus")
+		if _, err := os.Stat(busPath); err != nil {
+			t.Skipf("no session bus at %s; skipping the session-bus scenario", busPath)
+		}
+		if _, err := tool("podman", "image", "exists", "zinc/netfilter:local"); err != nil {
+			t.Skip("zinc/netfilter:local absent (make -C container/runner netfilter-image); skipping the session-bus scenario")
+		}
+
+		must(t, zc, "new", "busapp", "--image", appImage,
+			"--entrypoint", "/sleeper.sh",
+			"--dbus-talk", "org.freedesktop.portal.Desktop",
+			"--dbus-own", "org.mpris.MediaPlayer2.busapp")
+
+		// zc new is expected to have set KeepUserID itself: a filtered bus is a uid agreement
+		// with the proxy, and validation refuses the pair without it.
+		authored, rerr := os.ReadFile(filepath.Join(apps, "busapp.yaml"))
+		if rerr != nil {
+			t.Fatalf("reading the authored app: %v", rerr)
+		}
+		if !strings.Contains(string(authored), "KeepUserID: true") {
+			t.Error("zc new --dbus-talk did not set KeepUserID, so this app could not have saved")
+		}
+
+		defer func() { _, _ = tool(zc, "stop", "busapp") }()
+		must(t, zc, "run", "busapp", "--exec")
+		if !waitFor(func() bool { return running("busapp") }) {
+			t.Fatal("busapp should be running: its launch waits for the proxy, so a failure here is the proxy or the readiness probe")
+		}
+
+		// The proxy is a container of its own, NOT a member of the app's pod - the app must
+		// not share a PID namespace with the process filtering it.
+		proxy := "zinc-dbus-busapp"
+		if !waitFor(func() bool { return running(proxy) }) {
+			t.Fatalf("%s should be running alongside the app", proxy)
+		}
+		pod, _ := tool("podman", "inspect", "--format", "{{.Pod}}", proxy)
+		if strings.TrimSpace(pod) != "" {
+			t.Errorf("%s joined a pod (%q); it must stay outside the app's pod", proxy, strings.TrimSpace(pod))
+		}
+
+		// The app is pointed at the filtered socket and never at the host's.
+		env, _ := tool("podman", "inspect", "--format", "{{.Config.Env}}", "busapp")
+		if !strings.Contains(env, "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/zinc-bus/bus") {
+			t.Errorf("busapp is not pointed at the filtered socket, env = %s", env)
+		}
+		mounts, _ := tool("podman", "inspect", "--format", "{{range .Mounts}}{{.Source}} {{end}}", "busapp")
+		if strings.Contains(mounts, busPath) {
+			t.Errorf("busapp mounts the REAL session bus %s: %s", busPath, mounts)
+		}
+
+		// Teardown removes the proxy too: it is --rm, but an app whose proxy name is still
+		// taken cannot be relaunched.
+		must(t, zc, "stop", "busapp")
+		if !waitFor(func() bool { return !running(proxy) }) {
+			t.Errorf("%s survived `zc stop`; the next launch would collide on its name", proxy)
+		}
+	})
+
 	t.Run("readiness", func(t *testing.T) {
 		// DependsOn used to mean "running", and slowdep is the case where running is the
 		// wrong question: its container is up five seconds before the file its ReadyCheck

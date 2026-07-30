@@ -48,6 +48,16 @@ const (
 // adjacent to sockets the app reaches by a different convention.
 const ctrAppSocket = "/run/zinc-bus/bus"
 
+// ctrRuntimeRoot is where the host XDG_RUNTIME_DIR is mounted for the mkdir/rm helper steps.
+// Only those two ever see it; the app does not.
+const ctrRuntimeRoot = "/run/zinc-runtime"
+
+// ctrSocketDir is an app's socket directory as the mkdir/rm helper sees it: the container-side
+// mirror of HostSocketDir, kept here so the two cannot drift into naming different directories.
+func ctrSocketDir(app string) string {
+	return filepath.Join(ctrRuntimeRoot, "zinc", "dbus", app)
+}
+
 // Broker implements ports.DBusBroker. The host facts are held rather than passed per call,
 // so Teardown is reachable from Stop, which knows an app config and nothing about the host.
 //
@@ -120,18 +130,25 @@ func (brk Broker) Prepare(cfg schema.AppConfig) ([]ports.Command, error) {
 		return nil, fmt.Errorf("%s: DBusMeta asked for a filtered session bus, but no host session bus could be resolved - set DBUS_SESSION_BUS_ADDRESS to a unix:path= address", cfg.AppNameID)
 	}
 
-	// The socket directory is created by a helper-image container rather than by this process
-	// so that every step of a launch is one Command the Runtime executes and `zcr run` can
-	// print. A launch that did some of its work as direct syscalls would not be fully visible
-	// in a dry run, which is the property the plan output exists for.
+	// The socket directory is created by a helper-image container rather than by this process,
+	// because Prepare is also what Plan renders for a dry run: doing the mkdir here as a syscall
+	// would mean `zcr run` without --exec left directories behind, and would leave a launch step
+	// invisible in the plan the user is shown.
+	//
+	// The mount is XDG_RUNTIME_DIR itself, not the app's directory or its parent, because on a
+	// first launch neither exists and podman cannot bind-mount a source that is not there.
+	// Mounting the runtime dir is broader than this step needs, and what makes it acceptable is
+	// narrow: our own vetted image, one `mkdir -p`, no capability, no network, and it exits. The
+	// APP never gets this mount - it receives only its own socket.
 	steps := []ports.Command{{
 		Args: []string{
 			"run", "--rm", "--pull", "never",
 			"--userns=keep-id",
 			"--security-opt", "no-new-privileges", "--cap-drop", "all",
-			"-v", filepath.Dir(dir) + ":/run/zinc-dbus-root:rw",
+			"--network", "none",
+			"-v", brk.RuntimeDir + ":" + ctrRuntimeRoot + ":rw",
 			brk.image(),
-			"mkdir", "-p", filepath.Join("/run/zinc-dbus-root", filepath.Base(dir)),
+			"mkdir", "-p", ctrSocketDir(cfg.AppNameID),
 		},
 		Desc: "create bus socket dir for " + cfg.AppNameID,
 	}}
@@ -158,8 +175,48 @@ func (brk Broker) Prepare(cfg schema.AppConfig) ([]ports.Command, error) {
 	}
 	proxyArgs = append(proxyArgs, FilterArgs(cfg.DBusMeta)...)
 	steps = append(steps, ports.Command{Args: proxyArgs, Desc: "start filtered dbus proxy for " + cfg.AppNameID})
+
+	// Then WAIT for it, before the app is allowed to start. `podman run -d` returns when the
+	// container has started, not when xdg-dbus-proxy has bound and begun serving its socket,
+	// so without this the app can reach its first bus call before the socket exists and die
+	// with a bare connection error that points nowhere near the cause. The window is small and
+	// load-dependent, which is the worst kind: it passes on a quiet machine and fails on a busy
+	// one.
+	//
+	// The probe is a real method call rather than a test for the socket file, because the file
+	// appears at bind() and the proxy is only useful once it answers - and an app that starts
+	// between those two points fails exactly as if the file had been missing.
+	steps = append(steps, ports.Command{
+		Args: []string{
+			"run", "--rm", "--pull", "never",
+			"--userns=keep-id",
+			"--security-opt", "no-new-privileges", "--cap-drop", "all",
+			"--network", "none",
+			"-v", dir + ":" + ctrProxyDir + ":rw",
+			brk.image(),
+			"sh", "-c", readyScript,
+		},
+		Desc: "wait for the dbus proxy of " + cfg.AppNameID + " to serve",
+	})
 	return steps, nil
 }
+
+// readyScript polls the filtered socket with a real bus call until it answers, and fails the
+// launch if it never does. Fail-closed: a proxy that never came up must stop the launch, not
+// hand the app a socket nothing is listening on.
+//
+// 100 attempts at 50ms is a five-second ceiling. Long enough for a loaded machine to start a
+// container, short enough that a genuinely broken proxy reports itself instead of hanging a
+// launch the user is waiting on.
+const readyScript = `probe="dbus-send --bus=unix:path=` + ctrProxyDir + `/` + proxySocket + ` --dest=org.freedesktop.DBus --type=method_call --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames"
+for attempt in $(seq 1 100); do
+	if $probe >/dev/null 2>&1; then
+		exit 0
+	fi
+	sleep 0.05
+done
+echo "the filtered dbus socket did not begin answering within 5s - the proxy failed to start; check: podman logs zinc-dbus-<app>" >&2
+exit 1`
 
 // FilterArgs renders DBusMeta as xdg-dbus-proxy filter options, Talk before Own. Exported so
 // a test can assert the exact grants a config produces - the thing that decides what the app
@@ -193,15 +250,16 @@ func (brk Broker) Teardown(cfg schema.AppConfig) []ports.Command {
 		Args: []string{"rm", "-f", "--ignore", ContainerName(cfg.AppNameID)},
 		Desc: "remove dbus proxy for " + cfg.AppNameID,
 	}}
-	if dir := HostSocketDir(brk.RuntimeDir, cfg.AppNameID); dir != "" {
+	if brk.RuntimeDir != "" {
 		steps = append(steps, ports.Command{
 			Args: []string{
 				"run", "--rm", "--pull", "never",
 				"--userns=keep-id",
 				"--security-opt", "no-new-privileges", "--cap-drop", "all",
-				"-v", filepath.Dir(dir) + ":/run/zinc-dbus-root:rw",
+				"--network", "none",
+				"-v", brk.RuntimeDir + ":" + ctrRuntimeRoot + ":rw",
 				brk.image(),
-				"rm", "-rf", filepath.Join("/run/zinc-dbus-root", filepath.Base(dir)),
+				"rm", "-rf", ctrSocketDir(cfg.AppNameID),
 			},
 			Desc: "remove bus socket dir for " + cfg.AppNameID,
 		})

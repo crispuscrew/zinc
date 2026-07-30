@@ -90,7 +90,7 @@ func TestProxyRunsFilteredWithExactlyTheConfiguredGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	proxy := steps[len(steps)-1]
+	proxy := steps[len(steps)-2] // last step is the readiness wait
 	args := flat(proxy)
 
 	for _, want := range []string{
@@ -156,6 +156,23 @@ func TestTeardownRemovesProxyAndSocketDir(t *testing.T) {
 	}
 	if second := flat(steps[1]); !strings.Contains(second, "notes") {
 		t.Errorf("second teardown step does not target the app's socket dir: %s", second)
+	}
+}
+
+// The app must not be allowed to start before the proxy answers. `podman run -d` returns when
+// the container starts, not when xdg-dbus-proxy has bound and begun serving, so Prepare has to
+// close that window itself - and it has to be the LAST step, after which the app runs.
+func TestPrepareWaitsForTheProxyToServe(t *testing.T) {
+	steps, err := New("", testOpt()).Prepare(busApp())
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	last := flat(steps[len(steps)-1])
+	if !strings.Contains(last, "dbus-send") {
+		t.Errorf("the last pre-app step does not probe the bus: %s", last)
+	}
+	if !strings.Contains(last, "exit 1") {
+		t.Errorf("the readiness probe does not fail closed: %s", last)
 	}
 }
 

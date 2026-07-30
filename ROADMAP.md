@@ -194,6 +194,10 @@ plan. This repo ships only the Zinc core and its tools.
 
 Container work that matures alongside the releases above, not tied to one version:
 
+- **filtered session bus:** DELIVERED in 0.8. An app gets no D-Bus session bus unless `DBusMeta`
+  names one, and then only those names, served by an `xdg-dbus-proxy` container that holds the
+  real socket. The proxy is not in the app's pod, so the app cannot signal the process filtering
+  it. Authored from both `zc new` and the TUI.
 - **vpn-container routing:** DELIVERED in 0.7. An app is routed through a sibling VPN app with
   per-destination backend selection (`Via` per list) and fail-closed DNS; the "combining a
   link with other networking" restriction was lifted to make it possible. What is still open
