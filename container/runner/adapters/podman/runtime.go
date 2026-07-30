@@ -9,6 +9,7 @@
 package podman
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -405,6 +406,26 @@ func (Runtime) Exec(cmd ports.Command) error {
 		return fmt.Errorf("%s: %s%s", cmd.Desc, strings.TrimSpace(string(out)), helperImageHint(cmd, out))
 	}
 	return nil
+}
+
+// Capture runs one prepared command and returns its standard output, for the commands whose
+// output is the answer rather than a log (reading the netns counters back). Only stdout: a
+// podman warning on stderr spliced into the middle of a JSON document would turn a readable
+// error into a parse failure with no obvious cause. Stderr goes into the error instead,
+// where it is the explanation.
+func (Runtime) Capture(cmd ports.Command) (string, error) {
+	proc := exec.Command("podman", cmd.Args...)
+	if cmd.Stdin != "" {
+		proc.Stdin = strings.NewReader(cmd.Stdin)
+	}
+	var stderr bytes.Buffer
+	proc.Stderr = &stderr
+	out, err := proc.Output()
+	if err != nil {
+		return "", fmt.Errorf("%s: %w: %s%s", cmd.Desc, err, strings.TrimSpace(stderr.String()),
+			helperImageHint(cmd, stderr.Bytes()))
+	}
+	return string(out), nil
 }
 
 // helperImageHint turns podman's "image not known" into something a user can act on when the

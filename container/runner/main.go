@@ -12,6 +12,8 @@
 //	zcr logs <app> [-f]
 //	zcr term <app> [--shell]    open a terminal for a multiterminal app (section 9.1)
 //	zcr ps                      running apps, one per line
+//	zcr net [app] [--json]      network posture of every running app, or one app's
+//	                            nftables counters (section 5.3)
 //	zcr image search <term> | resolve <ref>
 //
 // <app> is a store name (~/.config/zinc/apps) or a path (contains '/' or ends .yaml).
@@ -50,6 +52,9 @@ const usage = `usage: zcr <command> [args]
   logs <app> [-f]
   term <app> [--shell]      open a terminal for a multiterminal app
   ps                        running apps, one per line
+  net [app[@instance]]      no app: every running app and whether its network is
+              [--json]      enforced in a netns of its own. An app: what its nftables
+                            ruleset has counted since that netns was created
   recheck <app>             re-resolve ImageMeta.SourceTag and report whether the
                             pinned digest is still what that tag points at
   where <app[@instance]> [--json]
@@ -169,6 +174,8 @@ func run(argv []string) error {
 		return cmdTermWaiter(svc, opt, rest)
 	case "ps":
 		return cmdPs(svc)
+	case "net":
+		return cmdNet(svc, opt, rest)
 	case "where":
 		return cmdWhere(svc, opt, rest)
 	case "bus":

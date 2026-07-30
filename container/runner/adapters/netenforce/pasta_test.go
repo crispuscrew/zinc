@@ -45,8 +45,8 @@ func TestNFTRuleset_Allowlist(t *testing.T) {
 		"policy drop;",
 		`oif "lo" accept`,
 		"ct state established,related accept",
-		"ip daddr { 1.1.1.1/32, 9.9.9.9/32 } tcp dport { 443, 80 } accept",
-		"ip daddr { 1.1.1.1/32, 9.9.9.9/32 } udp dport { 443, 80 } accept",
+		`ip daddr { 1.1.1.1/32, 9.9.9.9/32 } tcp dport { 443, 80 } counter accept comment "list[0] ip tcp"`,
+		`ip daddr { 1.1.1.1/32, 9.9.9.9/32 } udp dport { 443, 80 } counter accept comment "list[0] ip udp"`,
 	} {
 		if !strings.Contains(rules, want) {
 			t.Errorf("ruleset missing %q\n---\n%s", want, rules)
@@ -69,7 +69,7 @@ func TestNFTRuleset_BlacklistIsAllowAllExcept(t *testing.T) {
 	if !strings.Contains(rules, "policy accept;") {
 		t.Errorf("all-blacklist app should default-accept:\n%s", rules)
 	}
-	if !strings.Contains(rules, "ip daddr { 10.0.0.0/8 } drop") {
+	if !strings.Contains(rules, `ip daddr { 10.0.0.0/8 } counter drop comment "list[0] ip"`) {
 		t.Errorf("blacklist entry should drop the listed CIDR:\n%s", rules)
 	}
 }
@@ -88,14 +88,19 @@ func TestNFTRuleset_DNSBlockViaBlacklist(t *testing.T) {
 	rules := NFTRuleset(cfg)
 	for _, want := range []string{
 		"policy accept;",
-		"ip daddr { 0.0.0.0/0 } tcp dport { 53, 853 } drop",
-		"ip daddr { 0.0.0.0/0 } udp dport { 53, 853 } drop",
-		"ip6 daddr { ::/0 } tcp dport { 53, 853 } drop",
-		"ip6 daddr { ::/0 } udp dport { 53, 853 } drop",
+		`ip daddr { 0.0.0.0/0 } tcp dport { 53, 853 } counter drop comment "list[0] ip tcp"`,
+		`ip daddr { 0.0.0.0/0 } udp dport { 53, 853 } counter drop comment "list[0] ip udp"`,
+		`ip6 daddr { ::/0 } tcp dport { 53, 853 } counter drop comment "list[0] ip6 tcp"`,
+		`ip6 daddr { ::/0 } udp dport { 53, 853 } counter drop comment "list[0] ip6 udp"`,
 	} {
 		if !strings.Contains(rules, want) {
 			t.Errorf("DNS-block ruleset missing %q\n---\n%s", want, rules)
 		}
+	}
+	// The backstop must not appear here. This chain is allow-all-except, and writing its
+	// policy out as a trailing `drop` would turn it into deny-everything.
+	if strings.Contains(rules, labelPolicy) {
+		t.Errorf("a default-accept chain must not get a drop backstop:\n%s", rules)
 	}
 }
 
@@ -103,7 +108,7 @@ func TestNFTRuleset_CIDRWithoutPorts(t *testing.T) {
 	cfg := pastaApp()
 	cfg.NetworkMeta.NetworkLists[0].Ports = nil
 	rules := NFTRuleset(cfg)
-	if !strings.Contains(rules, "ip daddr { 1.1.1.1/32, 9.9.9.9/32 } accept") {
+	if !strings.Contains(rules, `ip daddr { 1.1.1.1/32, 9.9.9.9/32 } counter accept comment "list[0] ip"`) {
 		t.Errorf("no ports → all-ports accept to CIDRs expected:\n%s", rules)
 	}
 	if strings.Contains(rules, "dport") {
@@ -114,8 +119,91 @@ func TestNFTRuleset_CIDRWithoutPorts(t *testing.T) {
 func TestNFTRuleset_IPv6(t *testing.T) {
 	cfg := pastaApp()
 	cfg.NetworkMeta.NetworkLists[0].IPv6CIDR = []string{"2001:db8::/32"}
-	if rules := NFTRuleset(cfg); !strings.Contains(rules, "ip6 daddr { 2001:db8::/32 } tcp dport { 443, 80 } accept") {
+	if rules := NFTRuleset(cfg); !strings.Contains(rules, `ip6 daddr { 2001:db8::/32 } tcp dport { 443, 80 } counter accept comment "list[0] ip6 tcp"`) {
 		t.Errorf("ipv6 allow rule missing:\n%s", rules)
+	}
+}
+
+// Counters go on the rules that decide something and nowhere else. The two left bare are
+// the two that would drown the rest: loopback is the app talking to itself, and the
+// conntrack accept is every packet of every flow already allowed. Both together are almost
+// all the traffic and neither answers a question about policy.
+//
+// The bare conntrack accept is also what gives the accept counters their meaning: sitting
+// below it, they count the packets that OPENED flows rather than the traffic those flows
+// carried.
+func TestNFTRuleset_CountersOnTheRulesThatDecide(t *testing.T) {
+	cfg := gatewayApp() // a link, an egress list, a published port, and a forward chain
+	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1"}
+	rules := NFTRuleset(cfg)
+
+	for _, want := range []string{
+		`ip daddr { 203.0.113.7/32 } tcp dport { 51820 } counter accept comment "list[1] ip tcp"`, // an egress list
+		`iifname "zlink0" tcp dport { 1080 } counter accept comment "list[0] link tcp"`,           // a published port
+		`oifname "zlink0" counter accept comment "link zlink0"`,                                   // the sibling link
+		`udp dport { 53, 853 } counter drop comment "undeclared dns udp"`,                         // resolving off-list
+		`counter drop comment "` + labelPolicy + `"`,                                              // what the chain refuses
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("expected a counter on %q\n---\n%s", want, rules)
+		}
+	}
+
+	// And not on the plumbing. Checked line by line rather than by substring: "counter"
+	// appears all over the ruleset, so only the rule's own line can say whether it has one.
+	for _, line := range strings.Split(rules, "\n") {
+		bare := strings.TrimSpace(line)
+		isPlumbing := strings.HasPrefix(bare, `oif "lo"`) || strings.HasPrefix(bare, `iif "lo"`) ||
+			strings.HasPrefix(bare, "ct state")
+		if isPlumbing && strings.Contains(bare, "counter") {
+			t.Errorf("%q should stay bare: it carries almost all the traffic and decides nothing", bare)
+		}
+	}
+
+	// Every counter must carry a comment, because the comment is the only name the readout
+	// has for it - an uncommented one would surface as "unlabelled rule <handle>".
+	for _, line := range strings.Split(rules, "\n") {
+		if strings.Contains(line, "counter") && !strings.Contains(line, "comment") {
+			t.Errorf("counted rule with no label, so nothing can name it: %q", strings.TrimSpace(line))
+		}
+	}
+}
+
+// The backstop exists at all because nftables counts rules and not policies: a fail-closed
+// chain refuses by policy, so without it the most valuable number - what the sandbox is
+// actually refusing - would be permanently zero. It must be the LAST rule in each chain, or
+// it would drop what the rules below it were going to allow.
+func TestNFTRuleset_BackstopIsLastInEveryDropChain(t *testing.T) {
+	cfg := gatewayApp()
+	for index, netList := range cfg.NetworkMeta.NetworkLists {
+		if netList.Ingress {
+			cfg.NetworkMeta.NetworkLists[index].Forward = true // adds the forward chain
+		}
+	}
+	backstop := `counter drop comment "` + labelPolicy + `"`
+	chains, defaultDrop := 0, false
+	var body []string
+	for _, line := range strings.Split(NFTRuleset(cfg), "\n") {
+		bare := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(bare, "chain "):
+			body, defaultDrop = nil, false
+		case strings.HasPrefix(bare, "type ") && strings.Contains(bare, "policy drop;"):
+			defaultDrop = true
+		case bare == "}":
+			if defaultDrop {
+				chains++
+				if last := body[len(body)-1]; last != backstop {
+					t.Errorf("a default-drop chain must end with the backstop, ends with %q", last)
+				}
+			}
+			body, defaultDrop = nil, false
+		case bare != "":
+			body = append(body, bare)
+		}
+	}
+	if chains != 3 {
+		t.Fatalf("expected the output, input and forward chains to default-drop, found %d", chains)
 	}
 }
 
@@ -141,8 +229,8 @@ func TestNFTRuleset_IngressInputChain(t *testing.T) {
 		"chain input {",
 		"hook input priority 0; policy drop;",
 		`iif "lo" accept`,
-		"ip saddr { 192.168.1.0/24 } tcp dport { 80, 443 } accept",
-		"ip saddr { 192.168.1.0/24 } udp dport { 80, 443 } accept",
+		`ip saddr { 192.168.1.0/24 } tcp dport { 80, 443 } counter accept comment "list[0] ip tcp"`,
+		`ip saddr { 192.168.1.0/24 } udp dport { 80, 443 } counter accept comment "list[0] ip udp"`,
 		"hook output priority 0; policy drop;", // pure publisher: no egress
 	} {
 		if !strings.Contains(rules, want) {
@@ -156,7 +244,7 @@ func TestNFTRuleset_IngressAnySource(t *testing.T) {
 	cfg := pastaApp()
 	cfg.NetworkMeta.NetworkLists = []schema.NetworkList{{Ingress: true, Host: true, Ports: []int{8080}}}
 	rules := NFTRuleset(cfg)
-	if !strings.Contains(rules, "tcp dport { 8080 } accept") {
+	if !strings.Contains(rules, `tcp dport { 8080 } counter accept comment "list[0] tcp"`) {
 		t.Errorf("no CIDR should accept the port from any source:\n%s", rules)
 	}
 	if strings.Contains(rules, "saddr") {
@@ -217,7 +305,7 @@ func TestTier2_ConsumerRuleset(t *testing.T) {
 		t.Fatalf("consumer should attach to the producer's link with its own alias")
 	}
 	rules := NFTRuleset(cfg)
-	if !strings.Contains(rules, `oifname "zlink0" accept`) {
+	if !strings.Contains(rules, `oifname "zlink0" counter accept comment "link zlink0"`) {
 		t.Errorf("consumer should reach the producer over the link:\n%s", rules)
 	}
 	if strings.Contains(rules, "dport") {
@@ -236,9 +324,9 @@ func TestTier2_ProducerRuleset(t *testing.T) {
 	for _, want := range []string{
 		"hook input priority 0; policy drop;",
 		"hook output priority 0; policy drop;",
-		`iifname "zlink0" tcp dport { 5432 } accept`,
-		`iifname "zlink0" udp dport { 5432 } accept`,
-		`oifname "zlink0" accept`,
+		`iifname "zlink0" tcp dport { 5432 } counter accept comment "list[0] link tcp"`,
+		`iifname "zlink0" udp dport { 5432 } counter accept comment "list[0] link udp"`,
+		`oifname "zlink0" counter accept comment "link zlink0"`,
 	} {
 		if !strings.Contains(rules, want) {
 			t.Errorf("producer link ruleset missing %q\n---\n%s", want, rules)
@@ -364,9 +452,11 @@ func TestNFTRuleset_LinkAndEgressTogether(t *testing.T) {
 	got := NFTRuleset(gatewayApp())
 
 	for _, want := range []string{
-		`oifname "zlink0" accept`,                                // the link, by interface
-		`ip daddr { 203.0.113.7/32 } tcp dport { 51820 } accept`, // the tunnel, by address
-		`iifname "zlink0" tcp dport { 1080 } accept`,             // siblings reaching its published port
+		`oifname "zlink0" counter accept comment "link zlink0"`, // the link, by interface
+		// the tunnel, by address - and labelled with its position in NetworkLists, not its
+		// position among the egress lists, which the link ahead of it would have shifted
+		`ip daddr { 203.0.113.7/32 } tcp dport { 51820 } counter accept comment "list[1] ip tcp"`,
+		`iifname "zlink0" tcp dport { 1080 } counter accept comment "list[0] link tcp"`, // siblings reaching its published port
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ruleset missing %q:\n%s", want, got)
@@ -573,8 +663,8 @@ func TestDNS_RoutedAppsQueriesAreRedirectedThroughTheSibling(t *testing.T) {
 		"type nat hook output priority dstnat;", // before the filter hook, so it sees the new address
 		"udp dport { 53, 853 } dnat to 1.1.1.1",
 		"tcp dport { 53, 853 } dnat to 1.1.1.1",
-		"ip daddr { 1.1.1.1 } udp dport { 53, 853 } accept", // and the filter then permits it
-		"udp dport { 53, 853 } drop",                        // anything not redirected dies
+		"ip daddr { 1.1.1.1 } udp dport { 53, 853 } accept",               // and the filter then permits it
+		`udp dport { 53, 853 } counter drop comment "undeclared dns udp"`, // anything not redirected dies
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("routed ruleset missing %q:\n%s", want, got)
@@ -828,7 +918,7 @@ func TestTunnel_BuiltBeforeTheRulesetLocksTheNetns(t *testing.T) {
 // The app's own traffic into the tunnel has to be accepted: the output chain default-drops,
 // and what rides the tunnel is already bounded by the peers' AllowedIPs.
 func TestTunnel_AcceptedInTheOutputChain(t *testing.T) {
-	if ruleset := NFTRuleset(tunnelApp(t)); !strings.Contains(ruleset, `oifname "wg0" accept`) {
+	if ruleset := NFTRuleset(tunnelApp(t)); !strings.Contains(ruleset, `oifname "wg0" counter accept comment "tunnel wg0"`) {
 		t.Errorf("the tunnel must be accepted outbound:\n%s", ruleset)
 	}
 }

@@ -19,6 +19,8 @@ zcr where <app[@instance]> [--json]
                             where the instance keeps its state, what its container is
                             called, and its filtered bus socket and proxy
 zcr bus [--json]            the bus attribution table (see below)
+zcr net [app] [--json]      running apps and whether each has a locked netns, or one
+                            app's nftables counters
 zcr image search <term> | resolve <ref>
 ```
 
@@ -51,6 +53,32 @@ network namespace before it starts:
 The runtime is fail-closed: anything it does not yet support is rejected, not run.
 Not supported in this build yet: host-scoped egress and gateway/multi-homing. (A sibling link
 may now coexist with other networking on one app - that is what routing is built on.)
+
+### Seeing what it did
+
+```
+$ zcr net
+ADDRESS        POSTURE   NETNS
+netprobe@work  filtered  netprobe.work-pod
+quiet          isolated  -
+
+$ zcr net netprobe@work
+CHAIN   VERDICT  RULE                PACKETS  BYTES
+output  drop     undeclared dns udp  1        57
+output  accept   list[0] ip tcp      3        180
+output  drop     default policy      9        652
+```
+
+`filtered` means the app has `NetworkLists`, so a pod netns of its own with the ruleset
+locked in it. `isolated` means it has none, so `--network none`: it reaches only its own
+localhost and has no netns or ruleset at all. The two are never merged - an isolated app is
+not a filtered one whose counters happen to be zero.
+
+`list[0]` is the entry's index in `NetworkMeta.NetworkLists`, so a number points at the line
+of config that produced the rule. `default policy` is what the chain refused. Counters live
+in the pod's netns and are created with it, so they read **since this launch** and are gone
+when the pod is - `stop` and `restart` both reset them. `--json` gives either form as a
+machine-readable document.
 
 ## Filtered session bus
 

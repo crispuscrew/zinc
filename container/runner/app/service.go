@@ -180,6 +180,26 @@ func (svc Service) runAll(steps []ports.Command) error {
 	return errors.Join(errs...)
 }
 
+// NetCounters reads back what an app's enforced ruleset has actually seen, returning the
+// enforcer's own output and whether the app has a ruleset at all. An app with no
+// NetworkLists is the second case: it has no netns of its own, so there is nothing to count,
+// and saying so is an answer rather than an error.
+//
+// The output is deliberately unparsed. What it means belongs to the enforcement mechanism -
+// today nft's JSON - and the app layer teaching itself to read one adapter's format on a
+// caller's behalf is exactly the coupling the NetEnforcer port exists to avoid (section 13).
+func (svc Service) NetCounters(cfg schema.AppConfig, opt options.HostOptions) (string, bool, error) {
+	cmd, filtered := svc.net.Counters(cfg, opt)
+	if !filtered {
+		return "", false, nil
+	}
+	out, err := svc.runtime.Capture(cmd)
+	if err != nil {
+		return "", true, err
+	}
+	return out, true, nil
+}
+
 // Rename changes an app's identity from oldName to newName. There is no atomic file
 // rename, because the name lives in two places - the filename and AppNameID inside
 // the YAML - so this loads the definition, rewrites AppNameID, saves it under the new

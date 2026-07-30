@@ -35,6 +35,52 @@ tracked in [RELEASES.md](RELEASES.md).
   connection's `GetConnectionUnixProcessID` and looking that pid up in the table names the
   app. The end-to-end suite walks exactly that chain against the real session bus.
 
+- **`zcr net` - seeing what the lock-down actually did.** A firewall nobody can inspect from
+  outside is one nobody can trust. One verb answers both halves: `zcr net` lists every running
+  app with its network posture, and `zcr net <app[@instance]>` reports what that app's ruleset
+  has counted. `--json` gives either as a machine-readable document, since the consumer is a
+  desktop shell.
+
+  The two postures are never merged. `filtered` means the app has `NetworkLists`, so a pod
+  netns of its own with the nft ruleset locked in it; `isolated` means it has none, so
+  `--network none` - it reaches only its own localhost and has no netns or ruleset at all. An
+  isolated app is not a filtered one whose counters happen to be zero, and showing them alike
+  would say the opposite of what is true about one of them. Apps are named the way a person
+  types them (`app@instance`), never the runtime form; anything running that is not a defined
+  app - Zinc's own D-Bus proxies, a container the user started - is left out rather than
+  listed with a posture Zinc cannot vouch for.
+
+  The read takes the same route as the lock-down: same helper image, same pod, same one
+  capability, `nft -j list ruleset` instead of `nft -f -`. Reading nftables is not a lesser
+  privilege than writing it, so there is no weaker path to take; it joins the pod's network
+  namespace and nothing else (a pod shares net, ipc and uts, not pid), and exits as soon as
+  the dump is written.
+
+  **Observable:** `zcr net` shows `netprobe@work  filtered  netprobe.work-pod` beside `quiet
+  isolated  -`; three connections to an allowed destination and one query to an undeclared
+  resolver read back as `list[0] ip tcp 3 180` and `undeclared dns udp 1 57`.
+
+- **Counters on the rules that decide something.** The generated ruleset now carries a
+  `counter` and a naming `comment` on each rule a `NetworkList` produced (labelled `list[N]`
+  by its index in the config, so a number points at the line that produced it), on the link
+  and tunnel accepts, and on the DNS deny. Deliberately not on `oif "lo"` or `ct state
+  established,related`: between them they are almost all the traffic and neither answers a
+  question about policy.
+
+  Every default-drop chain also gets a trailing `counter drop`, because nftables counts rules
+  and not policies - a fail-closed chain refuses by policy, so the most valuable number of all
+  would otherwise be permanently zero whether the lock-down worked or not. It changes no
+  behaviour, and is emitted only for a drop policy: on an all-blacklist chain the same line
+  would turn allow-all-except into deny-all.
+
+  Because the conntrack accept stays bare and stays above them, an accept counter counts the
+  packets that OPENED flows rather than the traffic they carried - the more useful reading,
+  and why the byte column is small.
+
+  **Counters are not lifetime totals.** They live in the pod's netns and are created with it,
+  so `stop`, `restart` and any failed launch reset them to zero. The output says so in both
+  forms rather than leaving it to be assumed.
+
 ### Changed
 
 - **`zcr where` requires the app to be defined.** It now loads the config, because whether

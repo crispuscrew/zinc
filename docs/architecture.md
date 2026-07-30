@@ -334,6 +334,37 @@ pasta-plus-nft implementation is one adapter. Swapping the traffic-control mecha
 different firewall, an eBPF egress filter, an external controller) is a new adapter, with the
 launch path unchanged. The tiers and the exact ruleset are in section 6.
 
+**Asking what it did.** A lock-down nobody can see the effect of is one nobody can trust, so
+`zcr net` answers the two questions from outside:
+
+- `zcr net` lists every **running** app with its network posture and, for a filtered one, the
+  pod that owns its netns. Two postures, never merged: `filtered` (has `NetworkLists`, so a
+  netns of its own with the ruleset locked in it) and `isolated` (no lists, so `--network
+  none` - it reaches only its own localhost and has no netns or ruleset at all). They are
+  separated because an isolated app is not a filtered app whose counters happen to be zero,
+  and a table that showed them alike would say the opposite of what is true about one of them.
+  Apps are named the way a person types them (`app@instance`), never the runtime form
+  (`app.instance`); anything running that is not a defined app - Zinc's own D-Bus proxies, a
+  container the user started - is left out rather than listed with a posture Zinc cannot vouch
+  for.
+- `zcr net <app[@instance]>` reports what that app's ruleset has actually counted: per rule,
+  the chain, the verdict, the rule's label, packets and bytes. `--json` gives either as a
+  machine-readable document for a desktop shell.
+
+The read goes through the same helper image, the same pod and the same single capability as
+the step that applied the ruleset - `nft -j list ruleset` instead of `nft -f -`. Reading
+nftables is not a lesser privilege than writing it (one netlink socket, `CAP_NET_ADMIN`
+either way), so there is no weaker path to take. It differs from the other helpers in one
+respect: it runs while the app is alive, where they had all exited before it started. It
+joins the pod's **network** namespace and nothing else - a podman pod shares net, ipc and
+uts, not pid - so it cannot see, signal or ptrace the app, and it exits as soon as the dump
+is written.
+
+**A counter is not a lifetime total.** Counters live in the pod's netns and are created with
+it, so they start at zero every time the pod is, which `zcr stop`, `zcr restart` and any
+failed launch all do. The number means "since this launch"; nothing persists one, and nothing
+is meant to. The output says so in both forms rather than leaving it to be assumed.
+
 ### 5.4 GPU passthrough
 
 **Weak isolation when enabled.** Granting `/dev/dri` (via `DisplayMeta.DisableGpuAccess:
@@ -681,6 +712,31 @@ A dry run (`zcr run <app>` with no `--exec`) prints the exact `podman` commands 
 ruleset that would be piped in**, so what will be enforced is fully visible before anything
 runs.
 
+**Counters, and which rules get one.** Rules that decide something carry a `counter` and a
+`comment` naming them; `zcr net <app>` (5.3) reads them back with `nft -j` and reports each by
+its comment, so nothing has to reconstruct nft syntax out of JSON. What is counted is a
+deliberate subset, because a counter on every rule buries the two numbers worth reading:
+
+| Counted | Left bare |
+|---|---|
+| every rule a `NetworkList` produced, labelled `list[N]` by its index in the config | `oif "lo"` / `iif "lo"` - the app talking to itself |
+| the link and tunnel accepts (`link zlink0`, `tunnel wg0`) | `ct state established,related` - every packet of every flow already allowed |
+| the DNS deny (`undeclared dns udp`/`tcp`) | the DNS accepts to the resolvers the app declared |
+| the default-drop backstop (`default policy`) | the `forward` chain's accepts, and the `nat` rules |
+
+Two of those choices are load-bearing. The **backstop** is a trailing `counter drop` written
+into every default-drop chain, because nftables counts rules and not policies: a fail-closed
+chain refuses by policy, so without it the most valuable number - what the sandbox is actually
+refusing - would be permanently zero whether the lock-down worked or not. It changes no
+behaviour (a packet reaching the end of the chain was dropped anyway) and is emitted **only**
+for a drop policy: on an all-blacklist chain the same line would turn allow-all-except into
+deny-all. And the **conntrack accept stays bare and stays above them**, which is what gives an
+accept counter its meaning: it counts the packets that opened flows, not the traffic those
+flows carried. That is the more useful reading - "was this rule exercised, how often" - and it
+is why the byte column is small. A `list[N]` label points at the entry's index in
+`NetworkMeta.NetworkLists`, not its position among the egress rules, so it names the line of
+config that produced it even when a link list sits ahead of it.
+
 ### 6.4 The netfilter helper image
 
 The nft step runs inside a tiny helper image, `zinc/netfilter:local`, built once with `make
@@ -899,6 +955,7 @@ zcr logs <app> [-f]         zcr term <app> [--shell]      zcr ps
 zcr where <app[@instance]> [--json]
                             state dir, container name, bus socket and bus proxy
 zcr bus [--json]            the bus attribution table: proxy, host pid, app@instance (5.8)
+zcr net [app] [--json]      network posture of every running app, or one app's counters (5.3)
 zcr image search <term> | resolve <ref>
 ```
 
