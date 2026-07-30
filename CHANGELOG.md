@@ -5,6 +5,51 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.8.1] - 2026-07-31
+
+### Added
+
+- **Nix flake and home-manager module.** `flake.nix` exposes each tool as a package (`zc`,
+  `zcr`, `zvr`, `zlt`, `zlg`), a `default` joining all five, and `homeModules.zinc` putting
+  the selected ones on PATH. `programs.zinc.tools` defaults to `zc`/`zcr`/`zlt`; `zvr` and
+  `zlg` are opt-in, since a VM runner without qemu on the machine cannot work and a desktop
+  shipping its own launcher does not want a second one. `homeManagerModules` is an alias, as
+  consumers may pin either name. nixpkgs is the only input, so a consumer overrides one
+  input rather than three.
+
+  This is a second way to build the binaries and does not replace the gate: `make check` and
+  `make repro` in the digest-pinned container still decide whether a change is good. The
+  flake is for consumers.
+
+  **Observable:** `nix run .#zc -- version` prints the flake's version. CI builds all five
+  tools through the flake and runs one, because five green derivations proved nothing the
+  first time - the binaries were installed under their module names, so `bin/runner` was
+  written twice and `bin/zc` did not exist.
+
+- **Instance addressing, and `zcr where`.** `app@instance` is the address a person types.
+  It cannot be the runtime name (podman refuses `@`), so `@` is the human form and `.` the
+  runtime form. An app with no instance keeps the bare name it has always had, so nothing
+  already running is renamed. Instance names are `[a-z0-9][a-z0-9_-]*`: no dots, since the
+  dot is the separator, and no uppercase, so an address echoes back as typed.
+
+  Per-instance state lives under `$XDG_STATE_HOME` (falling back to `~/.local/state`, that
+  variable's own default) at `zinc/<app>/<instance>`.
+
+  **Observable:** `zcr where <app[@instance]>` prints the resolved state directory and the
+  runtime container name, as two labelled lines whose labels are the contract:
+
+      $ zcr where firefox@work
+      state: /home/u/.local/state/zinc/firefox/work
+      container: firefox.work
+
+  It exists so nothing outside Zinc hardcodes the layout - a second copy of the rules drifts
+  the first time either side changes. It answers whether or not the instance is running,
+  which is why it is a command of its own rather than part of `inspect` (a passthrough to
+  `podman inspect`).
+
+  Addressing and layout only: `zcr run --instance` does not exist yet, so nothing threads an
+  instance through a launch.
+
 ## [0.8.0] - 2026-07-30
 
 ### Added
@@ -843,6 +888,7 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.8.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.8.1
 [0.8.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.8.0
 [0.7.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.7.0
 [0.6.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.6.0

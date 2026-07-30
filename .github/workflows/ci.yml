@@ -83,6 +83,32 @@ jobs:
       - name: make vendor-check
         run: make -C menu vendor-check
 
+  nix:
+    name: nix flake (consumer build path)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned by commit SHA rather than by tag: a tag is mutable, and this action installs a
+      # package manager into the job. v31.11.0 at the time of pinning.
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      # Every tool, not just one: they are five separate Go modules with their own vendor
+      # trees, and a flake that builds zc proves nothing about zlg.
+      - name: build every tool through the flake
+        run: nix build --no-link --print-build-logs .#zc .#zcr .#zvr .#zlt .#zlg
+      # The build succeeding is not the claim ZDE cares about - the claim is that what comes
+      # out runs and is the version it says. This is the assertion a consumer can point at.
+      - name: the flake's binaries run and report their version
+        run: |
+          got="$(nix run --print-build-logs .#zc -- version)"
+          echo "zc reports: $got"
+          case "$got" in
+            *v0.8.1*) ;;
+            *) echo "expected the flake version from 'zc version', got: $got" >&2; exit 1 ;;
+          esac
+
   e2e:
     name: end-to-end (podman)
     runs-on: ubuntu-24.04
