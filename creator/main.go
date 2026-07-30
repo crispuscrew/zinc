@@ -10,6 +10,7 @@
 //
 //	zc tui                             keyboard-first manager (create/edit/run/stop/logs)
 //	zc new <name> --image <img> [--desc d] [--icon i] [--entrypoint cmd] [--tunnel wg.conf]
+//	                              [--dbus-talk a.b.C,...] [--dbus-own a.b.C,...]
 //	zc list
 //	zc validate <name|app.yaml>
 //	zc delete <name>
@@ -54,6 +55,7 @@ const usage = `usage: zc <command> [args]
 
   tui                               keyboard-first manager (create/edit/run/stop/logs)
   new <name> --image <img> [--desc d] [--icon i] [--entrypoint cmd] [--tunnel wg.conf]
+             [--dbus-talk a.b.C,...] [--dbus-own a.b.C,...]
   new <name> --vm --image <base.qcow2> --base-digest sha256:... [--memory MiB]
              [--vcpus N] [--disk GiB] [--display None|Window|Accelerated|Compatible]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
@@ -209,6 +211,8 @@ func cmdNew(svc backend.Service, argv []string) error {
 	entrypoint := fset.String("entrypoint", "", "the process to run; empty uses the image's default command (which for many images exits immediately)")
 	tunnelConf := fset.String("tunnel", "", "container only: path to a wg-quick config; Zinc builds the WireGuard interface for the app (the app itself never gets NET_ADMIN)")
 	install := fset.String("install", "", "setup steps, ';'-separated: a container's derived-image RUN layer, or a guest's cloud-init runcmd")
+	dbusTalk := fset.String("dbus-talk", "", "container only: D-Bus names the app may call, comma-separated (e.g. org.freedesktop.portal.Desktop); without this the app gets no session bus at all")
+	dbusOwn := fset.String("dbus-own", "", "container only: D-Bus names the app may claim, comma-separated (e.g. org.mpris.MediaPlayer2.notes)")
 	if err := fset.Parse(flags); err != nil {
 		return err
 	}
@@ -241,6 +245,20 @@ func cmdNew(svc backend.Service, argv []string) error {
 		if err := seedTunnel(&cfg, *tunnelConf); err != nil {
 			return err
 		}
+	}
+	keepIDImplied := false
+	if *dbusTalk != "" || *dbusOwn != "" {
+		if *isVM {
+			return fmt.Errorf("--dbus-talk/--dbus-own are container-only: a guest cannot take a bind-mounted bus socket")
+		}
+		cfg.DBusMeta = schema.DBusMeta{Talk: splitList(*dbusTalk), Own: splitList(*dbusOwn)}
+		// A filtered bus is a uid agreement with the proxy, and validation refuses the pair
+		// without it, so authoring one without KeepUserID would only ever produce a config
+		// that will not save. Set it here and say so: writing it into the file is visible and
+		// reviewable, which is the part that matters - unlike the runner silently changing who
+		// an app runs as at launch, which is what the validator exists to prevent.
+		cfg.InternalUserMeta.KeepUserID = true
+		keepIDImplied = true
 	}
 	if *isVM {
 		cfg.Type = schema.ZincVirtualization
@@ -287,6 +305,9 @@ func cmdNew(svc backend.Service, argv []string) error {
 		return err
 	}
 	fmt.Printf("created %s → %s\n", cfg.AppNameID, svc.Path(cfg.AppNameID))
+	if keepIDImplied {
+		fmt.Println("note: set InternalUserMeta.KeepUserID - a filtered bus needs the app's uid to match the proxy's")
+	}
 	// Same advisories `zc validate` prints. Authoring is when a valid-but-surprising choice
 	// is cheapest to change: the alternative is meeting it as a black screen or an open port
 	// at the first launch, with nothing on screen connecting the two.
@@ -329,7 +350,7 @@ func seedTunnel(cfg *schema.AppConfig, path string) error {
 }
 
 const newUsage = `usage:
-  zc new <name> --image <img> [--desc d] [--icon i]
+  zc new <name> --image <img> [--desc d] [--icon i] [--dbus-talk a.b.C] [--dbus-own a.b.C]
   zc new <name> --vm --image <base.qcow2> --base-digest sha256:... \
                 [--memory MiB] [--vcpus N] [--disk GiB] [--display None|Window|Accelerated]`
 

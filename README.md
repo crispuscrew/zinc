@@ -136,6 +136,11 @@ zc compose import ./stack.yaml --dry-run   # one app per service; --service pick
 # wg-quick config and written in, so what it authors is an app that actually comes up
 zc new vpn --image docker.io/library/alpine@sha256:... --tunnel ~/wg/home.conf
 
+# grant a filtered session bus. Without these the app gets no bus at all; naming something
+# also sets KeepUserID, which a filtered bus requires, and says so
+zc new notes --image ... --dbus-talk org.freedesktop.portal.Desktop \
+                         --dbus-own org.mpris.MediaPlayer2.notes
+
 # run: zc forwards these to whichever runtime owns the app - zcr for container apps, zvr
 # for VM apps. run without --exec prints the launch plan first
 zc run firefox --exec
@@ -167,7 +172,8 @@ In the TUI (default scheme): `n` new, `e` edit, `r` run, `s` stop, `l` logs, `d`
 `R` rename, `?` keybind schemes, `q` quit. In a form: `tab`/arrows move, `space` toggles,
 `ctrl+d` clears a field, `ctrl+r` resolves the image to a pinned digest, `ctrl+s` saves,
 `esc` cancels; the **advanced** row opens the full YAML in `$EDITOR` (where capabilities,
-network lists, volumes, and keys live).
+network lists, volumes, and keys live). The `dbus.talk` / `dbus.own` rows grant a filtered
+session bus; left blank, the app gets none.
 
 TUI keys are zc's own (not desktop hotkeys); they resolve through a selectable scheme
 (`default`, `vim`, or a custom one under `~/.config/zinc/zc`). Pick one with
