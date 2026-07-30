@@ -30,8 +30,16 @@ if podman run --rm "$image" true 2>/dev/null; then
 else
 	echo "ensure-podman: default runtime cannot start a container, trying runc"
 	command -v runc >/dev/null || { echo "ensure-podman: no runc to fall back to" >&2; exit 1; }
-	mkdir -p "$HOME/.config/containers"
-	printf '[engine]\nruntime = "runc"\n' >"$HOME/.config/containers/containers.conf"
+	# A system drop-in, not $HOME/.config/containers/containers.conf, because podman resolves
+	# that path through XDG_CONFIG_HOME - and the e2e suite points XDG_CONFIG_HOME at a temp
+	# dir to get an isolated app store. A user-level file is therefore invisible to the very
+	# zcr under test, which is exactly how this was missed the first time: `podman info` in
+	# this script reported runc while zcr went on using the broken default.
+	#
+	# A drop-in rather than containers.conf itself so nothing already on the image is
+	# clobbered; podman merges /usr/share, then /etc, then /etc/containers.conf.d, then user.
+	sudo mkdir -p /etc/containers/containers.conf.d
+	printf '[engine]\nruntime = "runc"\n' | sudo tee /etc/containers/containers.conf.d/50-zinc-runtime.conf >/dev/null
 	podman run --rm "$image" true
 	echo "ensure-podman: switched to runc"
 fi
