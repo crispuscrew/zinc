@@ -15,6 +15,10 @@ zcr stop|restart|inspect <app>
 zcr logs <app> [-f]
 zcr term <app> [--shell]    open a terminal for a multiterminal app
 zcr ps                      running apps, one per line
+zcr where <app[@instance]> [--json]
+                            where the instance keeps its state, what its container is
+                            called, and its filtered bus socket and proxy
+zcr bus [--json]            the bus attribution table (see below)
 zcr image search <term> | resolve <ref>
 ```
 
@@ -79,6 +83,31 @@ Fail-closed here too. An app that asks for a bus when no host bus can be resolve
 start, rather than starting with no bus and looking broken for reasons unrelated to its
 config. `DBusMeta` on a VM app is a validation error - a guest cannot take a bind-mounted
 unix socket.
+
+### Attribution: which app is a connection on the host bus
+
+Zinc creates the proxy and names it after the app, so it knows which host-bus connection
+belongs to which `app@instance` without asking the app anything. It publishes that mapping
+rather than having apps claim names for themselves - a name a sandboxed app claims is a
+self-assertion, which is what attribution exists to stop trusting (architecture doc, 5.8):
+
+```
+zcr where <app[@instance]> [--json]   state dir, container name, bus socket, bus proxy
+                                      ("none" / null when the app asked for no bus)
+zcr bus [--json]                      every running proxy: app@instance, host pid, socket
+```
+
+Given something seen on the host bus, ask it for the connection's pid
+(`org.freedesktop.DBus.GetConnectionUnixProcessID`, an `SO_PEERCRED` fact the peer cannot
+assert) and look that pid up in `zcr bus`:
+
+```sh
+zcr bus --json | jq -r --argjson pid 12345 '.[] | select(.pid == $pid) | .address'
+```
+
+`xdg-dbus-proxy` opens one upstream connection per client, so an app with no live bus client
+has no connection on the host bus at all, and an app with several has several - all with the
+proxy's one pid.
 
 ## Build
 

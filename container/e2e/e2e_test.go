@@ -11,6 +11,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -268,6 +269,83 @@ func TestE2E(t *testing.T) {
 		if strings.Contains(mounts, busPath) {
 			t.Errorf("busapp mounts the REAL session bus %s: %s", busPath, mounts)
 		}
+
+		// Attribution: the mapping Zinc publishes must be the one that is actually true of the
+		// running system. `zcr bus` says a pid belongs to busapp; podman is asked the same
+		// question about the container Zinc created, and the two have to agree - otherwise a
+		// desktop resolving a bus connection would name the wrong app with full confidence.
+		table := must(t, zcr, "bus")
+		var reported string
+		for _, line := range strings.Split(table, "\n") {
+			if fields := strings.Fields(line); len(fields) >= 3 && fields[0] == "busapp" {
+				reported = fields[1]
+			}
+		}
+		if reported == "" {
+			t.Fatalf("zcr bus does not list the running app's proxy:\n%s", table)
+		}
+		actual, _ := tool("podman", "inspect", "--format", "{{.State.Pid}}", proxy)
+		if strings.TrimSpace(actual) != reported {
+			t.Errorf("zcr bus reports pid %s for busapp, podman reports %s for %s", reported, strings.TrimSpace(actual), proxy)
+		}
+
+		// The other half of the published mapping: the socket `zcr where` names has to be the
+		// socket that is really there. A reported path that does not exist would send a desktop
+		// looking for a file and blaming the wrong side when it is missing.
+		reportJSON := must(t, zcr, "where", "busapp", "--json")
+		var report struct {
+			Address string `json:"address"`
+			Bus     *struct {
+				Socket string `json:"socket"`
+				Proxy  string `json:"proxy"`
+			} `json:"bus"`
+		}
+		if err := json.Unmarshal([]byte(reportJSON), &report); err != nil {
+			t.Fatalf("zcr where --json is not parseable JSON: %v\n%s", err, reportJSON)
+		}
+		if report.Address != "busapp" || report.Bus == nil || report.Bus.Proxy != proxy {
+			t.Fatalf("zcr where --json does not describe the running app: %s", reportJSON)
+		}
+		if _, err := os.Stat(report.Bus.Socket); err != nil {
+			t.Errorf("the socket zcr where reports (%s) is not on disk while the app runs: %v", report.Bus.Socket, err)
+		}
+
+		// And the last link, on the real bus: hold a client on the filtered socket, then walk
+		// the chain a desktop walks - a connection it can see on the HOST bus, to a pid, to an
+		// app. Its own subtest so that a machine without the host bus tools skips this half
+		// only, rather than taking the teardown checks below with it. Skipped rather than
+		// faked: a fake would prove only that the test agrees with itself.
+		t.Run("host_bus_resolution", func(t *testing.T) {
+			for _, needed := range []string{"gdbus", "busctl"} {
+				if _, err := exec.LookPath(needed); err != nil {
+					t.Skipf("no %s on PATH; skipping the host-bus resolution half", needed)
+				}
+			}
+			// xdg-dbus-proxy opens one upstream connection PER CLIENT, so with nothing attached
+			// to the filtered socket there is no connection on the host bus to attribute at all.
+			client := exec.Command("gdbus", "wait", "--address", "unix:path="+report.Bus.Socket,
+				"--timeout", "20", "org.example.NeverAppears")
+			if err := client.Start(); err != nil {
+				t.Fatalf("holding a client on the filtered socket: %v", err)
+			}
+			defer func() { _ = client.Process.Kill() }()
+
+			found := waitFor(func() bool {
+				names, _ := tool("busctl", "--user", "list", "--unique")
+				for _, line := range strings.Split(names, "\n") {
+					// "<unique name> <pid> <process> ..." - the pid the bus itself took from
+					// SO_PEERCRED, which is the one thing about the peer the app cannot assert.
+					if fields := strings.Fields(line); len(fields) >= 2 && fields[1] == reported {
+						t.Logf("host bus connection %s resolves to pid %s, which zcr bus attributes to busapp", fields[0], reported)
+						return true
+					}
+				}
+				return false
+			})
+			if !found {
+				t.Error("no host-bus connection carries the proxy's pid, so nothing could be attributed to busapp")
+			}
+		})
 
 		// Teardown removes the proxy too: it is --rm, but an app whose proxy name is still
 		// taken cannot be relaunched.

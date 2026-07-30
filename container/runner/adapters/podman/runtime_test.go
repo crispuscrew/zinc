@@ -546,3 +546,26 @@ func TestHelperImageHint_OnlyForMissingImages(t *testing.T) {
 		t.Errorf("hint offered for an unrelated failure: %q", got)
 	}
 }
+
+// The pid table is what bus attribution resolves a connection against, so a line podman could
+// not fill in has to be dropped rather than recorded: a pid of 0 would match every other
+// unfilled line and attribute a bus connection to whichever app happened to sort first.
+func TestParsePIDs(t *testing.T) {
+	got := parsePIDs("notes 4001\nzinc-dbus-notes 4002\nbroken\nempty \nzero 0\n\n")
+	want := map[string]int{"notes": 4001, "zinc-dbus-notes": 4002}
+	if len(got) != len(want) {
+		t.Fatalf("parsePIDs = %v, want %v", got, want)
+	}
+	for name, pid := range want {
+		if got[name] != pid {
+			t.Errorf("parsePIDs[%q] = %d, want %d", name, got[name], pid)
+		}
+	}
+}
+
+// No running containers is an empty table, not a table with one empty entry.
+func TestParsePIDsEmpty(t *testing.T) {
+	if got := parsePIDs("\n"); len(got) != 0 {
+		t.Errorf("parsePIDs of empty output = %v, want nothing", got)
+	}
+}
