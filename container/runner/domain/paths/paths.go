@@ -81,6 +81,39 @@ func (addr Address) Runtime() string {
 	return addr.App + Separator + addr.Instance
 }
 
+// ParseRuntime recovers the address a runtime name was built from: Runtime() run backwards.
+//
+// It cannot be done on the string alone. An app name may contain dots and an instance may
+// not, so "notes.work" reads either as the app "notes.work" or as "notes" running as
+// instance "work" - two readings of one string, and only the set of defined apps can say
+// which was meant. defined answers that. It is a function rather than a list because the
+// authority is the store, which this package must not depend on.
+//
+// The fallback is the whole string as an app name with no instance, which is the reading
+// that existed before instances did, so a runtime name from anywhere else (a raw container,
+// an app since deleted) comes back as itself rather than as an invented instance.
+//
+// The one case it cannot decide: an app literally named "notes.work" AND an app "notes" run
+// as instance "work", both defined at once. The whole-name reading wins there, because that
+// name is definitely an app; nothing in the runtime name distinguishes the two, so this is
+// stated rather than papered over.
+func ParseRuntime(name string, defined func(string) bool) Address {
+	name = strings.TrimSpace(name)
+	if defined == nil || defined(name) {
+		return Address{App: name}
+	}
+	// The instance is what follows the LAST separator, because an instance may not contain
+	// one and an app name may. Checked against instanceRE as well, so a dotted app name that
+	// is simply not in the store cannot come back with its own last segment as an instance.
+	if idx := strings.LastIndex(name, Separator); idx > 0 {
+		app, instance := name[:idx], name[idx+1:]
+		if instanceRE.MatchString(instance) && defined(app) {
+			return Address{App: app, Instance: instance}
+		}
+	}
+	return Address{App: name}
+}
+
 // StateDir is where this instance's own files live, under $XDG_STATE_HOME (falling back to
 // ~/.local/state, which is what the XDG spec says that variable defaults to). State rather
 // than data because it is what the app accumulates by running - reproducible only in the

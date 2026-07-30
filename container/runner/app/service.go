@@ -258,6 +258,7 @@ func (svc Service) Search(term string) ([]ports.Result, error) { return svc.reso
 func (svc Service) Resolve(ref string) (string, error)         { return svc.resolver.Resolve(ref) }
 
 func (svc Service) Running() (map[string]bool, error)          { return svc.runtime.Running() }
+func (svc Service) PIDs() (map[string]int, error)              { return svc.runtime.PIDs() }
 func (svc Service) Logs(name string, tail int) (string, error) { return svc.runtime.Logs(name, tail) }
 
 // Do runs a user-facing runtime command (restart/inspect/logs passthrough) with the

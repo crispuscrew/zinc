@@ -5,6 +5,43 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [Unreleased]
+
+### Added
+
+- **Bus attribution: `zcr bus [--json]`, and `zcr where` now reports the bus.** Given
+  something observed on the host session bus, a desktop can now say which Zinc app and
+  instance it is. `zcr bus` prints every running D-Bus proxy with its host pid and the
+  `app@instance` it serves; `zcr where` gains the app's filtered socket and proxy container
+  (`none`, or JSON `null`, for an app that asked for no bus). Both have a `--json` form whose
+  exact shape is pinned by tests, since it is what a desktop scripts against.
+
+  The mapping is one Zinc already holds by construction - it creates the proxy container and
+  names it after an app it has resolved - so nothing is taken from the app. The rejected
+  alternative is worth recording: having each app own a name like `zinc.app.<app>.<instance>`
+  cannot work, because `xdg-dbus-proxy` is a relay with no bus identity of its own and
+  `--own=` merely grants THE APP permission to claim that name. The app would then have to
+  claim it, which is a self-assertion - the thing attribution exists to stop trusting.
+
+  Honest about the links: connection to pid is the bus's own `SO_PEERCRED` answer, and proxy
+  container to app is the name Zinc gave it, both solid; pid to proxy is read live and is
+  best-effort across time, since a dead proxy whose pid was recycled would be attributed to
+  whoever holds the number now. Measured, and worth knowing before reading an empty answer as
+  "no bus": the proxy opens one upstream connection PER CLIENT, so an app with no live bus
+  client has no host-bus connection at all, and one with several has several - all on the
+  proxy's single pid.
+
+  **Observable:** with an app running, `zcr bus --json` lists it; asking the host bus for a
+  connection's `GetConnectionUnixProcessID` and looking that pid up in the table names the
+  app. The end-to-end suite walks exactly that chain against the real session bus.
+
+### Changed
+
+- **`zcr where` requires the app to be defined.** It now loads the config, because whether
+  there is a bus socket to report is a fact about the config; guessing for an unknown name
+  would report a path with the same confidence as a real one. A VM app is refused there for
+  the same reason every other `zcr` command refuses one.
+
 ## [0.8.2] - 2026-07-31
 
 Work driven by what ZDE is blocked on. Five of its seven asks; the two still open are

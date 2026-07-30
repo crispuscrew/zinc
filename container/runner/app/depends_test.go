@@ -62,6 +62,17 @@ func (engine *fakeRuntime) Do([]string) error                 { return nil }
 func (engine *fakeRuntime) Running() (map[string]bool, error) { return engine.running, nil }
 func (engine *fakeRuntime) Logs(string, int) (string, error)  { return "", nil }
 
+// PIDs numbers the running set so the port is satisfied; the launch path never asks, and
+// what a pid MEANS is only decidable against a real runtime, so nothing here pretends
+// otherwise.
+func (engine *fakeRuntime) PIDs() (map[string]int, error) {
+	pids := map[string]int{}
+	for name := range engine.running {
+		pids[name] = len(pids) + 1
+	}
+	return pids, nil
+}
+
 // fakeStore serves app definitions from an in-memory map.
 type fakeStore struct{ apps map[string]schema.AppConfig }
 

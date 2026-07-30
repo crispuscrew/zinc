@@ -52,8 +52,14 @@ const usage = `usage: zcr <command> [args]
   ps                        running apps, one per line
   recheck <app>             re-resolve ImageMeta.SourceTag and report whether the
                             pinned digest is still what that tag points at
-  where <app[@instance]>    print where that instance keeps its state, and the name
-                            its container takes; ask rather than assume the layout
+  where <app[@instance]> [--json]
+                            print where that instance keeps its state, the name its
+                            container takes, and its filtered bus socket and proxy
+                            (both "none" when the app asked for no bus); ask rather
+                            than assume the layout
+  bus [--json]              the bus attribution table: every running D-Bus proxy, its
+                            host pid, and the app@instance it serves - what turns a
+                            connection seen on the host bus into an app
   image search <term> | resolve <ref>
   version                   print the version
 
@@ -103,39 +109,6 @@ func cmdRecheck(svc app.Service, argv []string) error {
 	// Not an error in the "something went wrong" sense - the check worked and the answer is
 	// that the tag moved - but a distinct exit code, so a scheduled checker can act on it.
 	os.Exit(2)
-	return nil
-}
-
-// cmdWhere answers "where does this instance keep things, and what is it called at runtime".
-//
-// It exists so nothing outside Zinc has to hardcode the layout. A desktop that wants to show
-// a user where an app's state lives, or that names a container to look it up, would otherwise
-// mirror the rules in paths - and two copies of a layout drift the first time either side
-// changes. Asking costs a process; assuming costs a bug nobody sees until the paths differ.
-//
-// Deliberately not folded into `inspect`, which is a passthrough to `podman inspect`:
-// intercepting it would put Zinc in the business of parsing and re-emitting podman's output
-// forever, and the answer here is about an instance whether or not it is running.
-//
-// The output is two labelled lines rather than JSON because it is also read by people. A
-// consumer that wants one value cuts on the colon; the labels are the contract.
-func cmdWhere(argv []string) error {
-	if len(argv) != 1 {
-		return fmt.Errorf("usage: zcr where <app[@instance]>")
-	}
-	addr, err := paths.ParseAddress(argv[0])
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(addr.App) == "" {
-		return fmt.Errorf("usage: zcr where <app[@instance]>")
-	}
-	stateDir, err := paths.StateDir(addr)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("state: %s\n", stateDir)
-	fmt.Printf("container: %s\n", addr.Runtime())
 	return nil
 }
 
@@ -197,7 +170,9 @@ func run(argv []string) error {
 	case "ps":
 		return cmdPs(svc)
 	case "where":
-		return cmdWhere(rest)
+		return cmdWhere(svc, opt, rest)
+	case "bus":
+		return cmdBus(svc, opt, rest)
 	case "recheck":
 		return cmdRecheck(svc, rest)
 	case "image":

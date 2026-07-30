@@ -404,6 +404,62 @@ user, and an app in its own user namespace cannot connect. Validation therefore 
 strength of a bus grant. On a VM app `DBusMeta` is a validation error - a guest has no way to
 take a bind-mounted unix socket.
 
+### 5.8 Bus attribution (which app is a connection on the host bus)
+
+A desktop watching the host session bus sees connections, not apps. The question it needs
+answered is "which Zinc app and instance is this", and the answer has to come from something
+the app cannot influence.
+
+**Why not have each app own a name.** The obvious shape - give every instance a bus name like
+`zinc.app.<app>.<instance>` - does not work, and it is worth writing down because it reads as
+the natural design. `xdg-dbus-proxy` is a relay with no bus identity of its own: `--own=NAME`
+grants THE APP permission to claim that name, it does not claim anything. The app then has to
+volunteer to claim it, and a name a sandboxed app claims for itself is a self-assertion, which
+is the exact thing attribution exists to stop trusting. A cooperative app would be labelled and
+a lying one would be labelled as whatever it liked.
+
+**What Zinc publishes instead** is the mapping it already holds by construction. Zinc creates
+the proxy container, names it `zinc-dbus-<runtime name>` after an app it has already resolved,
+and that container holds the only connection to the real bus the app is ever behind. Nothing in
+that chain asks the app anything. Two commands expose it, both with a `--json` form, because a
+desktop scripting against a documented constant becomes a second source of truth the moment
+either side changes (same reason `zcr where` exists at all):
+
+- **`zcr where <app[@instance]> [--json]`** - the layout of one instance: its state directory,
+  its container name, and now its bus socket and proxy container. An app that asked for no bus
+  reports `none` for both (JSON `"bus": null`), rather than a path that was never created.
+- **`zcr bus [--json]`** - the attribution table: every running proxy, its host pid, and the
+  `app@instance` it serves. This is the direction a desktop actually needs, since it starts
+  from an observation and has no name to look up.
+
+The chain a consumer walks, and how solid each link is:
+
+1. **connection to pid** - `org.freedesktop.DBus.GetConnectionUnixProcessID` on the host bus.
+   The bus took that pid from `SO_PEERCRED` when the connection was made: the kernel's answer
+   about the peer, not the peer's claim about itself. Solid.
+2. **pid to proxy container** - the pid column of `zcr bus`, read from the live runtime.
+   Rootless podman does not remap pids, so the container's main process carries the same number
+   the bus reported. Solid at the instant it is read, and **best-effort across time**: the bus
+   captured its pid at connect time, so a proxy that has since died and had its pid reused would
+   be attributed to whoever holds the number now. The window is small (the bus drops the
+   connection when the proxy exits) and closing it entirely would need a bus that hands out
+   something better than a pid.
+3. **proxy container to `app@instance`** - the name Zinc gave the container, read back. Solid,
+   with one recoverable ambiguity: an app name may contain dots and an instance may not, so
+   `notes.local` reads either as the app `notes.local` or as `notes@local`. The store decides,
+   and the only undecidable case is both existing at once, where the whole-name reading wins.
+
+Two measured properties of what is actually observable, which matter before reading an empty
+answer as "no app has a bus": `xdg-dbus-proxy` opens **one upstream connection per client**, so
+an app with no live bus client contributes no host-bus connection at all, and an app with
+several contributes several unique names - all carrying the proxy's one pid. Many-to-one is
+normal.
+
+`zcr bus` deliberately stops at the pid rather than resolving unique names itself. The consumer
+is already holding a bus connection - that is how it saw the thing in the first place - and
+putting a D-Bus client (a protocol implementation, an auth handshake, a dependency) inside the
+sandbox runtime would buy no isolation.
+
 ---
 
 ## 6. Networking model and startup ordering
@@ -840,6 +896,9 @@ zcr build <app>             (re)build the derived image (ImageMeta.Install)
 zcr validate <app>          parse + validate; report problems and warnings
 zcr stop|restart|inspect <app>
 zcr logs <app> [-f]         zcr term <app> [--shell]      zcr ps
+zcr where <app[@instance]> [--json]
+                            state dir, container name, bus socket and bus proxy
+zcr bus [--json]            the bus attribution table: proxy, host pid, app@instance (5.8)
 zcr image search <term> | resolve <ref>
 ```
 

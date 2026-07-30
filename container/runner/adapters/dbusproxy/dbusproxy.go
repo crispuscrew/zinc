@@ -82,11 +82,30 @@ func (brk Broker) image() string {
 	return brk.Image
 }
 
+// proxyPrefix marks a container as one of ours. An app name is [a-z0-9][a-z0-9._-]*, so no
+// app container can carry it, which is what makes the prefix both collision-free and a
+// reliable filter when reading the runtime's container list back.
+const proxyPrefix = "zinc-dbus-"
+
 // ContainerName is the proxy container's name, derived from the app's. It is a separate
 // object in the runtime's namespace from the app itself, so it needs a name that cannot
-// collide with an app's (an app name is [a-z0-9][a-z0-9._-]*, so a "zinc-dbus-" prefix is
-// unambiguous) and is recoverable from the app name alone at teardown.
-func ContainerName(app string) string { return "zinc-dbus-" + app }
+// collide with an app's and is recoverable from the app name alone at teardown.
+func ContainerName(app string) string { return proxyPrefix + app }
+
+// AppOfProxy is ContainerName run backwards: the app (runtime) name a proxy container was
+// named for, and whether the container is a Zinc proxy at all.
+//
+// This is the load-bearing half of bus attribution. Zinc named this container when it
+// created it, from an app it had already resolved, so reading the name back yields the app
+// that proxy serves without asking the app anything - which is the whole point, since an app
+// asserting its own identity on the bus is exactly what cannot be trusted.
+func AppOfProxy(container string) (string, bool) {
+	app, found := strings.CutPrefix(container, proxyPrefix)
+	if !found || app == "" {
+		return "", false
+	}
+	return app, true
+}
 
 // HostSocketDir is the per-app directory on the host holding that app's filtered socket. Per
 // app, not shared: two apps with different grants must not be able to reach each other's
@@ -98,16 +117,28 @@ func HostSocketDir(runtimeDir, app string) string {
 	return filepath.Join(runtimeDir, "zinc", "dbus", app)
 }
 
+// HostSocketPath is the filtered socket itself: the one file the app's
+// DBUS_SESSION_BUS_ADDRESS resolves to. Exported because `zcr where` reports it, and a
+// reporter that rebuilt the path from a filename only this package knows would start
+// answering a different question the moment either changed.
+func HostSocketPath(runtimeDir, app string) string {
+	dir := HostSocketDir(runtimeDir, app)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, proxySocket)
+}
+
 // RunFlags attaches the filtered socket to the app: the bind mount and the address pointing
 // at it. Read-write, because connecting to a unix socket is a write operation - a read-only
 // mount would present the app with a socket it cannot use.
 func (brk Broker) RunFlags(cfg schema.AppConfig) []string {
-	dir := HostSocketDir(brk.RuntimeDir, cfg.AppNameID)
-	if cfg.DBusMeta.IsZero() || dir == "" {
+	socket := HostSocketPath(brk.RuntimeDir, cfg.AppNameID)
+	if cfg.DBusMeta.IsZero() || socket == "" {
 		return nil
 	}
 	return []string{
-		"-v", filepath.Join(dir, proxySocket) + ":" + ctrAppSocket + ":rw",
+		"-v", socket + ":" + ctrAppSocket + ":rw",
 		"-e", "DBUS_SESSION_BUS_ADDRESS=unix:path=" + ctrAppSocket,
 	}
 }

@@ -67,9 +67,16 @@ type Runtime interface {
 	// can actually serve it (StartConditions.ReadyCheck); how the answer is obtained is
 	// the adapter's business.
 	HealthProbe(name string) error
-	Exists(name string) bool                    // does a container with this name exist (running or not)?
-	Do(args []string) error                     // user-facing passthrough (stop/restart/inspect/logs) with host stdio
-	Running() (map[string]bool, error)          // names the runtime reports as running (list view)
+	Exists(name string) bool           // does a container with this name exist (running or not)?
+	Do(args []string) error            // user-facing passthrough (stop/restart/inspect/logs) with host stdio
+	Running() (map[string]bool, error) // names the runtime reports as running (list view)
+	// PIDs is the host PID of each running container's main process, by container name.
+	// Rootless podman does not remap pids, so these are the numbers other host tools report
+	// for the same processes - which is what makes a container identifiable from outside the
+	// runtime. Bus attribution needs exactly that: the session bus answers
+	// GetConnectionUnixProcessID with a host pid, and this is what turns that pid back into
+	// a container Zinc named.
+	PIDs() (map[string]int, error)
 	Logs(name string, tail int) (string, error) // last N log lines (logs view)
 }
 

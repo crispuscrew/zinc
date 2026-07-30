@@ -513,6 +513,40 @@ func (Runtime) Running() (map[string]bool, error) {
 	return set, nil
 }
 
+// PIDs returns the host PID of each running container's main process, by name.
+//
+// A query failure is an error here, unlike Running, which degrades to "nothing running" so a
+// list view still loads. This answers a question a machine asks - which app owns a given bus
+// connection - and "nothing is running" and "I could not look" must not arrive as the same
+// answer when the caller's next move is to attribute a capability to an app.
+func (Runtime) PIDs() (map[string]int, error) {
+	out, err := exec.Command("podman", "ps", "--format", "{{.Names}} {{.Pid}}").Output()
+	if err != nil {
+		return nil, fmt.Errorf("list running container pids: %w", err)
+	}
+	return parsePIDs(string(out)), nil
+}
+
+// parsePIDs reads the "<name> <pid>" lines PIDs asks podman for. Split out so the parsing is
+// testable without a runtime: a line podman could not fill in (an empty pid for a container
+// that exited between listing and formatting) is skipped rather than recorded as pid 0, which
+// would match every other unfilled answer and attribute a bus connection to the wrong app.
+func parsePIDs(out string) map[string]int {
+	pids := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		name, pidText, found := strings.Cut(strings.TrimSpace(line), " ")
+		if !found || name == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(pidText))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		pids[name] = pid
+	}
+	return pids
+}
+
 // Logs returns the last tail lines of a container's logs. podman may exit nonzero
 // (e.g. the container never ran) but still print useful output, so both are returned
 // for the caller to format.
