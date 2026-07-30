@@ -44,6 +44,7 @@ type AppConfig struct {
 	DisplayMeta      DisplayMeta      `yaml:"DisplayMeta"`
 	NetworkMeta      NetworkMeta      `yaml:"NetworkMeta"`
 	NotificationMeta NotificationMeta `yaml:"NotificationMeta"`
+	DBusMeta         DBusMeta         `yaml:"DBusMeta"`
 
 	// VirtualizationMeta applies only to Type: ZincVirtualization. A container app must
 	// leave it at its zero value; validation rejects it rather than ignoring it, so a
@@ -268,6 +269,38 @@ type DisplayMeta struct {
 	DisableSecurityContext bool `yaml:"DisableSecurityContext"` // security-context | passthrough
 	DisableGpuAccess       bool `yaml:"DisableGpuAccess"`
 }
+
+// DBusMeta gives an app a session bus of its own: a per-instance socket served by
+// xdg-dbus-proxy, carrying only the names listed here. Everything else on the real session
+// bus is not merely denied to the app, it is invisible to it.
+//
+// This is opt-in and empty by default because a session bus is a desktop-wide capability,
+// not a detail. Handing an app the host's socket lets it reach every service the user runs:
+// read the keyring, drive the portal, talk to the compositor, restart units. A sandbox that
+// mounts the real bus has a hole the width of the whole desktop, which is why Zinc's
+// default is no bus at all. Naming something here opens exactly that much and nothing more.
+//
+// The proxy is a container Zinc owns, deliberately NOT a member of the app's pod. The app
+// must not be able to signal, ptrace or otherwise reach into the process that is filtering
+// it: the proxy holds the real socket, the app holds only the filtered one, and they share
+// no namespace but the uid.
+type DBusMeta struct {
+	// Talk are the well-known names the app may send method calls to, e.g.
+	// "org.freedesktop.portal.Desktop". A trailing ".*" matches a subtree, which
+	// xdg-dbus-proxy expands - prefer the exact name, because a subtree also grants every
+	// service that appears under it later, including ones that did not exist when the
+	// config was reviewed.
+	Talk []string `yaml:"Talk"`
+	// Own are the well-known names the app may claim for itself: what a notifier, a tray
+	// icon or an MPRIS media player needs to be addressable at all. Owning a name is how
+	// other programs find this app, so it is a grant in its own right rather than something
+	// Talk implies.
+	Own []string `yaml:"Own"`
+}
+
+// IsZero reports whether no bus access was asked for - the fail-closed default, in which
+// the app is given no session bus socket whatsoever.
+func (bus DBusMeta) IsZero() bool { return len(bus.Talk) == 0 && len(bus.Own) == 0 }
 
 // TunnelMeta gives an app a WireGuard interface that ZINC creates and configures in the
 // app's network namespace before the app starts - not the app itself.

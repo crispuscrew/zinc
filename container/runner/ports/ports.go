@@ -87,6 +87,33 @@ type ImageResolver interface {
 	Resolve(ref string) (string, error)
 }
 
+// DBusBroker gives an app a filtered session bus (DBusMeta): a socket of its own, served by
+// a proxy Zinc owns, carrying only the names the config named. Adapter:
+// adapters/dbusproxy.
+//
+// It is a sibling of NetEnforcer rather than part of it, and shaped the same way, because it
+// is the same kind of problem: a capability the app must never hold directly, established
+// before the app exists and removed after it dies. The proxy holds the real socket; the app
+// holds only what the proxy chooses to forward. Swapping xdg-dbus-proxy for another
+// mechanism is one more adapter, not a cross-cutting edit.
+type DBusBroker interface {
+	// RunFlags are the app-container flags that attach the filtered socket: the bind mount
+	// and DBUS_SESSION_BUS_ADDRESS pointing at it. Empty when the app asked for no bus, so
+	// an app without DBusMeta is not handed a bus address that resolves to nothing.
+	// The host-side facts a broker needs (the runtime dir, the real bus path) are given to
+	// the adapter when it is built rather than passed per call, so Teardown stays reachable
+	// from Stop, which knows an app config and nothing about the host.
+	RunFlags(cfg schema.AppConfig) []string
+	// Prepare returns the steps that create the app's socket directory and start the proxy,
+	// to run BEFORE the app. It can fail: an app that asked for a bus when the host has no
+	// resolvable session bus must not launch as though it had one.
+	Prepare(cfg schema.AppConfig) ([]Command, error)
+	// Teardown removes the proxy container and the socket directory. Separate steps, since a
+	// proxy that stopped on its own still leaves the directory behind, and one would
+	// otherwise accumulate per app that ever ran.
+	Teardown(cfg schema.AppConfig) []Command
+}
+
 // NetEnforcer establishes and enforces an app's network egress - THE swap point.
 // The one adapter today (adapters/netenforce) drives NetworkLists onto the app's own
 // pasta netns via nft (or --network none when there are no lists). A future

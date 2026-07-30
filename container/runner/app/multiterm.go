@@ -113,7 +113,7 @@ func (svc Service) ensureHolder(cfg schema.AppConfig, opt options.HostOptions) e
 	if svc.runtime.Exists(cfg.AppNameID) {
 		return nil
 	}
-	steps, err := svc.net.Prepare(cfg, opt)
+	steps, err := svc.prepareSteps(cfg, opt)
 	if err != nil {
 		return err // nothing created yet, so there is nothing to tear down
 	}
@@ -122,7 +122,7 @@ func (svc Service) ensureHolder(cfg schema.AppConfig, opt options.HostOptions) e
 			return errors.Join(fmt.Errorf("start %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
 		}
 	}
-	appArgs, aerr := svc.runtime.AppRunArgs(cfg, opt, svc.net.RunFlags(cfg))
+	appArgs, aerr := svc.runtime.AppRunArgs(cfg, opt, svc.attachFlags(cfg))
 	if aerr != nil {
 		return errors.Join(aerr, svc.teardown(cfg, len(steps) > 0))
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/container/runner/adapters/dbusproxy"
 	"github.com/crispuscrew/zinc/container/runner/adapters/netenforce"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
 	"github.com/crispuscrew/zinc/container/runner/ports"
@@ -99,7 +100,7 @@ func depApp(name string, deps ...string) schema.AppConfig {
 }
 
 func depSvc(store ports.Store, engine ports.Runtime) Service {
-	return New(store, engine, nil, nil, netenforce.Enforcer{})
+	return New(store, engine, nil, nil, netenforce.Enforcer{}, dbusproxy.Broker{})
 }
 
 // web → vpn → base: each dependency (and its own dependencies) must come up before the

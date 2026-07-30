@@ -34,6 +34,7 @@ func Validate(cfg schema.AppConfig) error {
 	checkResources(cfg.ResourcesMeta, add)
 	checkInternalUser(cfg.InternalUserMeta, add)
 	checkNotifications(cfg.NotificationMeta, add)
+	checkDBus(cfg, add)
 
 	checkDNS(cfg.NetworkMeta, add)
 	checkTunnel(cfg, add)

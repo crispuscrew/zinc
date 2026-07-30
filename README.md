@@ -74,6 +74,14 @@ explicit `GatewayV4` / `GatewayV6`. `Domains` is resolved once at launch, not li
 domain whose addresses rotate drifts out of the allowed set until the app is restarted,
 which fails shut rather than open.
 
+Beyond the network, an app gets **no D-Bus session bus** unless it asks for one. The host bus
+reaches the keyring, the portal, the compositor and every other service the user runs, so
+handing it to a sandbox would undo most of the sandbox. `DBusMeta` names what to open - `Talk`
+for names the app may call, `Own` for names it may claim - and `zcr` serves it a filtered
+socket from an `xdg-dbus-proxy` container that holds the real one. That proxy is deliberately
+not in the app's pod, since a shared PID namespace would let the app signal or ptrace the
+process filtering it.
+
 This is the container network model. A **VM app** does not get it - nftables in a container's
 own network namespace does not reach a guest kernel - so rather than mis-enforce it, a guest
 runs on user-mode networking with explicit port forwards bound to loopback, and

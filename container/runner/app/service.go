@@ -28,11 +28,42 @@ type Service struct {
 	builder  ports.ImageBuilder
 	resolver ports.ImageResolver
 	net      ports.NetEnforcer
+	bus      ports.DBusBroker
 }
 
 // New wires the ports into a Service.
-func New(store ports.Store, runtime ports.Runtime, builder ports.ImageBuilder, resolver ports.ImageResolver, net ports.NetEnforcer) Service {
-	return Service{store: store, runtime: runtime, builder: builder, resolver: resolver, net: net}
+func New(store ports.Store, runtime ports.Runtime, builder ports.ImageBuilder, resolver ports.ImageResolver, net ports.NetEnforcer, bus ports.DBusBroker) Service {
+	return Service{store: store, runtime: runtime, builder: builder, resolver: resolver, net: net, bus: bus}
+}
+
+// attachFlags are the app-container flags that attach it to everything Zinc prepared on its
+// behalf: the network attachment from the enforcer, and the filtered bus socket from the
+// broker. Composed in one place so Plan, launch and OpenTerminal cannot drift apart on what
+// the app is actually attached to.
+func (svc Service) attachFlags(cfg schema.AppConfig) []string {
+	return append(svc.net.RunFlags(cfg), svc.bus.RunFlags(cfg)...)
+}
+
+// prepareSteps are the ordered pre-app steps: the enforcer's (establish and lock the netns)
+// followed by the broker's (socket dir, then the proxy). Both fail closed, and neither has
+// created anything when it returns an error.
+func (svc Service) prepareSteps(cfg schema.AppConfig, opt options.HostOptions) ([]ports.Command, error) {
+	steps, err := svc.net.Prepare(cfg, opt)
+	if err != nil {
+		return nil, err
+	}
+	busSteps, err := svc.bus.Prepare(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return append(steps, busSteps...), nil
+}
+
+// teardownSteps undo a launch: the proxy and its socket directory first, then the pod and its
+// netns. Bus before net because the proxy is a container of its own that outlives the pod
+// otherwise, and removing the pod does not touch it.
+func (svc Service) teardownSteps(cfg schema.AppConfig) []ports.Command {
+	return append(svc.bus.Teardown(cfg), svc.net.Teardown(cfg)...)
 }
 
 // Plan returns the ordered runtime commands a launch would run, without running them
@@ -45,7 +76,7 @@ func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.
 	if err := checkNetwork(cfg); err != nil {
 		return nil, err
 	}
-	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, svc.net.RunFlags(cfg))
+	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, svc.attachFlags(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +84,7 @@ func (svc Service) Plan(cfg schema.AppConfig, opt options.HostOptions) ([]ports.
 	if cfg.StartConditions.Multiterminal {
 		desc = "run holder for " + cfg.AppNameID + " (terminals exec in)"
 	}
-	steps, err := svc.net.Prepare(cfg, opt)
+	steps, err := svc.prepareSteps(cfg, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +127,7 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 	if err := svc.ensureImage(cfg); err != nil {
 		return err
 	}
-	steps, err := svc.net.Prepare(cfg, opt)
+	steps, err := svc.prepareSteps(cfg, opt)
 	if err != nil {
 		return err // nothing has been created yet, so there is nothing to tear down
 	}
@@ -105,7 +136,7 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 			return errors.Join(fmt.Errorf("launch %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
 		}
 	}
-	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, svc.net.RunFlags(cfg))
+	appArgs, err := svc.runtime.AppRunArgs(cfg, opt, svc.attachFlags(cfg))
 	if err != nil {
 		return errors.Join(err, svc.teardown(cfg, len(steps) > 0))
 	}
@@ -122,7 +153,7 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 // netns for a filtered app, the container otherwise). Output is captured, so it is
 // safe to call from a UI.
 func (svc Service) Stop(cfg schema.AppConfig) error {
-	return svc.runAll(svc.net.Teardown(cfg))
+	return svc.runAll(svc.teardownSteps(cfg))
 }
 
 // teardown removes a half-built netns after a failed launch (fail-closed). It only
@@ -133,7 +164,7 @@ func (svc Service) teardown(cfg schema.AppConfig, hadSteps bool) error {
 	if !hadSteps {
 		return nil
 	}
-	return svc.runAll(svc.net.Teardown(cfg))
+	return svc.runAll(svc.teardownSteps(cfg))
 }
 
 // runAll executes steps in order and joins whatever failed. Teardown is the caller that
