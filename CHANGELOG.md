@@ -5,7 +5,7 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
-## [Unreleased]
+## [0.8.0] - 2026-07-30
 
 ### Added
 
@@ -843,6 +843,8 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.8.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.8.0
+[0.7.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.7.0
 [0.6.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.6.0
 [0.5.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.5.0
 [0.4.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.4.0
