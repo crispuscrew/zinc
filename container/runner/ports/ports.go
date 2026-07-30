@@ -12,6 +12,7 @@ package ports
 import (
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
+	"github.com/crispuscrew/zinc/container/runner/domain/paths"
 )
 
 // Command is one runtime instruction - the args passed to the container runtime,
@@ -112,6 +113,25 @@ type DBusBroker interface {
 	// proxy that stopped on its own still leaves the directory behind, and one would
 	// otherwise accumulate per app that ever ran.
 	Teardown(cfg schema.AppConfig) []Command
+}
+
+// DisplayBroker gives an app a Wayland socket of its own, one the compositor has attached a
+// wp_security_context_v1 to (section 5.2). Adapter: adapters/waylandctx.
+//
+// A sibling of NetEnforcer and DBusBroker, and the same shape for the same reason: the app is
+// handed a derived socket rather than the compositor's own, and what the display server
+// believes about it is decided before it exists. Unlike those two it has no Teardown, because
+// the thing that has to be undone is a descriptor held by a process that watches the app and
+// exits with it - there is nothing left for a Stop to remove.
+type DisplayBroker interface {
+	// Establish creates the app's socket, registers it with the compositor and returns the
+	// host path to bind-mount. An empty path means "mount the compositor's own socket" and is
+	// not an error: it is the answer both for an app that opted out
+	// (DisplayMeta.DisableSecurityContext) and on a compositor that does not implement the
+	// protocol, where refusing to launch would buy nothing and cost the whole desktop.
+	// Everything else - a socket that cannot be bound, a compositor that cannot be reached, a
+	// rejected request - fails the launch rather than silently degrading it.
+	Establish(addr paths.Address, cfg schema.AppConfig, opt options.HostOptions) (string, error)
 }
 
 // NetEnforcer establishes and enforces an app's network egress - THE swap point.

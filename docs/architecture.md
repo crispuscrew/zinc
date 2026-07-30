@@ -39,8 +39,8 @@ and is out of scope here.
 ```
 +-------------------------------------------------------------+
 |  Any Wayland compositor                                     |
-|  + wayland-security-context (label applied; enforcement is  |
-|    the compositor's, see 5.2)                               |
+|  + wayland-security-context (a real per-instance context    |
+|    where the compositor has it; see 5.2)                    |
 +-----------------------------+-------------------------------+
 |  zc - zinc-creator (CLI + Bubbletea TUI, Go)     |
 |    authors app files, forwards run/manage to zcr            |
@@ -116,7 +116,7 @@ ImageMeta:
     - apk add --no-cache firefox font-dejavu
 
 DisplayMeta:
-  DisableSecurityContext: false  # false = the wp_security_context_v1 label is applied (5.2)
+  DisableSecurityContext: false  # false = the app gets its own wp_security_context_v1 socket (5.2)
   DisableGpuAccess: true         # true = no /dev/dri (default off; GPU weakens isolation, 5.4)
 
 NetworkMeta:
@@ -178,7 +178,8 @@ Keys:
 ```
 
 **Wired at runtime in 0.1:** identity/image, the network attach and lock-down, the
-capability drop-all baseline plus `Capabilities`, Wayland socket + security-context label,
+capability drop-all baseline plus `Capabilities`, the Wayland socket (its own, under a
+security context, where the compositor implements one - 5.2),
 GPU device, the theme bundle, audio (Pipewire socket / `/dev/snd`), explicit host bind
 mounts, SSH/GPG key mounts, the entrypoint override, and the terminal / multiterminal /
 background / keep-alive lifecycle. `ResourcesMeta` (`--cpus`, `--memory`, `--memory-swap`, `--pids-limit`) and
@@ -294,16 +295,69 @@ already be in local storage (resolved at author time or built as a derived image
 
 ### 5.2 Wayland isolation (wayland-security-context)
 
-**Partial in practice - be honest.** The `wp_security_context_v1` protocol lets the
-compositor tag a client so it can be treated as untrusted. Zinc applies the marker: when
-`DisplayMeta.DisableSecurityContext` is false (the default), the app container is labelled
-`zinc.wayland=security-context` and the Wayland socket is passed in read-only.
+**Real, and bounded by what the compositor does with it.** An app that gets the compositor's
+own socket is indistinguishable from the desktop's own clients: it can ask for the same
+protocols, and nothing at the other end knows it came out of a sandbox. `wp_security_context_v1`
+is how that is fixed, and the fix is not a label on the container - it is a second socket.
 
-But enforcement is the compositor's and the toolkit's job, not Zinc's. An app that ignores
-the protocol still talks to the compositor. Treat the security-context label as a hint that
-improves as compositors and toolkits adopt it, not as a wall. **The real isolation boundary
-for a container is the container itself** (5.1). For genuinely untrusted GUI apps the future
-answer is a VM (section 10), not a nested compositor.
+Zinc connects to the **real** compositor socket, binds a socket of its own, and asks the
+compositor to accept connections on it under a security context carrying three strings. The
+app container mounts that second socket at the same container-side path and with the same
+`WAYLAND_DISPLAY`, so nothing inside the app changes. What changes is that every connection
+arriving on it is tagged before the app exists, by a process the app is not in, over a socket
+it never held.
+
+Two guarantees in the protocol are what make this shape possible. `listen_fd` must already be
+bound and listening when `create_listener` is sent, so the socket is on disk before podman is
+asked to bind-mount it. And the compositor must keep accepting on that socket after the client
+which created the context disconnects, so the Wayland connection is a one-shot - opened, used,
+closed - and the only thing that has to outlive it is a pipe.
+
+The three identifiers are chosen so a desktop can cross-check them rather than take them on
+faith:
+
+- **`sandbox_engine`** is `com.github.crispuscrew.zinc`. Reverse-DNS as the protocol asks, and
+  the repository's own domain rather than a tidy generic name: `app_id` is only required to be
+  unique *per engine*, so the engine name is half the identity and has to be one this project
+  actually holds.
+- **`app_id`** is the app half of the address. The protocol requires it to be the same string
+  across restarts and across instances of one application, which is what an app name is.
+- **`instance_id`** is the runtime name - the same string that names the podman container and
+  that `zcr where` reports. Deliberately not a random uuid: a uuid would satisfy the protocol
+  and tell a consumer nothing, whereas this one can be looked up, so a compositor holding an
+  `instance_id` can find the container behind the window.
+
+**Lifetime.** `zcr run` detaches and exits, and a security context is revoked by closing a
+descriptor - so something has to still be holding it. That is a hidden `zcr __wayland
+<app[@instance]>` process, one per app instance, the same answer the multiterminal path
+reached for the same reason (9.1). It binds the socket, performs the exchange, reports back to
+the launch on a pipe, and then blocks until the app container is gone; on the way out it closes
+`close_fd`, which is what tells the compositor to stop accepting, and removes the socket. The
+launch waits for that report before creating the container, because the socket is a bind-mount
+source and podman cannot mount a path that is not there.
+
+**When the compositor does not implement it**, the app is given the compositor's own socket
+and a warning is printed. Refusing to launch would buy nothing - the app would have had the
+raw socket anyway - and would make Zinc unusable on a mainstream desktop that has not adopted
+the protocol. Every other failure (a socket that cannot be bound, a compositor that cannot be
+reached, a rejected request) fails the launch instead, because those are broken environments
+rather than an absent feature, and a security context that is silently best-effort is one
+nobody can rely on.
+
+The container label says which of the two actually happened: `zinc.wayland=security-context`
+or `zinc.wayland=passthrough`. It used to be applied whenever the app had not opted out, which
+claimed a context on every launch including the ones that never created one - and a label that
+is wrong is worse than no label, since it is exactly what a desktop would read to decide how
+much to trust a client. `DisplayMeta.DisableSecurityContext` remains the opt-out and now means
+what it says: mount the compositor's socket, create nothing.
+
+**What this still does not do.** What a tagged connection is *allowed* to do is entirely the
+compositor's policy - Zinc supplies the identity, not the rules - and compositors currently
+restrict little beyond withholding the privileged protocols (screencopy, input inhibition, the
+security context manager itself, so nesting is impossible). An app that never speaks the
+protocols it is denied is unaffected by any of it. **The real isolation boundary for a
+container is still the container itself** (5.1); for genuinely untrusted GUI apps the stronger
+answer is a VM (section 10).
 
 ### 5.3 Network isolation (per-app netns, fail-closed)
 
@@ -1188,7 +1242,7 @@ the network lock-down applies rules with (6.4).
 
 | # | Issue | Mitigation |
 |---|-------|------------|
-| 1 | wayland-security-context enforcement is the compositor's, not Zinc's | the container boundary is the real wall (5.1); a VM (section 10) is the stronger boundary for untrusted GUI apps |
+| 1 | Zinc supplies the security-context identity; what a tagged client is allowed to do is the compositor's policy, and a compositor without the protocol gets the raw socket and a warning | the container boundary is the real wall (5.1); a VM (section 10) is the stronger boundary for untrusted GUI apps |
 | 2 | GPU passthrough weakens isolation | off by default; never enable for untrusted images (5.4) |
 | 3 | Image tags can be poisoned upstream | third-party images must be digest-pinned; launch is `--pull never` (5.5) |
 | 4 | Derived images are per-machine, not digest-pinned | their guarantee is the pinned base plus the visible install lines (7) |

@@ -18,4 +18,13 @@ type HostOptions struct {
 	// app never does. Empty disables DBusMeta wiring, which fails the launch of an app that
 	// asked for a bus rather than starting it without one.
 	SessionBusPath string
+	// WaylandSocket is the host path of the Wayland socket to bind-mount into the app: the
+	// per-instance one a wp_security_context_v1 was attached to (section 5.2). Empty means
+	// mount the compositor's own socket, which is what an app that opted out gets and what
+	// everything gets on a compositor that does not implement the protocol.
+	//
+	// It is the one field here that is a RESULT rather than a fact about the host: the launch
+	// path fills it in per app, after the context has actually been created, so an argv can
+	// never claim a socket that was never made.
+	WaylandSocket string
 }

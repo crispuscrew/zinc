@@ -81,6 +81,38 @@ func (addr Address) Runtime() string {
 	return addr.App + Separator + addr.Instance
 }
 
+// SplitRuntime recovers the address a runtime name was built from. Runtime() is not
+// reversible on the string alone: an app name may itself contain the separator, so
+// "media.work" is either the app "media" running its "work" instance or an app literally
+// called "media.work". Only the set of defined apps can tell those apart, which is why the
+// caller passes the predicate instead of this guessing - and why the whole name is returned
+// as the app when neither reading is a defined app, which is what a config run straight from
+// a file path is (a path cannot carry an instance).
+//
+// It exists for the one consumer that needs the halves back after they were folded into
+// AppNameID: the Wayland security context, where app_id must be the SAME string for every
+// instance of an app and instance_id must differ between them (section 5.2).
+//
+// The one case it gets wrong is an app literally named "media.work" defined alongside an app
+// named "media": running the former un-instanced reads as an instance of the latter. Those
+// two apps already collide on their podman container name, so the ambiguity is a symptom of
+// a naming conflict Zinc cannot support rather than a decision made here.
+func SplitRuntime(name string, defined func(app string) bool) Address {
+	name = strings.TrimSpace(name)
+	if defined == nil || defined(name) {
+		return Address{App: name}
+	}
+	cut := strings.LastIndex(name, Separator)
+	if cut <= 0 || cut == len(name)-1 {
+		return Address{App: name}
+	}
+	app, instance := name[:cut], name[cut+1:]
+	if instanceRE.MatchString(instance) && defined(app) {
+		return Address{App: app, Instance: instance}
+	}
+	return Address{App: name}
+}
+
 // StateDir is where this instance's own files live, under $XDG_STATE_HOME (falling back to
 // ~/.local/state, which is what the XDG spec says that variable defaults to). State rather
 // than data because it is what the app accumulates by running - reproducible only in the

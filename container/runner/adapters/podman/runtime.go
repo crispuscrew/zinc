@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/domain/derived"
@@ -206,17 +207,29 @@ func (Runtime) AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlag
 		}
 	}
 
-	// Display / Wayland (section 5.2).
+	// Display / Wayland (section 5.2). The socket mounted is the app's OWN when a security
+	// context was established for it (opt.WaylandSocket, filled in by the launch path once
+	// the compositor has accepted it), and the compositor's own otherwise. The container-side
+	// path and WAYLAND_DISPLAY are identical either way: which socket it is looking at is not
+	// the app's business, and an app that had to be configured per mode would be one more
+	// thing to keep in sync for no gain.
 	if opt.RuntimeDir != "" && opt.WaylandDisplay != "" {
 		socket := filepath.Join(opt.RuntimeDir, opt.WaylandDisplay)
+		mode := "passthrough"
+		if !cfg.DisplayMeta.DisableSecurityContext && opt.WaylandSocket != "" {
+			socket, mode = opt.WaylandSocket, "security-context"
+		}
 		args = append(args,
 			"-v", socket+":"+filepath.Join(ctrXDGRuntime, opt.WaylandDisplay)+":ro",
 			"-e", "WAYLAND_DISPLAY="+opt.WaylandDisplay,
 		)
 		exportRuntimeDir()
-		if !cfg.DisplayMeta.DisableSecurityContext {
-			args = append(args, "--label", "zinc.wayland=security-context")
-		}
+		// The label records which of the two actually happened. It used to be applied whenever
+		// the app had not opted out, which claimed a security context on every launch
+		// including the ones where none existed - and a label that is wrong is worse than no
+		// label, because it is exactly what a desktop would read to decide how much to trust
+		// the client.
+		args = append(args, "--label", "zinc.wayland="+mode)
 	}
 	if !cfg.DisplayMeta.DisableGpuAccess {
 		args = append(args, "--device", "/dev/dri")
@@ -486,6 +499,40 @@ func (Runtime) OpenSession(app string, cmd []string, opt options.HostOptions, ho
 // Exists reports whether a container with this name exists (running or not).
 func (Runtime) Exists(name string) bool {
 	return exec.Command("podman", "container", "exists", name).Run() == nil
+}
+
+// appearWindow and appearPoll bound the wait for a container that does not exist yet. The
+// launch creates it moments after WaitGone is called, but "moments" covers a pod create, an
+// nft load and a D-Bus proxy readiness probe, so the window is generous. It is a window at
+// all so that a launch which failed after the holder started does not leave the holder there
+// for the rest of the session.
+const (
+	appearWindow = 60 * time.Second
+	appearPoll   = 250 * time.Millisecond
+)
+
+// WaitGone blocks until the container named name has appeared and then stopped. It is what
+// the Wayland security context holder waits on: the holder is started BEFORE the container
+// (its socket is a bind-mount source, so it has to exist first), which is why this cannot
+// simply be `podman wait` - that fails immediately on a container nobody has created yet.
+//
+// Polling only covers the appearing half. Once the container is there, `podman wait` blocks
+// in one process for the app's whole life, instead of a poll that would fork a podman per
+// interval per running app for hours.
+//
+// A container that lives and dies inside one poll interval is never seen and this returns at
+// the end of the window instead - which costs the holder a minute of idling and nothing else,
+// since the app it was holding the context for is already gone.
+func WaitGone(name string) error {
+	engine := Runtime{}
+	deadline := time.Now().Add(appearWindow)
+	for !engine.Exists(name) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("container %s did not appear within %s", name, appearWindow)
+		}
+		time.Sleep(appearPoll)
+	}
+	return exec.Command("podman", "wait", name).Run()
 }
 
 // Do runs a user-facing podman command (stop/restart/inspect/logs) with the host's
