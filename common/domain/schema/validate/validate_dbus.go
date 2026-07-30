@@ -67,3 +67,20 @@ func checkBusName(field string, index int, name string, allowWildcard bool, add 
 		add("DBusMeta.%s[%d]: %q is not a well-known bus name - two or more dot-separated elements of [A-Za-z0-9_-], no element starting with a digit", field, index, name)
 	}
 }
+
+// checkSourceTag screens ImageMeta.SourceTag. It is provenance rather than something a launch
+// acts on, but it is handed to a registry client when someone asks whether the pin is stale,
+// so it gets the same treatment as any other reference: no whitespace or control characters
+// that could shift an argument, and a digest is refused because a tag that is already a digest
+// records nothing - re-resolving it would return itself and report "never stale" forever.
+func checkSourceTag(tag string, add addFunc) {
+	trimmed := strings.TrimSpace(tag)
+	switch {
+	case trimmed == "":
+		return // absent is fine: a hand-pinned digest has no known origin
+	case trimmed != tag || hasUnsafe(tag):
+		add("ImageMeta.SourceTag: %q must not contain whitespace or control characters", tag)
+	case digestRE.MatchString(tag):
+		add("ImageMeta.SourceTag: %q is a digest, not a tag - re-resolving it would return itself and report the pin as never stale; record the tag it came from, or leave this empty", tag)
+	}
+}

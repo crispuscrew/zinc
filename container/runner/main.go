@@ -40,7 +40,7 @@ import (
 
 const usage = `usage: zcr <command> [args]
 
-  run <app> [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
+  run <app[@instance]> [--instance NAME] [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
                             print the launch plan, or launch it (--exec)
                             -v/--volume adds a runtime-only bind mount (repeatable;
                             OPTIONS default ro,noexec - use rw and/or exec)
@@ -50,12 +50,61 @@ const usage = `usage: zcr <command> [args]
   logs <app> [-f]
   term <app> [--shell]      open a terminal for a multiterminal app
   ps                        running apps, one per line
+  recheck <app>             re-resolve ImageMeta.SourceTag and report whether the
+                            pinned digest is still what that tag points at
   where <app[@instance]>    print where that instance keeps its state, and the name
                             its container takes; ask rather than assume the layout
   image search <term> | resolve <ref>
   version                   print the version
 
 <app> is a store name (~/.config/zinc/apps) or a path (has '/' or ends in .yaml).`
+
+// cmdRecheck answers "is this pin stale" - the question a digest alone cannot be asked.
+//
+// It re-resolves ImageMeta.SourceTag and compares the result with the digest actually pinned
+// in ImageMeta.Image. It changes nothing: re-pinning is a decision with a human behind it,
+// because a moved tag is not automatically a tag you want, and an updater that silently
+// followed one would defeat the reason images are pinned at all. This reports; a person (or
+// a tool with a person behind it) decides.
+//
+// Exit status is the machine-readable half, so a checker does not have to parse prose:
+// 0 the pin is current, 1 an error, 2 the tag has moved.
+func cmdRecheck(svc app.Service, argv []string) error {
+	if len(argv) != 1 {
+		return fmt.Errorf("usage: zcr recheck <app>")
+	}
+	cfg, err := loadApp(svc, argv[0])
+	if err != nil {
+		return err
+	}
+	tag := strings.TrimSpace(cfg.ImageMeta.SourceTag)
+	if tag == "" {
+		return fmt.Errorf("%s: no ImageMeta.SourceTag recorded, so there is no tag to re-resolve; the digest was pinned by hand and nothing knows what it was a pin OF", cfg.AppNameID)
+	}
+	// The validator refuses a digest here, but validation runs at save and at launch - not on
+	// the plain load this command does - so a file edited by hand reaches here unchecked. A
+	// digest re-resolves to itself, which would compare one digest against another and report
+	// a confident, meaningless answer.
+	if strings.Contains(tag, "@sha256:") {
+		return fmt.Errorf("%s: ImageMeta.SourceTag is a digest (%s), not a tag - re-resolving it returns itself, so it can never report the pin as stale; record the tag the digest came from", cfg.AppNameID, tag)
+	}
+	resolved, err := svc.Resolve(tag)
+	if err != nil {
+		return fmt.Errorf("%s: re-resolving %s: %w", cfg.AppNameID, tag, err)
+	}
+	fmt.Printf("tag: %s\n", tag)
+	fmt.Printf("pinned: %s\n", cfg.ImageMeta.Image)
+	fmt.Printf("current: %s\n", resolved)
+	if resolved == cfg.ImageMeta.Image {
+		fmt.Println("status: current")
+		return nil
+	}
+	fmt.Println("status: moved")
+	// Not an error in the "something went wrong" sense - the check worked and the answer is
+	// that the tag moved - but a distinct exit code, so a scheduled checker can act on it.
+	os.Exit(2)
+	return nil
+}
 
 // cmdWhere answers "where does this instance keep things, and what is it called at runtime".
 //
@@ -149,6 +198,8 @@ func run(argv []string) error {
 		return cmdPs(svc)
 	case "where":
 		return cmdWhere(rest)
+	case "recheck":
+		return cmdRecheck(svc, rest)
 	case "image":
 		return cmdImage(svc, rest)
 	default:
@@ -213,6 +264,11 @@ const runUsage = "usage: zcr run <app> [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
 // use). The separated (-v VALUE) and attached (-v=VALUE, --volume=VALUE) forms are both
 // accepted.
 func parseRunArgs(argv []string) (name string, execute bool, volumes []schema.Volume, err error) {
+	// --instance is the flag form of the "app@instance" address. Both exist because they are
+	// convenient in different places - a flag reads better in a hand-typed command, an address
+	// travels better through a script that already has one string - and they fold into the same
+	// address here so nothing downstream has to know which was used.
+	var instance string
 	for idx := 0; idx < len(argv); idx++ {
 		arg := argv[idx]
 		switch {
@@ -240,6 +296,14 @@ func parseRunArgs(argv []string) (name string, execute bool, volumes []schema.Vo
 				return "", false, nil, verr
 			}
 			volumes = append(volumes, vol)
+		case arg == "--instance":
+			idx++
+			if idx >= len(argv) {
+				return "", false, nil, fmt.Errorf("--instance: missing value (want a name like 'work')")
+			}
+			instance = argv[idx]
+		case strings.HasPrefix(arg, "--instance="):
+			instance = strings.TrimPrefix(arg, "--instance=")
 		case strings.HasPrefix(arg, "-"):
 			return "", false, nil, fmt.Errorf("unknown flag %q\n%s", arg, runUsage)
 		case name == "":
@@ -250,6 +314,12 @@ func parseRunArgs(argv []string) (name string, execute bool, volumes []schema.Vo
 	}
 	if name == "" {
 		return "", false, nil, fmt.Errorf("%s", runUsage)
+	}
+	if instance != "" {
+		if strings.Contains(name, "@") {
+			return "", false, nil, fmt.Errorf("%q already names an instance, so --instance would have to override it; give one or the other", name)
+		}
+		name += "@" + instance
 	}
 	return name, execute, volumes, nil
 }
@@ -543,12 +613,61 @@ func refuseVM(svc app.Service, name string) error {
 // what an app IS, not on the part of it that happens to be written in its own file.
 func load(svc app.Service, arg string) (schema.AppConfig, error) {
 	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".yaml") {
+		// A path names a file, and a file is one definition. Instances address the store,
+		// where a name can be run more than once.
 		return svc.LoadFileResolved(arg)
 	}
-	if !svc.Exists(arg) {
-		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zc list)", arg)
+	addr, err := paths.ParseAddress(arg)
+	if err != nil {
+		return schema.AppConfig{}, err
 	}
-	return svc.LoadResolved(arg)
+	if !svc.Exists(addr.App) {
+		return schema.AppConfig{}, fmt.Errorf("no app %q defined (try: zc list)", addr.App)
+	}
+	cfg, err := svc.LoadResolved(addr.App)
+	if err != nil {
+		return schema.AppConfig{}, err
+	}
+	// The instance rides on AppNameID from here down, because AppNameID is what every
+	// runtime name already derives from: the pod, the app container, the healthcheck the
+	// dependents wait on, the D-Bus proxy and its socket directory, and everything teardown
+	// removes. Rewriting it once here is what makes an instance a first-class running thing
+	// without threading a second identifier through every adapter - and, more to the point,
+	// without leaving one adapter that forgot to thread it and quietly shares a pod between
+	// two instances that were supposed to be separate.
+	//
+	// An un-instanced app is unchanged: Runtime() gives back the bare name.
+	cfg.AppNameID = addr.Runtime()
+	if err := expandMounts(&cfg, addr); err != nil {
+		return schema.AppConfig{}, err
+	}
+	return cfg, nil
+}
+
+// expandMounts resolves {state}/{app}/{instance} in the app's host mount paths, so one
+// definition can serve many instances without each one needing its own copy of the config
+// just to point at its own directory.
+//
+// Only the HOST side is templated. The container side is the path the app looks at, which is
+// the same for every instance by design - the whole point is that the app is unaware there is
+// more than one of it, and an app told to find its profile at a different path per instance
+// would have to be configured per instance too.
+func expandMounts(cfg *schema.AppConfig, addr paths.Address) error {
+	for index := range cfg.Volumes {
+		expanded, err := addr.Expand(cfg.Volumes[index].HostMount)
+		if err != nil {
+			return fmt.Errorf("Volumes[%d]: %w", index, err)
+		}
+		cfg.Volumes[index].HostMount = expanded
+	}
+	for index := range cfg.Configs {
+		expanded, err := addr.Expand(cfg.Configs[index].HostMount)
+		if err != nil {
+			return fmt.Errorf("Configs[%d]: %w", index, err)
+		}
+		cfg.Configs[index].HostMount = expanded
+	}
+	return nil
 }
 
 // quoteForDisplay lightly quotes args with whitespace, for readable printing only.

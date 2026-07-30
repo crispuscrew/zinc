@@ -139,3 +139,74 @@ func TestStateDir_IsPerInstance(t *testing.T) {
 		dirs[dir] = name
 	}
 }
+
+// One definition, many instances: the whole reason templating exists is so a per-desk mount
+// does not require a per-desk copy of the app config.
+func TestExpand_StateIsPerInstance(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/custom/state")
+	work, _ := ParseAddress("firefox@work")
+	personal, _ := ParseAddress("firefox@personal")
+
+	gotWork, err := work.Expand("{state}/profile")
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	gotPersonal, _ := personal.Expand("{state}/profile")
+	if gotWork == gotPersonal {
+		t.Fatalf("two instances expanded to the same host path: %s", gotWork)
+	}
+	if want := filepath.Join("/custom/state", "zinc", "firefox", "work", "profile"); gotWork != want {
+		t.Errorf("Expand = %q, want %q", gotWork, want)
+	}
+}
+
+// {state} must agree with StateDir, or a mount and `zcr where` would report different homes
+// for the same instance.
+func TestExpand_StateAgreesWithWhere(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/custom/state")
+	addr, _ := ParseAddress("firefox@work")
+	reported, err := StateDir(addr)
+	if err != nil {
+		t.Fatalf("StateDir: %v", err)
+	}
+	mounted, err := addr.Expand("{state}")
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if mounted != reported {
+		t.Errorf("{state} expands to %q but `zcr where` reports %q", mounted, reported)
+	}
+}
+
+func TestExpand_AppAndInstance(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/custom/state")
+	addr, _ := ParseAddress("firefox@work")
+	got, err := addr.Expand("/data/{app}/{instance}")
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if want := "/data/firefox/work"; got != want {
+		t.Errorf("Expand = %q, want %q", got, want)
+	}
+}
+
+// An unknown placeholder must fail rather than reach the filesystem: a directory literally
+// named "{desk}" looks like a Zinc bug from the outside, and a mount that was meant to be
+// per-instance and silently is not shares what two instances exist in order not to share.
+func TestExpand_RejectsUnknownPlaceholder(t *testing.T) {
+	addr, _ := ParseAddress("firefox@work")
+	if got, err := addr.Expand("{desk}/profile"); err == nil {
+		t.Errorf("Expand of an unknown placeholder = %q, want an error", got)
+	}
+}
+
+// A path with no placeholders is returned untouched - notably NOT cleaned, so an existing
+// config's mount cannot change meaning because templating was added.
+func TestExpand_LeavesPlainPathsAlone(t *testing.T) {
+	addr, _ := ParseAddress("firefox@work")
+	for _, path := range []string{"/srv/data/", "/srv/./data"} {
+		if got, err := addr.Expand(path); err != nil || got != path {
+			t.Errorf("Expand(%q) = %q, %v; want it returned untouched", path, got, err)
+		}
+	}
+}
