@@ -56,6 +56,10 @@ type Store interface {
 type Runtime interface {
 	AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlags []string) ([]string, error)
 	Exec(cmd Command) error // run one prepared command (pod create / nft / holder); capture output on failure
+	// Capture runs one prepared command and returns its standard output. Exec is the wrong
+	// tool for a command whose output IS the answer: it keeps the output only to put it in
+	// an error, so on success - the case that matters here - it is already gone.
+	Capture(cmd Command) (string, error)
 	// StartApp starts the app container detached (Setsid), terminal-wrapped if
 	// StartConditions.Terminal. It returns once the process is forked, before `podman
 	// run` succeeds; onFail is invoked from the reaping goroutine if the app exits with
@@ -129,4 +133,11 @@ type NetEnforcer interface {
 	// than one, because a pod is not the only thing an app can own: the per-app egress
 	// bridge outlives it otherwise, and one podman network accumulates per app that ever ran.
 	Teardown(cfg schema.AppConfig) []Command
+	// Counters returns the command that reads back what the enforcement has actually seen,
+	// and false when this app has nothing to ask (no lists, so no netns of its own). It
+	// belongs on this port rather than beside the runtime because "what did enforcement
+	// do" is part of the mechanism: another NetEnforcer answers it in its own terms, or
+	// says it cannot. The output's format is likewise the adapter's - the app layer passes
+	// it through rather than learning to read one adapter's JSON.
+	Counters(cfg schema.AppConfig, opt options.HostOptions) (Command, bool)
 }

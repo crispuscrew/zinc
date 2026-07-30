@@ -42,6 +42,9 @@ func (engine *fakeRuntime) AppRunArgs(cfg schema.AppConfig, opt options.HostOpti
 	return append([]string{"run", "--name", cfg.AppNameID}, netFlags...), nil
 }
 func (engine *fakeRuntime) Exec(ports.Command) error { return nil }
+func (engine *fakeRuntime) Capture(ports.Command) (string, error) {
+	return "", nil
+}
 func (engine *fakeRuntime) StartApp(cfg schema.AppConfig, opt options.HostOptions, runArgs []string, onFail func()) error {
 	engine.started = append(engine.started, cfg.AppNameID)
 	if !engine.detachedStart {
