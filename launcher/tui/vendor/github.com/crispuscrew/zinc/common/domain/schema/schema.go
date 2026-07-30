@@ -114,6 +114,19 @@ type ImageMeta struct {
 	// single RUN layer of the derived image; for a VM they become cloud-init runcmd lines
 	// on first boot. Same intent either way: what to add on top of the pinned base.
 	Install []string `yaml:"Install"`
+
+	// SourceTag records the tag the pinned digest in Image was resolved FROM, e.g.
+	// "docker.io/library/alpine:3.20". It is provenance, not a second source of truth: a
+	// launch always runs Image, never this, so a tag that moves cannot change what runs.
+	//
+	// It exists because a digest alone is a dead end. Once pinned, nothing on disk says what
+	// the pin was of, so "has the thing I pinned been rebuilt, and does it now carry a fix I
+	// need" is a question no tool can ask - a rebuilt tag and an abandoned one look identical.
+	// Recording the tag makes staleness answerable: re-resolve it and compare.
+	//
+	// Empty for an image pinned by hand, which is honest rather than a gap: nothing knows
+	// where that digest came from, and guessing a tag would invent provenance.
+	SourceTag string `yaml:"SourceTag"`
 }
 
 // VirtualizationMeta configures a VM app: the guest's hardware, how you see it, and the
