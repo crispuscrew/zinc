@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/container/runner/adapters/dbusproxy"
 	"github.com/crispuscrew/zinc/container/runner/adapters/netenforce"
 	"github.com/crispuscrew/zinc/container/runner/adapters/podman"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
@@ -15,7 +16,7 @@ import (
 // which is all Plan and (validation-only) Launch need. Plan is pure (AppRunArgs builds
 // argv without I/O), so these tests run with no podman present.
 func planSvc() Service {
-	return New(nil, podman.Runtime{}, nil, nil, netenforce.Enforcer{})
+	return New(nil, podman.Runtime{}, nil, nil, netenforce.Enforcer{}, dbusproxy.Broker{})
 }
 
 func baseOpts() options.HostOptions {

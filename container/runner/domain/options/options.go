@@ -13,4 +13,9 @@ type HostOptions struct {
 	NetfilterImage string   // image carrying nft for the pasta lock-down step (section 5.3); empty → adapter default
 	HomeDir        string   // container-side home for key mounts (.ssh/.gnupg); empty → /root
 	Terminal       []string // terminal-emulator argv for terminal apps, e.g. ["foot"] or ["xterm","-e"] (section 11)
+	// SessionBusPath is the host path of the real session bus socket, read out of
+	// DBUS_SESSION_BUS_ADDRESS (the "unix:path=" form). Only the D-Bus proxy sees it; the
+	// app never does. Empty disables DBusMeta wiring, which fails the launch of an app that
+	// asked for a bus rather than starting it without one.
+	SessionBusPath string
 }

@@ -15,6 +15,7 @@ Authoring (local, no runtime needed):
 ```
 zc tui                             keyboard-first manager (create/edit/run/stop/logs)
 zc new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
+              [--dbus-talk a.b.C,...] [--dbus-own a.b.C,...]
 zc list
 zc validate <name|app.yaml> [--resolved]       --resolved prints what an inheriting app merges to
 zc delete <name>
@@ -22,6 +23,13 @@ zc keys list|show|set <s>|edit|validate|path   TUI keybind schemes
 zc compose export <name> [-o f]                describe an app as a Compose-spec file
 zc compose import <compose.yaml> [--service s] [--dry-run]
 ```
+
+`--dbus-talk` / `--dbus-own` grant a filtered D-Bus session bus: names the app may call, and
+names it may claim. Without them the app gets **no session bus at all**, which is the default
+worth keeping - the host bus reaches the keyring, the portal and every other service the user
+runs. Naming either also writes `InternalUserMeta.KeepUserID: true`, which a filtered bus
+requires (the proxy serves the socket as you), and says so on stdout rather than doing it
+quietly. Both are container-only; the TUI has the same two rows, `dbus.talk` and `dbus.own`.
 
 Both compose directions are lossy and print exactly how: exporting cannot carry the egress
 lock-down, and importing invents no network access.

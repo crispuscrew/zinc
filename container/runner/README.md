@@ -48,6 +48,38 @@ The runtime is fail-closed: anything it does not yet support is rejected, not ru
 Not supported in this build yet: host-scoped egress and gateway/multi-homing. (A sibling link
 may now coexist with other networking on one app - that is what routing is built on.)
 
+## Filtered session bus
+
+An app gets **no D-Bus session bus** unless it asks for one. The host bus is a desktop-wide
+capability - the keyring, the portal, the compositor, every other service the user runs - so
+mounting it into a sandbox would undo most of the sandbox.
+
+`DBusMeta` opens exactly what it names and nothing else:
+
+```yaml
+InternalUserMeta:
+  KeepUserID: true                          # required: the proxy serves the socket as you
+DBusMeta:
+  Talk:                                     # names the app may call
+    - org.freedesktop.portal.Desktop
+  Own:                                      # names the app may claim
+    - org.mpris.MediaPlayer2.notes
+```
+
+`zcr` runs `xdg-dbus-proxy` in the helper image, in a container it owns, which holds the real
+socket and serves the app a filtered one. The proxy is deliberately **not** a member of the
+app's pod: a pod shares the PID namespace, so a proxy inside it would be a process the app
+could signal or ptrace. They share one thing, the socket. The app's socket directory is per
+app, so two apps with different grants cannot reach each other's bus.
+
+A trailing `.*` in `Talk` matches a subtree, including services that appear under it later, so
+prefer an exact name. `Own` takes no wildcard: a process claims one concrete name or none.
+
+Fail-closed here too. An app that asks for a bus when no host bus can be resolved does not
+start, rather than starting with no bus and looking broken for reasons unrelated to its
+config. `DBusMeta` on a VM app is a validation error - a guest cannot take a bind-mounted
+unix socket.
+
 ## Build
 
 Podman-only, reproducible in a pinned container:
@@ -55,7 +87,7 @@ Podman-only, reproducible in a pinned container:
 ```
 make build            # produces ./bin/zcr
 make check            # gofmt + vet + test, in-container
-make netfilter-image  # build the nft helper image the lock-down applies rules with
+make netfilter-image  # build the helper image: the nft lock-down and the D-Bus proxy
 ```
 
 ## Layout

@@ -366,6 +366,44 @@ the container - not the host's real `~/.config` or `~/.themes`. The bundle path 
 is a job for the desktop layer (ZDE), out of scope for Zinc 0.1. The point of default-on is
 that containerized apps look like part of the system; set `HostTheme: false` to deny it.
 
+### 5.7 Session bus isolation (per-instance filtered D-Bus)
+
+**Default off, and the default is the whole point.** The host session bus is a desktop-wide
+capability: an app holding that socket can read the keyring, drive the portal, talk to the
+compositor and address every other service the user runs. Mounting it into a sandbox opens a
+hole the width of the desktop, so Zinc's default is that a container gets **no session bus at
+all**.
+
+`DBusMeta` opens exactly as much as it names, and nothing more:
+
+- `Talk` - well-known names the app may send method calls to. A trailing `.*` matches a
+  subtree, which also grants services that appear under it later, so an exact name is
+  preferred.
+- `Own` - names the app may claim, which is what a notifier, a tray icon or an MPRIS player
+  needs to be addressable. A separate grant from `Talk` rather than implied by it, and a
+  wildcard cannot be owned, since a process claims one concrete name or none.
+
+The mechanism mirrors 5.3: the dangerous thing is established outside the app, and the app is
+handed only the filtered result. `xdg-dbus-proxy` runs in the vetted helper image, in a
+container Zinc owns, holding the real bus socket and serving a per-app filtered one. Three
+properties carry the isolation:
+
+1. **The proxy is not in the app's pod.** A pod shares the PID namespace, so a proxy inside it
+   would be a process the app could signal or ptrace: the filter and the filtered, in one
+   blast radius. They share exactly one thing, the socket, through a bind mount.
+2. **The app never receives the real socket.** Only the proxy mounts it. The app's mount is
+   the proxy's own socket, and `DBUS_SESSION_BUS_ADDRESS` points there. The socket directory is
+   per app, so two apps with different grants cannot reach each other's bus.
+3. **It fails closed.** An app that asked for a bus when no host bus can be resolved does not
+   launch. Starting it without one would surface inside the app as an unexplained connection
+   error, pointing nowhere near the config.
+
+A filtered bus is also an agreement about uid: the proxy serves the socket as the invoking host
+user, and an app in its own user namespace cannot connect. Validation therefore requires
+`InternalUserMeta.KeepUserID`, rather than Zinc silently changing who the app runs as on the
+strength of a bus grant. On a VM app `DBusMeta` is a validation error - a guest has no way to
+take a bind-mounted unix socket.
+
 ---
 
 ## 6. Networking model and startup ordering

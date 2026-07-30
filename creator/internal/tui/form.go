@@ -69,6 +69,8 @@ type formModel struct {
 	install    textarea.Model  // ImageMeta.Install: derived-image RUN steps, or a guest's cloud-init runcmd
 	desc       textinput.Model
 	icon       textinput.Model
+	dbusTalk   textinput.Model // DBusMeta.Talk, comma-separated
+	dbusOwn    textinput.Model // DBusMeta.Own, comma-separated
 
 	// VM-only inputs. They exist whatever the type is, so switching back and forth does
 	// not lose what was typed; only the field list rebuilds.
@@ -99,6 +101,8 @@ func newForm(base schema.AppConfig, creating bool) *formModel {
 	frm.install = newArea(strings.Join(frm.draft.ImageMeta.Install, "\n"), "build setup, one shell line per row, e.g. apt-get install -y firefox (blank = none)")
 	frm.desc = newInput(frm.draft.Description, "")
 	frm.icon = newInput(frm.draft.Icon, "freedesktop name (e.g. firefox) or /path/to/icon.png")
+	frm.dbusTalk = newInput(strings.Join(frm.draft.DBusMeta.Talk, ", "), "bus names the app may call, e.g. org.freedesktop.portal.Desktop (blank = no session bus)")
+	frm.dbusOwn = newInput(strings.Join(frm.draft.DBusMeta.Own, ", "), "bus names the app may claim, e.g. org.mpris.MediaPlayer2.notes (blank = none)")
 
 	virt := frm.draft.VirtualizationMeta
 	frm.baseDigest = newInput(virt.BaseDigest, "sha256:... (zvr pin <image> prints it)")
@@ -207,6 +211,11 @@ func (frm *formModel) buildFields() {
 		boolean("host_theme",
 			func() bool { return frm.draft.HostTheme },
 			func(val bool) { frm.draft.HostTheme = val }),
+		// The session bus is last of the grants because it is the widest: blank means the app
+		// gets no bus at all, which is the default worth keeping. Filling either row also sets
+		// KeepUserID on save, which the summary row below reports.
+		formField{label: "dbus.talk", kind: kindText, input: &frm.dbusTalk},
+		formField{label: "dbus.own", kind: kindText, input: &frm.dbusOwn},
 		formField{label: "advanced", kind: kindAction, info: frm.advancedSummary},
 	)
 	frm.fields = fields
@@ -462,15 +471,38 @@ func (frm *formModel) toConfig() schema.AppConfig {
 		cfg.NetworkMeta.NetworkLists = nil
 		cfg.Volumes, cfg.Configs, cfg.Keys = nil, nil, nil
 		cfg.HostTheme = false
+		cfg.DBusMeta = schema.DBusMeta{}
 		cfg.InternalUserMeta = schema.InternalUserMeta{}
 		cfg.ResourcesMeta = schema.ResourcesMeta{}
 		return cfg
 	}
 
 	cfg.StartConditions.Entrypoint = strings.TrimSpace(frm.entrypoint.Value())
+	cfg.DBusMeta = schema.DBusMeta{
+		Talk: splitCommas(frm.dbusTalk.Value()),
+		Own:  splitCommas(frm.dbusOwn.Value()),
+	}
+	// A filtered bus is a uid agreement with the proxy, and validation refuses the pair
+	// without it, so a form that took the grants and left KeepUserID alone could only fail to
+	// save. Setting it here writes it into the file, where it is visible and reviewable.
+	if !cfg.DBusMeta.IsZero() {
+		cfg.InternalUserMeta.KeepUserID = true
+	}
 	// The mirror of the above: VM fields on a container app are inert and rejected.
 	cfg.VirtualizationMeta = schema.VirtualizationMeta{}
 	return cfg
+}
+
+// splitCommas reads a comma-separated form row into its entries, dropping empties so a
+// trailing comma is not a bus name. What each entry has to be is validation's business.
+func splitCommas(text string) []string {
+	var entries []string
+	for _, entry := range strings.Split(text, ",") {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			entries = append(entries, trimmed)
+		}
+	}
+	return entries
 }
 
 // parseNum reads a whole number from a form field, treating anything unreadable as unset

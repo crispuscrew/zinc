@@ -108,6 +108,15 @@ func FromApp(cfg schema.AppConfig) (Project, []string, error) {
 	if cfg.InternalUserMeta.KeepUserID {
 		note("InternalUserMeta.KeepUserID is not represented: mapping the host uid into the container is `podman --userns=keep-id`, which compose has no field for.")
 	}
+	if !cfg.DBusMeta.IsZero() {
+		// The direction of the loss is what matters here. An importer of this file gets an app
+		// with no bus grants, which is Zinc's fail-closed default and therefore safe - the app
+		// simply will not reach the services it needs. The unsafe reading is the opposite one:
+		// that exporting an app whose sandbox was deliberately narrowed produced a file
+		// carrying that decision. It does not, so it is said plainly.
+		note("DBusMeta (%d Talk, %d Own) is not represented: the filtered bus is a socket served by a proxy container the runner starts, and compose has no way to state either the proxy or the grants. An app imported from this file gets NO session bus, not these names.",
+			len(cfg.DBusMeta.Talk), len(cfg.DBusMeta.Own))
+	}
 	if cfg.StartConditions.Terminal || cfg.StopConditions.KeepAlive || cfg.StopConditions.Background {
 		note("The terminal and stop-condition settings (Terminal, KeepAlive, Background) are not represented: they decide how the runner launches and reaps the app, which is not something a compose file states.")
 	}
