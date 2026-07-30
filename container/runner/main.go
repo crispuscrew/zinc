@@ -50,12 +50,61 @@ const usage = `usage: zcr <command> [args]
   logs <app> [-f]
   term <app> [--shell]      open a terminal for a multiterminal app
   ps                        running apps, one per line
+  recheck <app>             re-resolve ImageMeta.SourceTag and report whether the
+                            pinned digest is still what that tag points at
   where <app[@instance]>    print where that instance keeps its state, and the name
                             its container takes; ask rather than assume the layout
   image search <term> | resolve <ref>
   version                   print the version
 
 <app> is a store name (~/.config/zinc/apps) or a path (has '/' or ends in .yaml).`
+
+// cmdRecheck answers "is this pin stale" - the question a digest alone cannot be asked.
+//
+// It re-resolves ImageMeta.SourceTag and compares the result with the digest actually pinned
+// in ImageMeta.Image. It changes nothing: re-pinning is a decision with a human behind it,
+// because a moved tag is not automatically a tag you want, and an updater that silently
+// followed one would defeat the reason images are pinned at all. This reports; a person (or
+// a tool with a person behind it) decides.
+//
+// Exit status is the machine-readable half, so a checker does not have to parse prose:
+// 0 the pin is current, 1 an error, 2 the tag has moved.
+func cmdRecheck(svc app.Service, argv []string) error {
+	if len(argv) != 1 {
+		return fmt.Errorf("usage: zcr recheck <app>")
+	}
+	cfg, err := loadApp(svc, argv[0])
+	if err != nil {
+		return err
+	}
+	tag := strings.TrimSpace(cfg.ImageMeta.SourceTag)
+	if tag == "" {
+		return fmt.Errorf("%s: no ImageMeta.SourceTag recorded, so there is no tag to re-resolve; the digest was pinned by hand and nothing knows what it was a pin OF", cfg.AppNameID)
+	}
+	// The validator refuses a digest here, but validation runs at save and at launch - not on
+	// the plain load this command does - so a file edited by hand reaches here unchecked. A
+	// digest re-resolves to itself, which would compare one digest against another and report
+	// a confident, meaningless answer.
+	if strings.Contains(tag, "@sha256:") {
+		return fmt.Errorf("%s: ImageMeta.SourceTag is a digest (%s), not a tag - re-resolving it returns itself, so it can never report the pin as stale; record the tag the digest came from", cfg.AppNameID, tag)
+	}
+	resolved, err := svc.Resolve(tag)
+	if err != nil {
+		return fmt.Errorf("%s: re-resolving %s: %w", cfg.AppNameID, tag, err)
+	}
+	fmt.Printf("tag: %s\n", tag)
+	fmt.Printf("pinned: %s\n", cfg.ImageMeta.Image)
+	fmt.Printf("current: %s\n", resolved)
+	if resolved == cfg.ImageMeta.Image {
+		fmt.Println("status: current")
+		return nil
+	}
+	fmt.Println("status: moved")
+	// Not an error in the "something went wrong" sense - the check worked and the answer is
+	// that the tag moved - but a distinct exit code, so a scheduled checker can act on it.
+	os.Exit(2)
+	return nil
+}
 
 // cmdWhere answers "where does this instance keep things, and what is it called at runtime".
 //
@@ -149,6 +198,8 @@ func run(argv []string) error {
 		return cmdPs(svc)
 	case "where":
 		return cmdWhere(rest)
+	case "recheck":
+		return cmdRecheck(svc, rest)
 	case "image":
 		return cmdImage(svc, rest)
 	default:
