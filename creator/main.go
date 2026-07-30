@@ -30,6 +30,7 @@ package main
 
 import (
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -61,6 +62,7 @@ const usage = `usage: zc <command> [args]
              [--ci-user u] [--ci-ssh-key k.pub] [--forward HOST:GUEST] [--install 'a; b']
              [--firmware UEFI] [--secure-boot] [--tpm] [--devices Compatible] [--vulkan]
              [--resolution WxH] [--mac ADDR] [--media disc.iso]
+  init [--force]                    seed the store with example apps to start from
   list
   validate <name|app.yaml> [--resolved]   --resolved prints what an inheriting app merges to
   delete <name>
@@ -144,6 +146,8 @@ func run(argv []string) error {
 		return cmdTUI(svc)
 	case "new":
 		return cmdNew(svc, rest)
+	case "init":
+		return cmdInit(svc, rest)
 	case "list":
 		return cmdList(svc)
 	case "validate":
@@ -155,6 +159,127 @@ func run(argv []string) error {
 	default:
 		return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 	}
+}
+
+// seedApps are the example definitions `zc init` writes. They are deliberately few and
+// deliberately boring: the job is to give a new user something that runs and something to
+// copy, not to ship a catalogue. Each one demonstrates exactly one thing the schema can do,
+// so an author reading them can tell which line is responsible for which behaviour.
+//
+// The images are alpine, pinned, because an example that pulls a browser on first run is a
+// several-hundred-megabyte surprise; the point is the shape of the file.
+var seedApps = []struct {
+	name string
+	yaml string
+}{
+	{"example-shell", `SchemaVersion: 2
+Type: ZincContainer
+AppNameID: example-shell
+Description: A terminal in a container - the smallest thing that runs
+Group: examples
+ImageMeta:
+  Image: docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+StartConditions:
+  Entrypoint: /bin/sh
+  Terminal: true
+`},
+	{"example-egress", `SchemaVersion: 2
+Type: ZincContainer
+AppNameID: example-egress
+Description: Network locked down to one destination - everything else is dropped
+Group: examples
+ImageMeta:
+  Image: docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+StartConditions:
+  Entrypoint: /bin/sh
+  Terminal: true
+# Without NetworkLists an app reaches only its own localhost. With one, it reaches
+# exactly what is listed and nothing else - the rules are applied before the app starts.
+NetworkMeta:
+  NetworkLists:
+    - Domains: ["example.com"]
+      Ports: [443]
+`},
+	{"example-instanced", `SchemaVersion: 2
+Type: ZincContainer
+AppNameID: example-instanced
+Description: One definition, many instances - run it as example-instanced@work
+Group: examples
+ImageMeta:
+  Image: docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+StartConditions:
+  Entrypoint: /bin/sh
+  Terminal: true
+# {state} expands to this instance's own directory. Ask zcr where it is:
+#   zcr where example-instanced@work
+Volumes:
+  - HostMounted: true
+    HostMount: "{state}/data"
+    InnerMount: /data
+    Writable: true
+`},
+}
+
+// cmdInit seeds the store. A fresh machine has an empty apps directory and nothing to look
+// at, which makes the first question after installing Zinc "and now what" - this answers it
+// with files rather than documentation.
+//
+// It refuses to overwrite by default and reports what it skipped. Seeding is the kind of
+// command someone runs twice without thinking, and the second run silently replacing an app
+// they had edited is the worst outcome available.
+func cmdInit(svc backend.Service, argv []string) error {
+	force := false
+	for _, arg := range argv {
+		switch arg {
+		case "--force":
+			force = true
+		default:
+			return fmt.Errorf("unknown flag %q (usage: zc init [--force])", arg)
+		}
+	}
+
+	var written, skipped []string
+	for _, seed := range seedApps {
+		if svc.Exists(seed.name) && !force {
+			skipped = append(skipped, seed.name)
+			continue
+		}
+		// Parsed through the same path a hand-written file takes, rather than constructed as
+		// a struct: a seed that only ever existed as Go could drift from what the YAML codec
+		// actually accepts, and then the examples would be the one set of files guaranteed
+		// not to demonstrate the real format.
+		draft, err := os.CreateTemp("", "zinc-seed-*.yaml")
+		if err != nil {
+			return fmt.Errorf("seed %s: %w", seed.name, err)
+		}
+		tmpPath := draft.Name()
+		_, werr := draft.WriteString(seed.yaml)
+		cerr := draft.Close()
+		if werr != nil || cerr != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("seed %s: %w", seed.name, errors.Join(werr, cerr))
+		}
+		cfg, lerr := svc.LoadFile(tmpPath)
+		os.Remove(tmpPath)
+		if lerr != nil {
+			return fmt.Errorf("seed %s: %w", seed.name, lerr)
+		}
+		if err := svc.Save(cfg); err != nil { // validates before anything reaches the store
+			return fmt.Errorf("seed %s: %w", seed.name, err)
+		}
+		written = append(written, seed.name)
+	}
+
+	for _, name := range written {
+		fmt.Printf("created %s → %s\n", name, svc.Path(name))
+	}
+	if len(skipped) > 0 {
+		fmt.Printf("kept existing: %s (use --force to replace)\n", strings.Join(skipped, ", "))
+	}
+	if len(written) > 0 {
+		fmt.Println("\ntry:  zc validate example-shell   then   zc run example-shell --exec")
+	}
+	return nil
 }
 
 func cmdTUI(svc backend.Service) error {
