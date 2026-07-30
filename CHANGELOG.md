@@ -5,6 +5,60 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.8.2] - 2026-07-31
+
+Work driven by what ZDE is blocked on. Five of its seven asks; the two still open are
+noted at the end.
+
+### Added
+
+- **Instances: one definition, many running things.** `zcr run app@instance`, or
+  `--instance NAME`. Two instances coexist and tear down independently; an app with no
+  instance keeps the exact container name it has always had, so nothing existing is renamed.
+
+  `@` is the address a person types and `.` is the runtime name, because podman refuses `@`
+  outright. Instance names are `[a-z0-9][a-z0-9_-]*`. The instance is applied in one place -
+  the load path every command already goes through - so the pod, container, healthcheck,
+  D-Bus proxy and teardown all follow without a second identifier threaded through each
+  adapter, and without one adapter quietly sharing a pod between instances meant to be
+  separate.
+
+  **Observable:** `zcr run sleeper@work --exec && zcr run sleeper@personal --exec` yields
+  containers `sleeper.work` and `sleeper.personal`; stopping one leaves the other running.
+
+- **`zcr where <app[@instance]>`** prints where an instance keeps its state and what its
+  container is called. State is under `$XDG_STATE_HOME` (falling back to `~/.local/state`)
+  at `zinc/<app>/<instance>`. It exists so nothing outside Zinc hardcodes the layout: a
+  second copy of the rules drifts the first time either side changes. It answers whether or
+  not the instance is running, which is why it is not part of `inspect`.
+
+- **`{state}`, `{app}` and `{instance}` in host mount paths**, so one definition serves many
+  desks without a copy per desk. `{state}` expands to exactly what `zcr where` reports, and a
+  test pins that they cannot disagree. Only the host side is templated: the container side is
+  what the app looks at, and it is the same for every instance by design. An unknown
+  placeholder is an error, never a literal directory.
+
+- **`ImageMeta.SourceTag` and `zcr recheck <app>`.** A digest alone cannot be asked whether
+  it is stale - a rebuilt tag and an abandoned one look identical once pinned. SourceTag
+  records what the digest was resolved from; `recheck` re-resolves and compares. It changes
+  nothing, because re-pinning is a decision with a human behind it. Exit status carries the
+  answer for tooling: 0 current, 1 error, 2 moved.
+
+- **`zc init`** seeds a fresh store with three worked examples - a terminal app, an
+  egress-locked app, and an instanced app with a `{state}` mount. A new machine had an empty
+  apps directory and nothing to look at.
+
+### Still open
+
+- A real `wp_security_context_v1`. Zinc applies a podman *label* and passes the raw
+  compositor socket, so the compositor learns nothing from Zinc about which app a window is.
+  Giving a desktop a trustworthy per-instance `app_id` means Zinc speaking the protocol and
+  handing over the derived socket.
+- Bus attribution. `xdg-dbus-proxy` is a relay with no bus identity of its own, so having it
+  "claim a name per instance" is not available: `--own` grants the *app* permission to claim
+  a name, which is a claim again. The workable shape is Zinc exposing the mapping it already
+  knows by construction.
+
 ## [0.8.1] - 2026-07-31
 
 ### Added
@@ -888,6 +942,7 @@ First release. Ships the container tools: author an app once, run it sandboxed.
 - `launcher/` and `virtualization/creator/` are skeletons that do not compile
   yet; they are on the roadmap and excluded from the build and CI.
 
+[0.8.2]: https://github.com/crispuscrew/zinc/releases/tag/v0.8.2
 [0.8.1]: https://github.com/crispuscrew/zinc/releases/tag/v0.8.1
 [0.8.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.8.0
 [0.7.0]: https://github.com/crispuscrew/zinc/releases/tag/v0.7.0
