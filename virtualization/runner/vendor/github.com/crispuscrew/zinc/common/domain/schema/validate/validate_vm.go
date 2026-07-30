@@ -203,6 +203,8 @@ func checkContainerOnlyFields(cfg schema.AppConfig, add addFunc) {
 			"sharing a host directory into a guest needs virtiofs, which this build does not implement"},
 		{cfg.HostTheme, "HostTheme",
 			"the theme bundle is a read-only bind mount, which a guest cannot take"},
+		{!cfg.DBusMeta.IsZero(), "DBusMeta",
+			"the filtered bus is a unix socket bind-mounted from a proxy container, and a guest has no way to take one; reach the host bus over the network or run the app as a container"},
 		{cfg.StartConditions.Multiterminal, "StartConditions.Multiterminal",
 			"a guest has one console; attach to it with the serial console instead"},
 		{len(cfg.StartConditions.ReadyCheck) > 0, "StartConditions.ReadyCheck",

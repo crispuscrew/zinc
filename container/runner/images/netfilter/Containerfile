@@ -21,7 +21,13 @@ FROM docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9b
 # app's WireGuard interface itself, in this helper, so the APP never needs CAP_NET_ADMIN -
 # which it may not have anyway, since NET_ADMIN in the pod netns would let it flush the very
 # ruleset that contains it. busybox's `ip` cannot create a wireguard link, hence iproute2.
-RUN apk add --no-cache nftables=1.1.3-r0 iproute2 wireguard-tools
+#
+# xdg-dbus-proxy is the D-Bus half of this image's job (DBusMeta). Unlike the nft and
+# wireguard steps it does NOT exit before the app starts: it runs for the app's whole life,
+# in its own container, serving the filtered socket. It lives here rather than in a second
+# image because it is the same kind of thing - a vetted helper Zinc drives, never the app's
+# own image - and one helper image is one thing to build and keep pinned.
+RUN apk add --no-cache nftables=1.1.3-r0 iproute2 wireguard-tools xdg-dbus-proxy=0.1.6-r0
 
 # No ENTRYPOINT: zcr invokes `nft -f -` explicitly (the netenforce adapter builds
 # the apply args).
