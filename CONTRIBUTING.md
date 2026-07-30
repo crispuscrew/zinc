@@ -54,13 +54,15 @@ Keep the dependency direction inward:
 | Package | Role | Rule |
 |---|---|---|
 | `domain` | schema-derived types + derived-image policy | no I/O (no podman, fs, nft, env) |
-| `ports` | interfaces (`Store`, `Runtime`, `ImageBuilder`, `ImageResolver`, `NetEnforcer`) + the neutral `Command` type | contracts only |
+| `ports` | interfaces (`Store`, `Runtime`, `ImageBuilder`, `ImageResolver`, `NetEnforcer`, `DBusBroker`) + the neutral `Command` type | contracts only |
 | `app` | launch orchestration (`Service`) | depends on ports + domain |
-| `adapters/{podman,netenforce,fs,host}` | the I/O implementations | implement ports |
+| `adapters/{podman,netenforce,dbusproxy,fs,host}` | the I/O implementations | implement ports |
 | `wire` | composition root helpers | assembles adapters |
 
 `NetEnforcer` is the network swap point in `adapters/netenforce`: swapping the mechanism is
-a new adapter, not a cross-cutting edit.
+a new adapter, not a cross-cutting edit. `DBusBroker` (`adapters/dbusproxy`) is its sibling
+for the session bus, same shape and the same reason: a capability the app must never hold
+directly, established before the app exists and removed after it dies.
 
 ## Build, test, validate
 
