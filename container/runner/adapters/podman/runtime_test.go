@@ -8,6 +8,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/domain/derived"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
+	"github.com/crispuscrew/zinc/container/runner/ports"
 )
 
 func baseOpts() options.HostOptions {
@@ -516,4 +517,32 @@ func TestAppRunArgs_KeepUserIDIsThePodsWhenFiltered(t *testing.T) {
 	}
 	// Filtered: joining a pod, so it must not.
 	mustNotContain(t, appArgs(t, cfg, baseOpts(), []string{"--pod", "app-pod"}), "--userns=keep-id")
+}
+
+// A launch never pulls (--pull never, section 5.5), so a helper image that was never built
+// fails with podman's bare "image not known" - a sentence that does not say the image was the
+// user's to build. The hint has to name the command.
+func TestHelperImageHint_NamesTheBuildCommand(t *testing.T) {
+	cmd := ports.Command{Args: []string{"run", "--rm", "zinc/netfilter:local", "true"}}
+	got := helperImageHint(cmd, []byte("Error: zinc/netfilter:local: image not known"))
+	if !strings.Contains(got, "make -C container/runner netfilter-image") {
+		t.Errorf("hint does not name the build command: %q", got)
+	}
+}
+
+// An app's own image being absent is a different problem with a different fix, and offering the
+// netfilter build as the answer would send the user to the wrong place.
+func TestHelperImageHint_NotForAnAppsOwnImage(t *testing.T) {
+	cmd := ports.Command{Args: []string{"run", "--rm", "docker.io/library/alpine@sha256:abc", "true"}}
+	if got := helperImageHint(cmd, []byte("Error: docker.io/library/alpine@sha256:abc: image not known")); got != "" {
+		t.Errorf("hint offered for an app's own image: %q", got)
+	}
+}
+
+// Any other failure must not acquire an image hint.
+func TestHelperImageHint_OnlyForMissingImages(t *testing.T) {
+	cmd := ports.Command{Args: []string{"run", "zinc/netfilter:local", "nft", "-f", "-"}}
+	if got := helperImageHint(cmd, []byte("Error: nft: syntax error")); got != "" {
+		t.Errorf("hint offered for an unrelated failure: %q", got)
+	}
 }

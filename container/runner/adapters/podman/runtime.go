@@ -402,9 +402,34 @@ func (Runtime) Exec(cmd ports.Command) error {
 		proc.Stdin = strings.NewReader(cmd.Stdin)
 	}
 	if out, err := proc.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s: %s", cmd.Desc, strings.TrimSpace(string(out)))
+		return fmt.Errorf("%s: %s%s", cmd.Desc, strings.TrimSpace(string(out)), helperImageHint(cmd, out))
 	}
 	return nil
+}
+
+// helperImageHint turns podman's "image not known" into something a user can act on when the
+// missing image is one WE were supposed to have built.
+//
+// Every privileged step of a launch - the nft lock-down, the WireGuard setup, the D-Bus proxy -
+// runs from the local helper image, deliberately with --pull never, so a launch never fetches
+// anything (section 5.5). The cost of that choice is this failure: a user who has not run
+// `make netfilter-image` gets "zinc/netfilter:local: image not known" and no thread to pull,
+// because nothing in that sentence says the image was theirs to build. Naming the command costs
+// one line and saves the guess.
+//
+// Scoped to zinc/ images on purpose: an app's own image being absent is a different problem
+// with a different fix, and this must not offer the netfilter build as the answer to it.
+func helperImageHint(cmd ports.Command, out []byte) string {
+	if !strings.Contains(string(out), "image not known") {
+		return ""
+	}
+	for _, arg := range cmd.Args {
+		if strings.HasPrefix(arg, "zinc/") {
+			return "\n  hint: " + arg + " is Zinc's own helper image and is built locally, never pulled." +
+				"\n        build it once with: make -C container/runner netfilter-image"
+		}
+	}
+	return ""
 }
 
 // StartApp starts the app container detached from the caller (Setsid) so it outlives a
