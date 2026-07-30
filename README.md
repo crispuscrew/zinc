@@ -105,7 +105,9 @@ install -Dm755 launcher/gui/bin/zlg          ~/.local/bin/zlg
 ```
 
 `zc` needs `zcr` on `$PATH` to run container apps and `zvr` to run VM apps (authoring works
-without either). To run egress-filtered apps, build the nft helper image once:
+without either). Build the helper image once - it carries both the nft lock-down and the
+D-Bus proxy, so any app with `NetworkLists` or `DBusMeta` needs it, and a launch never pulls
+it for you:
 
 ```sh
 make -C container/runner netfilter-image
