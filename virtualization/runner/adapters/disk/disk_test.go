@@ -198,9 +198,20 @@ func TestVerifyBase_ForgedMtimeStillCaught(t *testing.T) {
 	}
 }
 
-// An unchanged image is not re-hashed: the sidecar has to actually save the work, or it
-// is only a liability.
-func TestVerifyBase_UnchangedImageUsesTheCache(t *testing.T) {
+// An unchanged image verifies repeatedly, and a metadata-only change forces a re-hash.
+//
+// The second half is the interesting one, and it is the documented cost of putting ctime in
+// the sidecar's identity: chmod, chown, an xattr or a new hardlink all move ctime without
+// touching a byte of content, so the cache misses and the whole file is read again. That is
+// deliberate - ctime is what makes a swapped-then-restored base detectable - but it means a
+// test cannot make the file unreadable to prove the cache was used, because the chmod that
+// removes permission is itself what invalidates the entry.
+//
+// This test previously did exactly that, and passed only because the pinned build container
+// ran as root: CAP_DAC_OVERRIDE reopened the 0o000 file, the re-hash succeeded, and the sole
+// assertion (no error) held without ever observing whether the cache was consulted. Run as
+// any ordinary user it failed. Asserting the re-hash is both true and testable.
+func TestVerifyBase_UnchangedImageVerifiesAndMetadataChangeReHashes(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "base.qcow2")
 	if err := os.WriteFile(base, []byte("stable image"), 0o644); err != nil {
@@ -210,18 +221,20 @@ func TestVerifyBase_UnchangedImageUsesTheCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyBase(base, digest); err != nil {
-		t.Fatal(err)
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := VerifyBase(base, digest); err != nil {
+			t.Fatalf("verify %d of an unchanged image: %v", attempt, err)
+		}
 	}
 
-	// Make the file unreadable. A cached verification never opens it, so this still
-	// succeeds; a re-hash would fail. That is the observable difference.
-	if err := os.Chmod(base, 0o000); err != nil {
+	// Metadata-only change: the content is untouched, so a re-hash still matches the pin and
+	// the call must succeed. Making it observable is what needs root, which is why the
+	// assertion here is that the pin still holds rather than that the file went unread.
+	if err := os.Chmod(base, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(base, 0o644) })
 	if err := VerifyBase(base, digest); err != nil {
-		t.Fatalf("an unchanged image should be taken from the sidecar without re-reading it, got: %v", err)
+		t.Fatalf("a chmod moves ctime and forces a re-hash, but the bytes are unchanged so the pin must still hold: %v", err)
 	}
 }
 

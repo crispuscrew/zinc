@@ -41,10 +41,27 @@ func Options() options.HostOptions {
 // per-user bus lives when the variable is unset (a login shell that never sourced the session
 // environment, which is exactly the case for an app launched from a hotkey).
 func sessionBusPath() string {
-	for _, addr := range strings.Split(os.Getenv("DBUS_SESSION_BUS_ADDRESS"), ",") {
-		if path, ok := strings.CutPrefix(strings.TrimSpace(addr), "unix:path="); ok {
-			return path
+	// Split on ';', which is what separates ADDRESSES. ',' separates the key=value pairs
+	// INSIDE one address, so splitting on it made "unix:path=/a;unix:path=/b" come back as a
+	// single bogus path, and made every form this function does not understand fall through
+	// to the fallback below.
+	//
+	// That fall-through is the part that mattered: an abstract-socket, tcp, or
+	// "unix:guid=...,path=..." address all resolved to $XDG_RUNTIME_DIR/bus, so a user who
+	// had deliberately pointed the session at a nested or restricted bus (dbus-run-session,
+	// a test bus) got a sandbox proxied onto the MAIN user bus instead - strictly more than
+	// the environment named, and silently. Set but unparseable now returns empty, which
+	// fails the launch and says so; only UNSET takes the fallback.
+	address := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+	if address != "" {
+		for _, candidate := range strings.Split(address, ";") {
+			for _, pair := range strings.Split(strings.TrimSpace(candidate), ",") {
+				if path, ok := strings.CutPrefix(strings.TrimSpace(pair), "unix:path="); ok {
+					return path
+				}
+			}
 		}
+		return ""
 	}
 	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
 		return filepath.Join(dir, "bus")

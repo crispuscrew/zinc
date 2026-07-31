@@ -48,9 +48,11 @@ run: build
 container-build:
 	$(CONTAINER_TOOL) build $(BUILD_FLAGS) --network=none --build-arg VERSION=$(VERSION) -t $(BUILD_IMAGE) -f $(CONTAINERFILE) .
 	@mkdir -p $(BIN_DIR)
-	@cid=$$($(CONTAINER_TOOL) create $(BUILD_IMAGE)); \
-	$(CONTAINER_TOOL) cp $$cid:/app $(BIN); \
-	$(CONTAINER_TOOL) rm $$cid >/dev/null
+	@cid=$$($(CONTAINER_TOOL) create $(BUILD_IMAGE)) || exit 1; \
+	status=0; \
+	$(CONTAINER_TOOL) cp $$cid:/app $(BIN) || status=1; \
+	$(CONTAINER_TOOL) rm $$cid >/dev/null || true; \
+	exit $$status
 	@echo "built $(BIN)"
 
 ## repro: build twice in-container and assert the binary is byte-identical

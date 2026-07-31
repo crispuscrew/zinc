@@ -16,7 +16,17 @@ GO_IMAGE       ?= docker.io/library/golang:1.24-alpine@sha256:757779acac4af1b349
 
 # Containerized go for checks/tests against THIS module: mount the module dir and
 # use its vendored deps. Recursive (=) so $$PWD expands in the recipe shell.
+#
+# --network=none is what makes `make check` hermetic rather than merely containerized.
+# `go test ./...` runs arbitrary test code, so with a network a test could quietly depend
+# on fetching something and still pass - the same invariant the build step already enforces
+# at tool.mk. Nothing in fmt, vet or test needs the network: the deps are vendored and
+# GOTOOLCHAIN=local forbids downloading a toolchain.
+#
+# --cap-drop=ALL matches the baseline Zinc applies to every app container. A test compiler
+# has no more business holding CAP_NET_RAW than an app does.
 GO_RUN          = $(CONTAINER_TOOL) run --rm --security-opt label=disable \
+                    --network=none --cap-drop=ALL --security-opt no-new-privileges \
                     -v "$$PWD":/src -w /src -e GOTOOLCHAIN=local $(GO_IMAGE)
 
 # Vendoring is different: a local `replace => ../../common` means tidy/vendor need the
@@ -24,8 +34,11 @@ GO_RUN          = $(CONTAINER_TOOL) run --rm --security-opt label=disable \
 # go.mod/replace drive the result. Mount the REPO ROOT (not just the module's parent,
 # which is too shallow for a nested module's replace) and work in the module's subdir
 # under it. This is the only step that needs network.
+# Network stays ON here - this is the one step that legitimately fetches - but the
+# capabilities do not, and this is the widest mount in the repo (the whole tree, writable).
 GO_VENDOR       = ROOT="$$(cd "$(REPO_REL)" && pwd)"; \
                   $(CONTAINER_TOOL) run --rm --security-opt label=disable \
+                    --cap-drop=ALL --security-opt no-new-privileges \
                     -v "$$ROOT":/repo -w "/repo/$${PWD\#$$ROOT/}" \
                     -e GOTOOLCHAIN=local -e GOWORK=off $(GO_IMAGE)
 

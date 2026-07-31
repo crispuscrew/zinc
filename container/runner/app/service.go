@@ -161,6 +161,20 @@ func (svc Service) launch(cfg schema.AppConfig, opt options.HostOptions, chain [
 	if err := checkNetwork(cfg); err != nil { // fail closed on not-yet-supported network shapes
 		return err
 	}
+	// Refuse before preparing anything, because the fail-closed teardown below cannot tell
+	// "the object I just tried to create already exists" from "the object I created is
+	// broken". Without this, a second launch of a running app failed on its first prepare
+	// step and then tore down the pod, the D-Bus proxy and the socket directory belonging to
+	// the FIRST, healthy launch - so a double Enter in a launcher killed the app the person
+	// was working in. Two concurrent launches were worse: each removed the other's objects
+	// and nothing survived.
+	//
+	// Checked here rather than inside the loop so it also covers the un-instanced app whose
+	// container merely exists in an Exited state; that is a name collision either way.
+	if running, err := svc.runtime.Running(); err == nil && running[cfg.AppNameID] {
+		return fmt.Errorf("%s is already running; stop it first, or run another instance with %s@<instance>",
+			cfg.AppNameID, cfg.AppNameID)
+	}
 	started[cfg.AppNameID] = true
 	if err := svc.startDependencies(cfg, opt, chain, started); err != nil { // section 6.6: dependencies first
 		return err
