@@ -12,6 +12,7 @@ package ports
 import (
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
+	"github.com/crispuscrew/zinc/container/runner/domain/paths"
 )
 
 // Command is one runtime instruction - the args passed to the container runtime,
@@ -56,6 +57,10 @@ type Store interface {
 type Runtime interface {
 	AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlags []string) ([]string, error)
 	Exec(cmd Command) error // run one prepared command (pod create / nft / holder); capture output on failure
+	// Capture runs one prepared command and returns its standard output. Exec is the wrong
+	// tool for a command whose output IS the answer: it keeps the output only to put it in
+	// an error, so on success - the case that matters here - it is already gone.
+	Capture(cmd Command) (string, error)
 	// StartApp starts the app container detached (Setsid), terminal-wrapped if
 	// StartConditions.Terminal. It returns once the process is forked, before `podman
 	// run` succeeds; onFail is invoked from the reaping goroutine if the app exits with
@@ -67,9 +72,16 @@ type Runtime interface {
 	// can actually serve it (StartConditions.ReadyCheck); how the answer is obtained is
 	// the adapter's business.
 	HealthProbe(name string) error
-	Exists(name string) bool                    // does a container with this name exist (running or not)?
-	Do(args []string) error                     // user-facing passthrough (stop/restart/inspect/logs) with host stdio
-	Running() (map[string]bool, error)          // names the runtime reports as running (list view)
+	Exists(name string) bool           // does a container with this name exist (running or not)?
+	Do(args []string) error            // user-facing passthrough (stop/restart/inspect/logs) with host stdio
+	Running() (map[string]bool, error) // names the runtime reports as running (list view)
+	// PIDs is the host PID of each running container's main process, by container name.
+	// Rootless podman does not remap pids, so these are the numbers other host tools report
+	// for the same processes - which is what makes a container identifiable from outside the
+	// runtime. Bus attribution needs exactly that: the session bus answers
+	// GetConnectionUnixProcessID with a host pid, and this is what turns that pid back into
+	// a container Zinc named.
+	PIDs() (map[string]int, error)
 	Logs(name string, tail int) (string, error) // last N log lines (logs view)
 }
 
@@ -114,6 +126,25 @@ type DBusBroker interface {
 	Teardown(cfg schema.AppConfig) []Command
 }
 
+// DisplayBroker gives an app a Wayland socket of its own, one the compositor has attached a
+// wp_security_context_v1 to (section 5.2). Adapter: adapters/waylandctx.
+//
+// A sibling of NetEnforcer and DBusBroker, and the same shape for the same reason: the app is
+// handed a derived socket rather than the compositor's own, and what the display server
+// believes about it is decided before it exists. Unlike those two it has no Teardown, because
+// the thing that has to be undone is a descriptor held by a process that watches the app and
+// exits with it - there is nothing left for a Stop to remove.
+type DisplayBroker interface {
+	// Establish creates the app's socket, registers it with the compositor and returns the
+	// host path to bind-mount. An empty path means "mount the compositor's own socket" and is
+	// not an error: it is the answer both for an app that opted out
+	// (DisplayMeta.DisableSecurityContext) and on a compositor that does not implement the
+	// protocol, where refusing to launch would buy nothing and cost the whole desktop.
+	// Everything else - a socket that cannot be bound, a compositor that cannot be reached, a
+	// rejected request - fails the launch rather than silently degrading it.
+	Establish(addr paths.Address, cfg schema.AppConfig, opt options.HostOptions) (string, error)
+}
+
 // NetEnforcer establishes and enforces an app's network egress - THE swap point.
 // The one adapter today (adapters/netenforce) drives NetworkLists onto the app's own
 // pasta netns via nft (or --network none when there are no lists). A future
@@ -129,4 +160,11 @@ type NetEnforcer interface {
 	// than one, because a pod is not the only thing an app can own: the per-app egress
 	// bridge outlives it otherwise, and one podman network accumulates per app that ever ran.
 	Teardown(cfg schema.AppConfig) []Command
+	// Counters returns the command that reads back what the enforcement has actually seen,
+	// and false when this app has nothing to ask (no lists, so no netns of its own). It
+	// belongs on this port rather than beside the runtime because "what did enforcement
+	// do" is part of the mechanism: another NetEnforcer answers it in its own terms, or
+	// says it cannot. The output's format is likewise the adapter's - the app layer passes
+	// it through rather than learning to read one adapter's JSON.
+	Counters(cfg schema.AppConfig, opt options.HostOptions) (Command, bool)
 }

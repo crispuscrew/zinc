@@ -176,6 +176,44 @@ func TestPrepareWaitsForTheProxyToServe(t *testing.T) {
 	}
 }
 
+// The proxy's name is the attribution record Zinc writes at creation time, so it has to be
+// readable back: the container name identifies the app WITHOUT asking the app anything, which
+// is the whole reason attribution goes through the proxy rather than through a name the app
+// claims for itself.
+func TestProxyNameRoundTripsToItsApp(t *testing.T) {
+	for _, app := range []string{"notes", "notes.work", "org.example.app"} {
+		got, isProxy := AppOfProxy(ContainerName(app))
+		if !isProxy || got != app {
+			t.Errorf("AppOfProxy(ContainerName(%q)) = %q, %v", app, got, isProxy)
+		}
+	}
+	// An app container is not a proxy. Reading one as a proxy would attribute a bus connection
+	// to the app whose container merely happens to be running.
+	for _, container := range []string{"notes", "notes.work", "zinc-dbus-", "some-other"} {
+		if got, isProxy := AppOfProxy(container); isProxy {
+			t.Errorf("AppOfProxy(%q) = %q, true; want it refused as not a proxy", container, got)
+		}
+	}
+}
+
+// The reported socket has to be the socket that is actually mounted, or `zcr where` sends a
+// consumer to a path nothing serves.
+func TestHostSocketPathIsWhatTheAppIsGiven(t *testing.T) {
+	brk := New("", testOpt())
+	socket := HostSocketPath(brk.RuntimeDir, "notes")
+	if socket == "" {
+		t.Fatal("HostSocketPath returned nothing for a resolvable runtime dir")
+	}
+	if flags := strings.Join(brk.RunFlags(busApp()), " "); !strings.Contains(flags, socket+":") {
+		t.Errorf("the app is mounted a different socket than HostSocketPath reports (%s): %s", socket, flags)
+	}
+	// No runtime dir, no socket: an empty path rather than one rooted at "/", which would name
+	// a plausible-looking file outside any user's runtime directory.
+	if got := HostSocketPath("", "notes"); got != "" {
+		t.Errorf("HostSocketPath with no runtime dir = %q, want empty", got)
+	}
+}
+
 // Two apps must not share a socket directory, or an app would reach a bus filtered for
 // someone else's grants.
 func TestSocketDirIsPerApp(t *testing.T) {

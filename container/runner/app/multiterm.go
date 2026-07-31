@@ -122,6 +122,12 @@ func (svc Service) ensureHolder(cfg schema.AppConfig, opt options.HostOptions) e
 			return errors.Join(fmt.Errorf("start %s (%s): %w", cfg.AppNameID, cmd.Desc, err), svc.teardown(cfg, len(steps) > 0))
 		}
 	}
+	// The holder is the app's container, so it needs the same security context an ordinary
+	// app gets - the terminals that exec into it inherit whatever socket it was given.
+	opt, err = svc.withDisplay(cfg, opt)
+	if err != nil {
+		return errors.Join(fmt.Errorf("start %s: %w", cfg.AppNameID, err), svc.teardown(cfg, len(steps) > 0))
+	}
 	appArgs, aerr := svc.runtime.AppRunArgs(cfg, opt, svc.attachFlags(cfg))
 	if aerr != nil {
 		return errors.Join(aerr, svc.teardown(cfg, len(steps) > 0))

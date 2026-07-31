@@ -335,6 +335,9 @@ func isLinkList(netList schema.NetworkList) bool {
 // NFTRuleset renders the nftables ruleset locked into an app's netns before it starts
 // (section 5.3). Pure over the validated config.
 //
+// The rules that decide something carry a counter and a comment naming them, which is what
+// Counters reads back; which ones, and why not all of them, is at "counters" below.
+//
 // One app can now be gated both ways at once, which is what routing through a sibling
 // needs: the private zlink* bridges are accepted by INTERFACE, and everything else is
 // gated by ADDRESS and port. Before, an app was one or the other and mixing them was
@@ -348,15 +351,16 @@ func isLinkList(netList schema.NetworkList) bool {
 // non-link lists in a direction the policy stays drop, which is what a link-only app has
 // always had.
 func NFTRuleset(cfg schema.AppConfig) string {
-	var egress, ingress []schema.NetworkList
-	for _, netList := range cfg.NetworkMeta.NetworkLists {
+	var egress, ingress []listRule
+	for index, netList := range cfg.NetworkMeta.NetworkLists {
 		if isLinkList(netList) {
 			continue // gated by interface below, not by address
 		}
+		rule := listRule{index: index, netList: netList}
 		if netList.Ingress {
-			ingress = append(ingress, netList)
+			ingress = append(ingress, rule)
 		} else {
-			egress = append(egress, netList)
+			egress = append(egress, rule)
 		}
 	}
 	linkEntries := links(cfg)
@@ -365,8 +369,9 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	bld.WriteString("table inet zinc {\n")
 
 	// output (egress): where the app may connect out to.
+	egressPolicy := chainPolicy(egress)
 	bld.WriteString("\tchain output {\n")
-	fmt.Fprintf(&bld, "\t\ttype filter hook output priority 0; policy %s;\n", chainPolicy(egress))
+	fmt.Fprintf(&bld, "\t\ttype filter hook output priority 0; policy %s;\n", egressPolicy)
 	bld.WriteString("\t\toif \"lo\" accept\n")
 	bld.WriteString("\t\tct state established,related accept\n")
 	// DNS first, so it is decided before the broad accepts below can let a query past.
@@ -377,19 +382,20 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	// The link bridges are accepted whole: they are private and --internal, so what rides
 	// them can only reach the siblings attached to them.
 	for _, entry := range linkEntries {
-		fmt.Fprintf(&bld, "\t\toifname %q accept\n", entry.iface)
+		fmt.Fprintf(&bld, "\t\toifname %q %s\n", entry.iface, counted("accept", "link "+entry.iface))
 	}
 	// The tunnel is accepted as a whole, like a link bridge and for the same reason: what
 	// rides it is already bounded, here by the peers' AllowedIPs, and the app cannot reach
 	// anything through it that the tunnel does not carry.
 	if hasTunnel(cfg) {
-		fmt.Fprintf(&bld, "\t\toifname %q accept\n", tunnelIface)
+		fmt.Fprintf(&bld, "\t\toifname %q %s\n", tunnelIface, counted("accept", "tunnel "+tunnelIface))
 	}
-	for _, netList := range egress {
-		verdict := verdictFor(netList)
-		writeRules(&bld, "ip", netList.IPv4CIDR, netList.Ports, verdict)
-		writeRules(&bld, "ip6", netList.IPv6CIDR, netList.Ports, verdict)
+	for _, rule := range egress {
+		verdict := verdictFor(rule.netList)
+		writeRules(&bld, "ip", rule.netList.IPv4CIDR, rule.netList.Ports, verdict, rule.label())
+		writeRules(&bld, "ip6", rule.netList.IPv6CIDR, rule.netList.Ports, verdict, rule.label())
 	}
+	writeBackstop(&bld, egressPolicy)
 	bld.WriteString("\t}\n")
 
 	// input (ingress): who may reach the app's published ports. Emitted when the app
@@ -402,21 +408,26 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	// UNFILTERED, because nftables applies no policy to a hook that has no base chain.
 	own := ownLinkIface(cfg)
 	if len(ingress) > 0 || own != "" || len(linkEntries) > 0 {
+		ingressPolicy := chainPolicy(ingress)
 		bld.WriteString("\tchain input {\n")
-		fmt.Fprintf(&bld, "\t\ttype filter hook input priority 0; policy %s;\n", chainPolicy(ingress))
+		fmt.Fprintf(&bld, "\t\ttype filter hook input priority 0; policy %s;\n", ingressPolicy)
 		bld.WriteString("\t\tiif \"lo\" accept\n")
 		bld.WriteString("\t\tct state established,related accept\n")
 		if own != "" {
-			for _, netList := range cfg.NetworkMeta.NetworkLists {
+			for index, netList := range cfg.NetworkMeta.NetworkLists {
 				if isLinkList(netList) && netList.Ingress && len(netList.Ports) > 0 {
-					fmt.Fprintf(&bld, "\t\tiifname %q tcp dport { %s } accept\n", own, portList(netList.Ports))
-					fmt.Fprintf(&bld, "\t\tiifname %q udp dport { %s } accept\n", own, portList(netList.Ports))
+					label := listRule{index: index}.label() + " link"
+					for _, proto := range []string{"tcp", "udp"} {
+						fmt.Fprintf(&bld, "\t\tiifname %q %s dport { %s } %s\n",
+							own, proto, portList(netList.Ports), counted("accept", label+" "+proto))
+					}
 				}
 			}
 		}
-		for _, netList := range ingress {
-			writeIngressRules(&bld, netList, verdictFor(netList))
+		for _, rule := range ingress {
+			writeIngressRules(&bld, rule, verdictFor(rule.netList))
 		}
+		writeBackstop(&bld, ingressPolicy)
 		bld.WriteString("\t}\n")
 	}
 
@@ -429,6 +440,7 @@ func NFTRuleset(cfg schema.AppConfig) string {
 		bld.WriteString("\t\ttype filter hook forward priority 0; policy drop;\n")
 		bld.WriteString("\t\tct state established,related accept\n")
 		writeForwardRules(&bld, cfg)
+		writeBackstop(&bld, "drop")
 		bld.WriteString("\t}\n")
 	}
 	bld.WriteString("}\n")
@@ -584,8 +596,10 @@ func writeDNSRules(bld *strings.Builder, servers []string) {
 				family.name, strings.Join(family.addresses, ", "), proto)
 		}
 	}
+	// Counted, unlike the accepts above it: a non-zero number here is an app resolving
+	// somewhere it was not given, which is the one thing this pair of rules exists to catch.
 	for _, proto := range []string{"udp", "tcp"} {
-		fmt.Fprintf(bld, "\t\t%s dport { 53, 853 } drop\n", proto)
+		fmt.Fprintf(bld, "\t\t%s dport { 53, 853 } %s\n", proto, counted("drop", "undeclared dns "+proto))
 	}
 }
 
@@ -598,11 +612,24 @@ func verdictFor(netList schema.NetworkList) string {
 	return "accept"
 }
 
+// listRule pairs a list with its position in NetworkMeta.NetworkLists. The index travels
+// this far only because it is what a counter is labelled with, and a number in the readout
+// is worth reading only if it points back at the line of config that produced the rule. The
+// position in the filtered egress/ingress slice is not that line: link lists are dropped on
+// the way here, so the two disagree the moment an app has one.
+type listRule struct {
+	index   int
+	netList schema.NetworkList
+}
+
+// label is how this list's rules are named in the counter readout.
+func (rule listRule) label() string { return "list[" + strconv.Itoa(rule.index) + "]" }
+
 // chainPolicy is the default policy for one direction's lists: default-accept only when
 // there is at least one list and every one is a blacklist (allow-all-except); otherwise
 // default-drop. An empty direction is default-drop (closed).
-func chainPolicy(lists []schema.NetworkList) string {
-	if len(lists) > 0 && allBlacklist(lists) {
+func chainPolicy(rules []listRule) string {
+	if len(rules) > 0 && allBlacklist(rules) {
 		return "accept"
 	}
 	return "drop"
@@ -611,29 +638,84 @@ func chainPolicy(lists []schema.NetworkList) string {
 // allBlacklist reports whether every list is a blacklist. A single whitelist present
 // returns false, so the direction is restrictive (default-drop) and the blacklist lists
 // become high-priority deny carve-outs above the whitelist's accepts.
-func allBlacklist(lists []schema.NetworkList) bool {
-	for _, netList := range lists {
-		if !netList.Blacklist {
+func allBlacklist(rules []listRule) bool {
+	for _, rule := range rules {
+		if !rule.netList.Blacklist {
 			return false
 		}
 	}
 	return true
 }
 
+// --- counters (section 5.3) ---
+//
+// Every rule that answers a policy question carries a `counter` statement and a comment
+// naming it, so `zcr net <app>` can report what the ruleset has actually seen without
+// rebuilding nft syntax out of `nft -j` output. The comment is the label; the chain and the
+// verdict the readout shows come from the JSON itself.
+//
+// What is counted is a deliberate subset, because a counter on every rule buries the two
+// numbers worth reading. `oif "lo"` (the app talking to itself) and `ct state
+// established,related` (every packet of every flow already allowed) are between them almost
+// all the traffic and say nothing about policy, so both stay bare. So do the DNS accepts to
+// the resolvers the app declared, the forward chain's accepts (that traffic is a sibling's,
+// and the sibling's own counters already show it leaving) and the nat rules (a rewrite is
+// not a decision to allow or refuse). What is left is exactly the decisions:
+//
+//   - every rule a NetworkList produced, labelled with that list's index in the config, so
+//     "which of my rules is actually being used" has an answer pointing at a line;
+//   - the DNS deny, which is how an app carrying a hardcoded resolver announces itself;
+//   - the default-drop backstop below, which is the whole "what is my sandbox refusing".
+//
+// One consequence is worth knowing before reading a number: the conntrack accept sits above
+// all of these and is bare, so an accept counter counts the packets that OPENED flows, not
+// the traffic those flows carried. That is the more useful reading ("was this rule
+// exercised, and how often"), and it is why the byte column is small.
+
+// labelPolicy names the trailing rule that makes a chain's default policy countable.
+const labelPolicy = "default policy"
+
+// counted renders the tail of a counted rule: the counter, the verdict, and the comment
+// that names the rule. Statement order matters - a counter placed ahead of the matches
+// would count every packet that reached the rule rather than the ones it acts on.
+func counted(verdict, label string) string {
+	return fmt.Sprintf("counter %s comment %q", verdict, label)
+}
+
+// writeBackstop writes a default-drop policy out as an explicit rule, so the number that
+// matters most - what the sandbox is actually refusing - is not permanently zero. nftables
+// counts rules, not policies, and a fail-closed chain refuses by policy, so without this a
+// working lock-down and a broken one both report nothing. The rule changes no behaviour: a
+// packet that reaches the end of the chain was dropped by the policy anyway.
+//
+// Only for a drop policy. On an all-blacklist (default-accept) chain the same line would
+// turn allow-all-except into deny-all - the config silently inverted, which is worse than
+// having no counter at all.
+func writeBackstop(bld *strings.Builder, policy string) {
+	if policy != "drop" {
+		return
+	}
+	fmt.Fprintf(bld, "\t\t%s\n", counted("drop", labelPolicy))
+}
+
 // writeRules emits the verdict rules for one address family. No CIDRs → nothing.
 // Ports listed → only those ports (tcp+udp); otherwise all ports to the listed CIDRs.
-func writeRules(bld *strings.Builder, family string, cidrs []string, ports []int, verdict string) {
+// label is the list's name in the readout; the family and protocol this rule matches are
+// appended to it, so each of the (up to four) rules one list produces counts separately.
+func writeRules(bld *strings.Builder, family string, cidrs []string, ports []int, verdict, label string) {
 	if len(cidrs) == 0 {
 		return
 	}
 	daddr := family + " daddr { " + strings.Join(cidrs, ", ") + " }"
 	if len(ports) == 0 {
-		fmt.Fprintf(bld, "\t\t%s %s\n", daddr, verdict)
+		fmt.Fprintf(bld, "\t\t%s %s\n", daddr, counted(verdict, label+" "+family))
 		return
 	}
 	portsList := portList(ports)
-	fmt.Fprintf(bld, "\t\t%s tcp dport { %s } %s\n", daddr, portsList, verdict)
-	fmt.Fprintf(bld, "\t\t%s udp dport { %s } %s\n", daddr, portsList, verdict)
+	for _, proto := range []string{"tcp", "udp"} {
+		fmt.Fprintf(bld, "\t\t%s %s dport { %s } %s\n",
+			daddr, proto, portsList, counted(verdict, label+" "+family+" "+proto))
+	}
 }
 
 // writeIngressRules emits input-chain rules for one ingress list: match the app's own
@@ -641,32 +723,39 @@ func writeRules(bld *strings.Builder, family string, cidrs []string, ports []int
 // is legal and means "any source" (validate exempts ingress from the ports-need-CIDR
 // rule), so a list with ports but no CIDR opens those ports to anyone the pod forwards.
 // v4 and v6 source sets are emitted separately so a v4 CIDR never gates v6 traffic.
-func writeIngressRules(bld *strings.Builder, netList schema.NetworkList, verdict string) {
+func writeIngressRules(bld *strings.Builder, rule listRule, verdict string) {
+	netList := rule.netList
 	ports := portList(netList.Ports)
-	emit := func(saddr string) {
+	emit := func(saddr, family string) {
+		label := rule.label()
+		if family != "" {
+			label += " " + family
+		}
 		switch {
 		case ports == "" && saddr == "":
 			return // nothing to match
 		case ports == "":
-			fmt.Fprintf(bld, "\t\t%s %s\n", saddr, verdict)
+			fmt.Fprintf(bld, "\t\t%s %s\n", saddr, counted(verdict, label))
 		case saddr == "":
-			fmt.Fprintf(bld, "\t\ttcp dport { %s } %s\n", ports, verdict)
-			fmt.Fprintf(bld, "\t\tudp dport { %s } %s\n", ports, verdict)
+			for _, proto := range []string{"tcp", "udp"} {
+				fmt.Fprintf(bld, "\t\t%s dport { %s } %s\n", proto, ports, counted(verdict, label+" "+proto))
+			}
 		default:
-			fmt.Fprintf(bld, "\t\t%s tcp dport { %s } %s\n", saddr, ports, verdict)
-			fmt.Fprintf(bld, "\t\t%s udp dport { %s } %s\n", saddr, ports, verdict)
+			for _, proto := range []string{"tcp", "udp"} {
+				fmt.Fprintf(bld, "\t\t%s %s dport { %s } %s\n", saddr, proto, ports, counted(verdict, label+" "+proto))
+			}
 		}
 	}
 	hasV4, hasV6 := len(netList.IPv4CIDR) > 0, len(netList.IPv6CIDR) > 0
 	if !hasV4 && !hasV6 {
-		emit("") // any source
+		emit("", "") // any source
 		return
 	}
 	if hasV4 {
-		emit("ip saddr { " + strings.Join(netList.IPv4CIDR, ", ") + " }")
+		emit("ip saddr { "+strings.Join(netList.IPv4CIDR, ", ")+" }", "ip")
 	}
 	if hasV6 {
-		emit("ip6 saddr { " + strings.Join(netList.IPv6CIDR, ", ") + " }")
+		emit("ip6 saddr { "+strings.Join(netList.IPv6CIDR, ", ")+" }", "ip6")
 	}
 }
 

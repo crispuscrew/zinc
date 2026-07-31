@@ -12,6 +12,8 @@
 //	zcr logs <app> [-f]
 //	zcr term <app> [--shell]    open a terminal for a multiterminal app (section 9.1)
 //	zcr ps                      running apps, one per line
+//	zcr net [app] [--json]      network posture of every running app, or one app's
+//	                            nftables counters (section 5.3)
 //	zcr image search <term> | resolve <ref>
 //
 // <app> is a store name (~/.config/zinc/apps) or a path (contains '/' or ends .yaml).
@@ -30,6 +32,7 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 	"github.com/crispuscrew/zinc/container/runner/adapters/host"
 	"github.com/crispuscrew/zinc/container/runner/adapters/podman"
+	"github.com/crispuscrew/zinc/container/runner/adapters/waylandctx"
 	"github.com/crispuscrew/zinc/container/runner/app"
 	"github.com/crispuscrew/zinc/container/runner/domain/derived"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
@@ -50,10 +53,19 @@ const usage = `usage: zcr <command> [args]
   logs <app> [-f]
   term <app> [--shell]      open a terminal for a multiterminal app
   ps                        running apps, one per line
+  net [app[@instance]]      no app: every running app and whether its network is
+              [--json]      enforced in a netns of its own. An app: what its nftables
+                            ruleset has counted since that netns was created
   recheck <app>             re-resolve ImageMeta.SourceTag and report whether the
                             pinned digest is still what that tag points at
-  where <app[@instance]>    print where that instance keeps its state, and the name
-                            its container takes; ask rather than assume the layout
+  where <app[@instance]> [--json]
+                            print where that instance keeps its state, the name its
+                            container takes, and its filtered bus socket and proxy
+                            (both "none" when the app asked for no bus); ask rather
+                            than assume the layout
+  bus [--json]              the bus attribution table: every running D-Bus proxy, its
+                            host pid, and the app@instance it serves - what turns a
+                            connection seen on the host bus into an app
   image search <term> | resolve <ref>
   version                   print the version
 
@@ -103,39 +115,6 @@ func cmdRecheck(svc app.Service, argv []string) error {
 	// Not an error in the "something went wrong" sense - the check worked and the answer is
 	// that the tag moved - but a distinct exit code, so a scheduled checker can act on it.
 	os.Exit(2)
-	return nil
-}
-
-// cmdWhere answers "where does this instance keep things, and what is it called at runtime".
-//
-// It exists so nothing outside Zinc has to hardcode the layout. A desktop that wants to show
-// a user where an app's state lives, or that names a container to look it up, would otherwise
-// mirror the rules in paths - and two copies of a layout drift the first time either side
-// changes. Asking costs a process; assuming costs a bug nobody sees until the paths differ.
-//
-// Deliberately not folded into `inspect`, which is a passthrough to `podman inspect`:
-// intercepting it would put Zinc in the business of parsing and re-emitting podman's output
-// forever, and the answer here is about an instance whether or not it is running.
-//
-// The output is two labelled lines rather than JSON because it is also read by people. A
-// consumer that wants one value cuts on the colon; the labels are the contract.
-func cmdWhere(argv []string) error {
-	if len(argv) != 1 {
-		return fmt.Errorf("usage: zcr where <app[@instance]>")
-	}
-	addr, err := paths.ParseAddress(argv[0])
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(addr.App) == "" {
-		return fmt.Errorf("usage: zcr where <app[@instance]>")
-	}
-	stateDir, err := paths.StateDir(addr)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("state: %s\n", stateDir)
-	fmt.Printf("container: %s\n", addr.Runtime())
 	return nil
 }
 
@@ -194,10 +173,19 @@ func run(argv []string) error {
 		// Hidden: the per-terminal waiter spawned by OpenTerminal. It blocks until the
 		// terminal closes and does the last-one-out stop.
 		return cmdTermWaiter(svc, opt, rest)
+	case waylandctx.HoldCommand:
+		// Hidden: the per-app Wayland security context holder spawned by the launch path.
+		// It creates the app's own compositor socket, reports back, and holds the
+		// revocation descriptor open until the app container is gone.
+		return cmdWaylandHolder(opt, rest)
 	case "ps":
 		return cmdPs(svc)
+	case "net":
+		return cmdNet(svc, opt, rest)
 	case "where":
-		return cmdWhere(rest)
+		return cmdWhere(svc, opt, rest)
+	case "bus":
+		return cmdBus(svc, opt, rest)
 	case "recheck":
 		return cmdRecheck(svc, rest)
 	case "image":
@@ -239,6 +227,15 @@ func cmdRun(svc app.Service, opt options.HostOptions, argv []string) error {
 	}
 	for _, warn := range validate.Warnings(cfg) {
 		fmt.Println("# WARNING: " + warn)
+	}
+	// The plan below mounts the compositor's own Wayland socket, because a dry run must not
+	// create a security context and a socket that does not exist could not be pasted into a
+	// shell. Saying what a real launch does instead keeps the printed commands runnable
+	// without the plan quietly understating the sandbox (section 5.2).
+	if waylandctx.Applies(cfg, opt) {
+		fmt.Println("# a real launch first registers a per-instance Wayland socket with the compositor")
+		fmt.Println("# (a detached `zcr " + waylandctx.HoldCommand + "` holder) and mounts THAT in place of " + opt.WaylandDisplay + " below;")
+		fmt.Println("# it falls back to exactly what is shown here if the compositor has no wp_security_context_v1")
 	}
 	plan, err := svc.Plan(cfg, opt)
 	if err != nil {
@@ -506,6 +503,28 @@ func cmdTermWaiter(svc app.Service, opt options.HostOptions, argv []string) erro
 		return err
 	}
 	return svc.Term(cfg, opt, shell)
+}
+
+// cmdWaylandHolder is the hidden holder process: it owns one app's Wayland security context
+// for as long as the app runs (docs/architecture.md section 5.2). It exists because `zcr run`
+// detaches and exits, and a security context is revoked by closing a descriptor - so
+// something has to still be there holding it, the same reason the multiterminal path has
+// `__term`.
+//
+// It takes the ADDRESS rather than the runtime name, because the two halves are exactly what
+// it has to tell the compositor: app_id is stable across instances, instance_id is not.
+func cmdWaylandHolder(opt options.HostOptions, argv []string) error {
+	if len(argv) != 1 {
+		return fmt.Errorf("usage: zcr %s <app[@instance]>", waylandctx.HoldCommand)
+	}
+	addr, err := paths.ParseAddress(argv[0])
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(addr.App) == "" {
+		return fmt.Errorf("usage: zcr %s <app[@instance]>", waylandctx.HoldCommand)
+	}
+	return waylandctx.Hold(addr, opt, podman.WaitGone)
 }
 
 // cmdPs prints the apps podman reports as running, one per line and sorted, so a

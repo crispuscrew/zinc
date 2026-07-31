@@ -58,7 +58,7 @@ func TestResolveDomains_BecomeHostRoutes(t *testing.T) {
 	}
 
 	ruleset := NFTRuleset(cfg)
-	if !strings.Contains(ruleset, "ip daddr { 203.0.113.7/32 } tcp dport { 443 } accept") {
+	if !strings.Contains(ruleset, `ip daddr { 203.0.113.7/32 } tcp dport { 443 } counter accept comment "list[0] ip tcp"`) {
 		t.Errorf("the resolved address should be an ordinary accept rule:\n%s", ruleset)
 	}
 }

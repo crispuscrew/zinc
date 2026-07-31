@@ -22,9 +22,12 @@ import (
 // diamond-dependency dedup can be exercised.
 // probeFailures makes the next N readiness probes fail, modelling a dependency whose
 // container is up before its service is; probes counts how many were run.
+// startOpts records the HostOptions each start was built from, which is how the display
+// tests see whether the Wayland socket the broker produced actually reached the argv.
 type fakeRuntime struct {
 	running       map[string]bool
 	started       []string
+	startOpts     []options.HostOptions
 	detachedStart bool
 	probeFailures int
 	probes        int
@@ -42,8 +45,12 @@ func (engine *fakeRuntime) AppRunArgs(cfg schema.AppConfig, opt options.HostOpti
 	return append([]string{"run", "--name", cfg.AppNameID}, netFlags...), nil
 }
 func (engine *fakeRuntime) Exec(ports.Command) error { return nil }
+func (engine *fakeRuntime) Capture(ports.Command) (string, error) {
+	return "", nil
+}
 func (engine *fakeRuntime) StartApp(cfg schema.AppConfig, opt options.HostOptions, runArgs []string, onFail func()) error {
 	engine.started = append(engine.started, cfg.AppNameID)
+	engine.startOpts = append(engine.startOpts, opt)
 	if !engine.detachedStart {
 		engine.running[cfg.AppNameID] = true
 	}
@@ -61,6 +68,17 @@ func (engine *fakeRuntime) Exists(name string) bool           { return engine.ru
 func (engine *fakeRuntime) Do([]string) error                 { return nil }
 func (engine *fakeRuntime) Running() (map[string]bool, error) { return engine.running, nil }
 func (engine *fakeRuntime) Logs(string, int) (string, error)  { return "", nil }
+
+// PIDs numbers the running set so the port is satisfied; the launch path never asks, and
+// what a pid MEANS is only decidable against a real runtime, so nothing here pretends
+// otherwise.
+func (engine *fakeRuntime) PIDs() (map[string]int, error) {
+	pids := map[string]int{}
+	for name := range engine.running {
+		pids[name] = len(pids) + 1
+	}
+	return pids, nil
+}
 
 // fakeStore serves app definitions from an in-memory map.
 type fakeStore struct{ apps map[string]schema.AppConfig }
@@ -99,8 +117,11 @@ func depApp(name string, deps ...string) schema.AppConfig {
 	}
 }
 
+// depSvc has no DisplayBroker: the real one re-execs this binary to hold a security context,
+// which under `go test` would re-exec the test binary. The display wiring has its own tests
+// (display_test.go) with a broker that only records.
 func depSvc(store ports.Store, engine ports.Runtime) Service {
-	return New(store, engine, nil, nil, netenforce.Enforcer{}, dbusproxy.Broker{})
+	return New(store, engine, nil, nil, netenforce.Enforcer{}, dbusproxy.Broker{}, nil)
 }
 
 // web → vpn → base: each dependency (and its own dependencies) must come up before the

@@ -13,6 +13,7 @@
 | 0.8.0   | Session bus    | per-instance filtered D-Bus (`DBusMeta`) authored from CLI and TUI, Apache 2.0 licence, CI runner/runtime pinning |
 | 0.8.1   | Packaging      | Nix flake + home-manager module, instance addressing and `zcr where` |
 | 0.8.2   | Instances      | `zcr run --instance`, `{state}` mount templating, `zcr recheck` pin staleness, `zc init` |
+| 0.9.0   | Attestable sandbox | real `wp_security_context_v1` per instance, bus attribution (`zcr bus`), nftables counters and posture (`zcr net`) |
 | ...     |                |                       |
 
 **ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project

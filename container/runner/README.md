@@ -15,6 +15,12 @@ zcr stop|restart|inspect <app>
 zcr logs <app> [-f]
 zcr term <app> [--shell]    open a terminal for a multiterminal app
 zcr ps                      running apps, one per line
+zcr where <app[@instance]> [--json]
+                            where the instance keeps its state, what its container is
+                            called, and its filtered bus socket and proxy
+zcr bus [--json]            the bus attribution table (see below)
+zcr net [app] [--json]      running apps and whether each has a locked netns, or one
+                            app's nftables counters
 zcr image search <term> | resolve <ref>
 ```
 
@@ -48,6 +54,32 @@ The runtime is fail-closed: anything it does not yet support is rejected, not ru
 Not supported in this build yet: host-scoped egress and gateway/multi-homing. (A sibling link
 may now coexist with other networking on one app - that is what routing is built on.)
 
+### Seeing what it did
+
+```
+$ zcr net
+ADDRESS        POSTURE   NETNS
+netprobe@work  filtered  netprobe.work-pod
+quiet          isolated  -
+
+$ zcr net netprobe@work
+CHAIN   VERDICT  RULE                PACKETS  BYTES
+output  drop     undeclared dns udp  1        57
+output  accept   list[0] ip tcp      3        180
+output  drop     default policy      9        652
+```
+
+`filtered` means the app has `NetworkLists`, so a pod netns of its own with the ruleset
+locked in it. `isolated` means it has none, so `--network none`: it reaches only its own
+localhost and has no netns or ruleset at all. The two are never merged - an isolated app is
+not a filtered one whose counters happen to be zero.
+
+`list[0]` is the entry's index in `NetworkMeta.NetworkLists`, so a number points at the line
+of config that produced the rule. `default policy` is what the chain refused. Counters live
+in the pod's netns and are created with it, so they read **since this launch** and are gone
+when the pod is - `stop` and `restart` both reset them. `--json` gives either form as a
+machine-readable document.
+
 ## Filtered session bus
 
 An app gets **no D-Bus session bus** unless it asks for one. The host bus is a desktop-wide
@@ -79,6 +111,31 @@ Fail-closed here too. An app that asks for a bus when no host bus can be resolve
 start, rather than starting with no bus and looking broken for reasons unrelated to its
 config. `DBusMeta` on a VM app is a validation error - a guest cannot take a bind-mounted
 unix socket.
+
+### Attribution: which app is a connection on the host bus
+
+Zinc creates the proxy and names it after the app, so it knows which host-bus connection
+belongs to which `app@instance` without asking the app anything. It publishes that mapping
+rather than having apps claim names for themselves - a name a sandboxed app claims is a
+self-assertion, which is what attribution exists to stop trusting (architecture doc, 5.8):
+
+```
+zcr where <app[@instance]> [--json]   state dir, container name, bus socket, bus proxy
+                                      ("none" / null when the app asked for no bus)
+zcr bus [--json]                      every running proxy: app@instance, host pid, socket
+```
+
+Given something seen on the host bus, ask it for the connection's pid
+(`org.freedesktop.DBus.GetConnectionUnixProcessID`, an `SO_PEERCRED` fact the peer cannot
+assert) and look that pid up in `zcr bus`:
+
+```sh
+zcr bus --json | jq -r --argjson pid 12345 '.[] | select(.pid == $pid) | .address'
+```
+
+`xdg-dbus-proxy` opens one upstream connection per client, so an app with no live bus client
+has no connection on the host bus at all, and an app with several has several - all with the
+proxy's one pid.
 
 ## Build
 

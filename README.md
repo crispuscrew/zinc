@@ -46,7 +46,7 @@ builds on).
 
 ## Status
 
-**0.7 - containment and sibling routing.** Both runtimes work: containers since 0.1, VMs
+**0.9 - an attestable sandbox.** Both runtimes work: containers since 0.1, VMs
 since 0.4 (with guest GPU in 0.5 and Windows-class guests in 0.6). Common to both: the
 app-config schema and validation (including the rule that third-party images must be
 digest-pinned), config inheritance, a YAML config store under `~/.config/zinc/apps`, and a
@@ -81,6 +81,20 @@ for names the app may call, `Own` for names it may claim - and `zcr` serves it a
 socket from an `xdg-dbus-proxy` container that holds the real one. That proxy is deliberately
 not in the app's pod, since a shared PID namespace would let the app signal or ptrace the
 process filtering it.
+
+On the display, an app does not receive the compositor's own socket. Zinc registers a
+**Wayland security context** (`wp_security_context_v1`) and serves the app the socket that
+came back, so every connection it makes is tagged by the compositor with an `app_id` and an
+`instance_id` the app cannot forge. The `instance_id` is the same string that names its
+container, so a window can be traced to the thing that opened it. A compositor without the
+protocol falls back to the raw socket with a warning rather than failing the launch.
+
+Because a sandbox nobody can inspect from outside is one nobody can trust, the parts that
+enforce also report. `zcr net` gives each running app's posture (`filtered`, with a locked
+netns of its own, or `isolated`, with no network at all) and reads back the nftables counters
+for one app, so "is this rule doing anything" has an answer. `zcr bus` maps a connection on
+the host session bus to the `app@instance` behind it, using the mapping Zinc holds by
+construction rather than anything the app asserts. Both have a `--json` form.
 
 This is the container network model. A **VM app** does not get it - nftables in a container's
 own network namespace does not reach a guest kernel - so rather than mis-enforce it, a guest

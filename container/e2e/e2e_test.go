@@ -11,6 +11,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,6 +176,85 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("counters", func(t *testing.T) {
+		// Runs on what tier2_enforcement left behind: the producer is still up, and the
+		// consumer has already knocked on both a published port and an unpublished one. That
+		// traffic is the whole point here - a counter is only worth anything if a real packet
+		// moves it, and these are the only two packets in the suite whose fate is known.
+		if os.Getenv("ZINC_E2E_NO_NET") != "" {
+			t.Skip("ZINC_E2E_NO_NET set; skipping the network-enforcement scenario")
+		}
+		if !running("producer") {
+			t.Skip("producer is not up (the tier-2 scenario is what starts it)")
+		}
+
+		// The enumeration has to distinguish the two postures. sleeper has no NetworkLists at
+		// all, so it has no netns of its own; reporting it beside the producer as though both
+		// were locked down would invert what the table means.
+		must(t, zc, "run", "sleeper", "--exec")
+		if !waitFor(func() bool { return running("sleeper") }) {
+			t.Fatal("sleeper should be running")
+		}
+		defer func() { _, _ = tool(zc, "stop", "sleeper") }()
+
+		listing := must(t, zcr, "net")
+		t.Logf("zcr net:\n%s", listing)
+		for _, want := range []string{"producer", "filtered", "producer-pod", "sleeper", "isolated"} {
+			if !strings.Contains(listing, want) {
+				t.Errorf("`zcr net` missing %q:\n%s", want, listing)
+			}
+		}
+
+		// And the readout itself, against the real ruleset in the real netns.
+		raw := must(t, zcr, "net", "producer", "--json")
+		t.Logf("zcr net producer --json:\n%s", raw)
+		var report struct {
+			Address  string `json:"address"`
+			Posture  string `json:"posture"`
+			Netns    string `json:"netns"`
+			Counters []struct {
+				Chain   string `json:"chain"`
+				Verdict string `json:"verdict"`
+				Label   string `json:"label"`
+				Packets uint64 `json:"packets"`
+			} `json:"counters"`
+		}
+		if err := json.Unmarshal([]byte(raw), &report); err != nil {
+			t.Fatalf("`zcr net --json` should be machine-readable: %v\n%s", err, raw)
+		}
+		if report.Netns != "producer-pod" || report.Posture != "filtered" {
+			t.Errorf("producer should report its own locked netns, got %+v", report)
+		}
+
+		// The consumer reached 5432 and was dropped on 9999, so exactly two numbers must have
+		// moved: the rule that published the port, and the input chain's default-drop. The
+		// second is why the backstop rule exists at all - nftables counts rules and not
+		// policies, so without it a fail-closed chain reports nothing whatever it refuses.
+		published, refused := uint64(0), uint64(0)
+		for _, counter := range report.Counters {
+			switch {
+			case counter.Chain == "input" && strings.Contains(counter.Label, "link tcp"):
+				published += counter.Packets
+			case counter.Chain == "input" && counter.Label == "default policy":
+				refused += counter.Packets
+			}
+		}
+		if published == 0 {
+			t.Errorf("the consumer reached port 5432, so the rule that published it must have counted: %+v", report.Counters)
+		}
+		if refused == 0 {
+			t.Errorf("the consumer was dropped on port 9999, so the input chain's backstop must have counted: %+v", report.Counters)
+		}
+		t.Logf("producer counted %d packets accepted on its published port and %d refused by policy", published, refused)
+
+		// An isolated app is not a filtered one with an empty ruleset, and must not be
+		// described as though it were.
+		isolated := must(t, zcr, "net", "sleeper")
+		if !strings.Contains(isolated, "isolated") || strings.Contains(isolated, "PACKETS") {
+			t.Errorf("an app with no NetworkLists has no ruleset to tabulate:\n%s", isolated)
+		}
+	})
+
 	t.Run("containment", func(t *testing.T) {
 		// ResourcesMeta and InternalUserMeta were validated and dropped on the floor until
 		// 0.7. The runtime's unit tests prove the flags are emitted; only the kernel can say
@@ -268,6 +348,83 @@ func TestE2E(t *testing.T) {
 		if strings.Contains(mounts, busPath) {
 			t.Errorf("busapp mounts the REAL session bus %s: %s", busPath, mounts)
 		}
+
+		// Attribution: the mapping Zinc publishes must be the one that is actually true of the
+		// running system. `zcr bus` says a pid belongs to busapp; podman is asked the same
+		// question about the container Zinc created, and the two have to agree - otherwise a
+		// desktop resolving a bus connection would name the wrong app with full confidence.
+		table := must(t, zcr, "bus")
+		var reported string
+		for _, line := range strings.Split(table, "\n") {
+			if fields := strings.Fields(line); len(fields) >= 3 && fields[0] == "busapp" {
+				reported = fields[1]
+			}
+		}
+		if reported == "" {
+			t.Fatalf("zcr bus does not list the running app's proxy:\n%s", table)
+		}
+		actual, _ := tool("podman", "inspect", "--format", "{{.State.Pid}}", proxy)
+		if strings.TrimSpace(actual) != reported {
+			t.Errorf("zcr bus reports pid %s for busapp, podman reports %s for %s", reported, strings.TrimSpace(actual), proxy)
+		}
+
+		// The other half of the published mapping: the socket `zcr where` names has to be the
+		// socket that is really there. A reported path that does not exist would send a desktop
+		// looking for a file and blaming the wrong side when it is missing.
+		reportJSON := must(t, zcr, "where", "busapp", "--json")
+		var report struct {
+			Address string `json:"address"`
+			Bus     *struct {
+				Socket string `json:"socket"`
+				Proxy  string `json:"proxy"`
+			} `json:"bus"`
+		}
+		if err := json.Unmarshal([]byte(reportJSON), &report); err != nil {
+			t.Fatalf("zcr where --json is not parseable JSON: %v\n%s", err, reportJSON)
+		}
+		if report.Address != "busapp" || report.Bus == nil || report.Bus.Proxy != proxy {
+			t.Fatalf("zcr where --json does not describe the running app: %s", reportJSON)
+		}
+		if _, err := os.Stat(report.Bus.Socket); err != nil {
+			t.Errorf("the socket zcr where reports (%s) is not on disk while the app runs: %v", report.Bus.Socket, err)
+		}
+
+		// And the last link, on the real bus: hold a client on the filtered socket, then walk
+		// the chain a desktop walks - a connection it can see on the HOST bus, to a pid, to an
+		// app. Its own subtest so that a machine without the host bus tools skips this half
+		// only, rather than taking the teardown checks below with it. Skipped rather than
+		// faked: a fake would prove only that the test agrees with itself.
+		t.Run("host_bus_resolution", func(t *testing.T) {
+			for _, needed := range []string{"gdbus", "busctl"} {
+				if _, err := exec.LookPath(needed); err != nil {
+					t.Skipf("no %s on PATH; skipping the host-bus resolution half", needed)
+				}
+			}
+			// xdg-dbus-proxy opens one upstream connection PER CLIENT, so with nothing attached
+			// to the filtered socket there is no connection on the host bus to attribute at all.
+			client := exec.Command("gdbus", "wait", "--address", "unix:path="+report.Bus.Socket,
+				"--timeout", "20", "org.example.NeverAppears")
+			if err := client.Start(); err != nil {
+				t.Fatalf("holding a client on the filtered socket: %v", err)
+			}
+			defer func() { _ = client.Process.Kill() }()
+
+			found := waitFor(func() bool {
+				names, _ := tool("busctl", "--user", "list", "--unique")
+				for _, line := range strings.Split(names, "\n") {
+					// "<unique name> <pid> <process> ..." - the pid the bus itself took from
+					// SO_PEERCRED, which is the one thing about the peer the app cannot assert.
+					if fields := strings.Fields(line); len(fields) >= 2 && fields[1] == reported {
+						t.Logf("host bus connection %s resolves to pid %s, which zcr bus attributes to busapp", fields[0], reported)
+						return true
+					}
+				}
+				return false
+			})
+			if !found {
+				t.Error("no host-bus connection carries the proxy's pid, so nothing could be attributed to busapp")
+			}
+		})
 
 		// Teardown removes the proxy too: it is --rm, but an app whose proxy name is still
 		// taken cannot be relaunched.

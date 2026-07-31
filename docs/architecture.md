@@ -39,8 +39,8 @@ and is out of scope here.
 ```
 +-------------------------------------------------------------+
 |  Any Wayland compositor                                     |
-|  + wayland-security-context (label applied; enforcement is  |
-|    the compositor's, see 5.2)                               |
+|  + wayland-security-context (a real per-instance context    |
+|    where the compositor has it; see 5.2)                    |
 +-----------------------------+-------------------------------+
 |  zc - zinc-creator (CLI + Bubbletea TUI, Go)     |
 |    authors app files, forwards run/manage to zcr            |
@@ -116,7 +116,7 @@ ImageMeta:
     - apk add --no-cache firefox font-dejavu
 
 DisplayMeta:
-  DisableSecurityContext: false  # false = the wp_security_context_v1 label is applied (5.2)
+  DisableSecurityContext: false  # false = the app gets its own wp_security_context_v1 socket (5.2)
   DisableGpuAccess: true         # true = no /dev/dri (default off; GPU weakens isolation, 5.4)
 
 NetworkMeta:
@@ -178,7 +178,8 @@ Keys:
 ```
 
 **Wired at runtime in 0.1:** identity/image, the network attach and lock-down, the
-capability drop-all baseline plus `Capabilities`, Wayland socket + security-context label,
+capability drop-all baseline plus `Capabilities`, the Wayland socket (its own, under a
+security context, where the compositor implements one - 5.2),
 GPU device, the theme bundle, audio (Pipewire socket / `/dev/snd`), explicit host bind
 mounts, SSH/GPG key mounts, the entrypoint override, and the terminal / multiterminal /
 background / keep-alive lifecycle. `ResourcesMeta` (`--cpus`, `--memory`, `--memory-swap`, `--pids-limit`) and
@@ -294,16 +295,69 @@ already be in local storage (resolved at author time or built as a derived image
 
 ### 5.2 Wayland isolation (wayland-security-context)
 
-**Partial in practice - be honest.** The `wp_security_context_v1` protocol lets the
-compositor tag a client so it can be treated as untrusted. Zinc applies the marker: when
-`DisplayMeta.DisableSecurityContext` is false (the default), the app container is labelled
-`zinc.wayland=security-context` and the Wayland socket is passed in read-only.
+**Real, and bounded by what the compositor does with it.** An app that gets the compositor's
+own socket is indistinguishable from the desktop's own clients: it can ask for the same
+protocols, and nothing at the other end knows it came out of a sandbox. `wp_security_context_v1`
+is how that is fixed, and the fix is not a label on the container - it is a second socket.
 
-But enforcement is the compositor's and the toolkit's job, not Zinc's. An app that ignores
-the protocol still talks to the compositor. Treat the security-context label as a hint that
-improves as compositors and toolkits adopt it, not as a wall. **The real isolation boundary
-for a container is the container itself** (5.1). For genuinely untrusted GUI apps the future
-answer is a VM (section 10), not a nested compositor.
+Zinc connects to the **real** compositor socket, binds a socket of its own, and asks the
+compositor to accept connections on it under a security context carrying three strings. The
+app container mounts that second socket at the same container-side path and with the same
+`WAYLAND_DISPLAY`, so nothing inside the app changes. What changes is that every connection
+arriving on it is tagged before the app exists, by a process the app is not in, over a socket
+it never held.
+
+Two guarantees in the protocol are what make this shape possible. `listen_fd` must already be
+bound and listening when `create_listener` is sent, so the socket is on disk before podman is
+asked to bind-mount it. And the compositor must keep accepting on that socket after the client
+which created the context disconnects, so the Wayland connection is a one-shot - opened, used,
+closed - and the only thing that has to outlive it is a pipe.
+
+The three identifiers are chosen so a desktop can cross-check them rather than take them on
+faith:
+
+- **`sandbox_engine`** is `com.github.crispuscrew.zinc`. Reverse-DNS as the protocol asks, and
+  the repository's own domain rather than a tidy generic name: `app_id` is only required to be
+  unique *per engine*, so the engine name is half the identity and has to be one this project
+  actually holds.
+- **`app_id`** is the app half of the address. The protocol requires it to be the same string
+  across restarts and across instances of one application, which is what an app name is.
+- **`instance_id`** is the runtime name - the same string that names the podman container and
+  that `zcr where` reports. Deliberately not a random uuid: a uuid would satisfy the protocol
+  and tell a consumer nothing, whereas this one can be looked up, so a compositor holding an
+  `instance_id` can find the container behind the window.
+
+**Lifetime.** `zcr run` detaches and exits, and a security context is revoked by closing a
+descriptor - so something has to still be holding it. That is a hidden `zcr __wayland
+<app[@instance]>` process, one per app instance, the same answer the multiterminal path
+reached for the same reason (9.1). It binds the socket, performs the exchange, reports back to
+the launch on a pipe, and then blocks until the app container is gone; on the way out it closes
+`close_fd`, which is what tells the compositor to stop accepting, and removes the socket. The
+launch waits for that report before creating the container, because the socket is a bind-mount
+source and podman cannot mount a path that is not there.
+
+**When the compositor does not implement it**, the app is given the compositor's own socket
+and a warning is printed. Refusing to launch would buy nothing - the app would have had the
+raw socket anyway - and would make Zinc unusable on a mainstream desktop that has not adopted
+the protocol. Every other failure (a socket that cannot be bound, a compositor that cannot be
+reached, a rejected request) fails the launch instead, because those are broken environments
+rather than an absent feature, and a security context that is silently best-effort is one
+nobody can rely on.
+
+The container label says which of the two actually happened: `zinc.wayland=security-context`
+or `zinc.wayland=passthrough`. It used to be applied whenever the app had not opted out, which
+claimed a context on every launch including the ones that never created one - and a label that
+is wrong is worse than no label, since it is exactly what a desktop would read to decide how
+much to trust a client. `DisplayMeta.DisableSecurityContext` remains the opt-out and now means
+what it says: mount the compositor's socket, create nothing.
+
+**What this still does not do.** What a tagged connection is *allowed* to do is entirely the
+compositor's policy - Zinc supplies the identity, not the rules - and compositors currently
+restrict little beyond withholding the privileged protocols (screencopy, input inhibition, the
+security context manager itself, so nesting is impossible). An app that never speaks the
+protocols it is denied is unaffected by any of it. **The real isolation boundary for a
+container is still the container itself** (5.1); for genuinely untrusted GUI apps the stronger
+answer is a VM (section 10).
 
 ### 5.3 Network isolation (per-app netns, fail-closed)
 
@@ -333,6 +387,37 @@ Enforcement is a **port** in the runner hexagon (`NetEnforcer`, see section 13):
 pasta-plus-nft implementation is one adapter. Swapping the traffic-control mechanism later (a
 different firewall, an eBPF egress filter, an external controller) is a new adapter, with the
 launch path unchanged. The tiers and the exact ruleset are in section 6.
+
+**Asking what it did.** A lock-down nobody can see the effect of is one nobody can trust, so
+`zcr net` answers the two questions from outside:
+
+- `zcr net` lists every **running** app with its network posture and, for a filtered one, the
+  pod that owns its netns. Two postures, never merged: `filtered` (has `NetworkLists`, so a
+  netns of its own with the ruleset locked in it) and `isolated` (no lists, so `--network
+  none` - it reaches only its own localhost and has no netns or ruleset at all). They are
+  separated because an isolated app is not a filtered app whose counters happen to be zero,
+  and a table that showed them alike would say the opposite of what is true about one of them.
+  Apps are named the way a person types them (`app@instance`), never the runtime form
+  (`app.instance`); anything running that is not a defined app - Zinc's own D-Bus proxies, a
+  container the user started - is left out rather than listed with a posture Zinc cannot vouch
+  for.
+- `zcr net <app[@instance]>` reports what that app's ruleset has actually counted: per rule,
+  the chain, the verdict, the rule's label, packets and bytes. `--json` gives either as a
+  machine-readable document for a desktop shell.
+
+The read goes through the same helper image, the same pod and the same single capability as
+the step that applied the ruleset - `nft -j list ruleset` instead of `nft -f -`. Reading
+nftables is not a lesser privilege than writing it (one netlink socket, `CAP_NET_ADMIN`
+either way), so there is no weaker path to take. It differs from the other helpers in one
+respect: it runs while the app is alive, where they had all exited before it started. It
+joins the pod's **network** namespace and nothing else - a podman pod shares net, ipc and
+uts, not pid - so it cannot see, signal or ptrace the app, and it exits as soon as the dump
+is written.
+
+**A counter is not a lifetime total.** Counters live in the pod's netns and are created with
+it, so they start at zero every time the pod is, which `zcr stop`, `zcr restart` and any
+failed launch all do. The number means "since this launch"; nothing persists one, and nothing
+is meant to. The output says so in both forms rather than leaving it to be assumed.
 
 ### 5.4 GPU passthrough
 
@@ -403,6 +488,62 @@ user, and an app in its own user namespace cannot connect. Validation therefore 
 `InternalUserMeta.KeepUserID`, rather than Zinc silently changing who the app runs as on the
 strength of a bus grant. On a VM app `DBusMeta` is a validation error - a guest has no way to
 take a bind-mounted unix socket.
+
+### 5.8 Bus attribution (which app is a connection on the host bus)
+
+A desktop watching the host session bus sees connections, not apps. The question it needs
+answered is "which Zinc app and instance is this", and the answer has to come from something
+the app cannot influence.
+
+**Why not have each app own a name.** The obvious shape - give every instance a bus name like
+`zinc.app.<app>.<instance>` - does not work, and it is worth writing down because it reads as
+the natural design. `xdg-dbus-proxy` is a relay with no bus identity of its own: `--own=NAME`
+grants THE APP permission to claim that name, it does not claim anything. The app then has to
+volunteer to claim it, and a name a sandboxed app claims for itself is a self-assertion, which
+is the exact thing attribution exists to stop trusting. A cooperative app would be labelled and
+a lying one would be labelled as whatever it liked.
+
+**What Zinc publishes instead** is the mapping it already holds by construction. Zinc creates
+the proxy container, names it `zinc-dbus-<runtime name>` after an app it has already resolved,
+and that container holds the only connection to the real bus the app is ever behind. Nothing in
+that chain asks the app anything. Two commands expose it, both with a `--json` form, because a
+desktop scripting against a documented constant becomes a second source of truth the moment
+either side changes (same reason `zcr where` exists at all):
+
+- **`zcr where <app[@instance]> [--json]`** - the layout of one instance: its state directory,
+  its container name, and now its bus socket and proxy container. An app that asked for no bus
+  reports `none` for both (JSON `"bus": null`), rather than a path that was never created.
+- **`zcr bus [--json]`** - the attribution table: every running proxy, its host pid, and the
+  `app@instance` it serves. This is the direction a desktop actually needs, since it starts
+  from an observation and has no name to look up.
+
+The chain a consumer walks, and how solid each link is:
+
+1. **connection to pid** - `org.freedesktop.DBus.GetConnectionUnixProcessID` on the host bus.
+   The bus took that pid from `SO_PEERCRED` when the connection was made: the kernel's answer
+   about the peer, not the peer's claim about itself. Solid.
+2. **pid to proxy container** - the pid column of `zcr bus`, read from the live runtime.
+   Rootless podman does not remap pids, so the container's main process carries the same number
+   the bus reported. Solid at the instant it is read, and **best-effort across time**: the bus
+   captured its pid at connect time, so a proxy that has since died and had its pid reused would
+   be attributed to whoever holds the number now. The window is small (the bus drops the
+   connection when the proxy exits) and closing it entirely would need a bus that hands out
+   something better than a pid.
+3. **proxy container to `app@instance`** - the name Zinc gave the container, read back. Solid,
+   with one recoverable ambiguity: an app name may contain dots and an instance may not, so
+   `notes.local` reads either as the app `notes.local` or as `notes@local`. The store decides,
+   and the only undecidable case is both existing at once, where the whole-name reading wins.
+
+Two measured properties of what is actually observable, which matter before reading an empty
+answer as "no app has a bus": `xdg-dbus-proxy` opens **one upstream connection per client**, so
+an app with no live bus client contributes no host-bus connection at all, and an app with
+several contributes several unique names - all carrying the proxy's one pid. Many-to-one is
+normal.
+
+`zcr bus` deliberately stops at the pid rather than resolving unique names itself. The consumer
+is already holding a bus connection - that is how it saw the thing in the first place - and
+putting a D-Bus client (a protocol implementation, an auth handshake, a dependency) inside the
+sandbox runtime would buy no isolation.
 
 ---
 
@@ -625,6 +766,31 @@ A dry run (`zcr run <app>` with no `--exec`) prints the exact `podman` commands 
 ruleset that would be piped in**, so what will be enforced is fully visible before anything
 runs.
 
+**Counters, and which rules get one.** Rules that decide something carry a `counter` and a
+`comment` naming them; `zcr net <app>` (5.3) reads them back with `nft -j` and reports each by
+its comment, so nothing has to reconstruct nft syntax out of JSON. What is counted is a
+deliberate subset, because a counter on every rule buries the two numbers worth reading:
+
+| Counted | Left bare |
+|---|---|
+| every rule a `NetworkList` produced, labelled `list[N]` by its index in the config | `oif "lo"` / `iif "lo"` - the app talking to itself |
+| the link and tunnel accepts (`link zlink0`, `tunnel wg0`) | `ct state established,related` - every packet of every flow already allowed |
+| the DNS deny (`undeclared dns udp`/`tcp`) | the DNS accepts to the resolvers the app declared |
+| the default-drop backstop (`default policy`) | the `forward` chain's accepts, and the `nat` rules |
+
+Two of those choices are load-bearing. The **backstop** is a trailing `counter drop` written
+into every default-drop chain, because nftables counts rules and not policies: a fail-closed
+chain refuses by policy, so without it the most valuable number - what the sandbox is actually
+refusing - would be permanently zero whether the lock-down worked or not. It changes no
+behaviour (a packet reaching the end of the chain was dropped anyway) and is emitted **only**
+for a drop policy: on an all-blacklist chain the same line would turn allow-all-except into
+deny-all. And the **conntrack accept stays bare and stays above them**, which is what gives an
+accept counter its meaning: it counts the packets that opened flows, not the traffic those
+flows carried. That is the more useful reading - "was this rule exercised, how often" - and it
+is why the byte column is small. A `list[N]` label points at the entry's index in
+`NetworkMeta.NetworkLists`, not its position among the egress rules, so it names the line of
+config that produced it even when a link list sits ahead of it.
+
 ### 6.4 The netfilter helper image
 
 The nft step runs inside a tiny helper image, `zinc/netfilter:local`, built once with `make
@@ -840,6 +1006,10 @@ zcr build <app>             (re)build the derived image (ImageMeta.Install)
 zcr validate <app>          parse + validate; report problems and warnings
 zcr stop|restart|inspect <app>
 zcr logs <app> [-f]         zcr term <app> [--shell]      zcr ps
+zcr where <app[@instance]> [--json]
+                            state dir, container name, bus socket and bus proxy
+zcr bus [--json]            the bus attribution table: proxy, host pid, app@instance (5.8)
+zcr net [app] [--json]      network posture of every running app, or one app's counters (5.3)
 zcr image search <term> | resolve <ref>
 ```
 
@@ -1188,7 +1358,7 @@ the network lock-down applies rules with (6.4).
 
 | # | Issue | Mitigation |
 |---|-------|------------|
-| 1 | wayland-security-context enforcement is the compositor's, not Zinc's | the container boundary is the real wall (5.1); a VM (section 10) is the stronger boundary for untrusted GUI apps |
+| 1 | Zinc supplies the security-context identity; what a tagged client is allowed to do is the compositor's policy, and a compositor without the protocol gets the raw socket and a warning | the container boundary is the real wall (5.1); a VM (section 10) is the stronger boundary for untrusted GUI apps |
 | 2 | GPU passthrough weakens isolation | off by default; never enable for untrusted images (5.4) |
 | 3 | Image tags can be poisoned upstream | third-party images must be digest-pinned; launch is `--pull never` (5.5) |
 | 4 | Derived images are per-machine, not digest-pinned | their guarantee is the pinned base plus the visible install lines (7) |

@@ -34,12 +34,15 @@ func appArgs(t *testing.T, cfg schema.AppConfig, opt options.HostOptions, netFla
 }
 
 // A strict, no-network app: exact argv, so the least-privilege baseline, hermetic
-// --pull never, security-context label, and the Wayland/theme wiring are all pinned.
+// --pull never, the Wayland/theme wiring and the honest display label are all pinned.
+//
+// No opt.WaylandSocket, so no security context was established for this launch - the app
+// gets the compositor's own socket and the label says exactly that.
 func TestAppRunArgs_StrictNone(t *testing.T) {
 	cfg := schema.AppConfig{
 		AppNameID:   "firefox",
 		ImageMeta:   schema.ImageMeta{Image: "docker.io/library/firefox@sha256:abc"},
-		DisplayMeta: schema.DisplayMeta{DisableGpuAccess: true}, // security-context on, no GPU
+		DisplayMeta: schema.DisplayMeta{DisableGpuAccess: true}, // security-context wanted, no GPU
 		HostTheme:   true,
 	}
 	got := appArgs(t, cfg, baseOpts(), netNone())
@@ -50,13 +53,49 @@ func TestAppRunArgs_StrictNone(t *testing.T) {
 		"-v", "/run/user/1000/wayland-1:/run/zinc/wayland-1:ro",
 		"-e", "WAYLAND_DISPLAY=wayland-1",
 		"-e", "XDG_RUNTIME_DIR=/run/zinc",
-		"--label", "zinc.wayland=security-context",
+		"--label", "zinc.wayland=passthrough",
 		"-v", "/home/user/.local/share/zinc/theme-bundle:/etc/zinc/theme:ro",
 		"docker.io/library/firefox@sha256:abc",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("argv mismatch:\n got: %v\nwant: %v", got, want)
 	}
+}
+
+// With a security context established, the app mounts the DERIVED socket - and only the
+// source of the mount changes. The container-side path and WAYLAND_DISPLAY must be identical
+// to the passthrough case, or an app would have to be configured differently depending on
+// something it cannot see.
+func TestAppRunArgs_WaylandSecurityContext(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID: "browser.work",
+		ImageMeta: schema.ImageMeta{Image: "img@sha256:abc"},
+	}
+	opt := baseOpts()
+	opt.WaylandSocket = "/run/user/1000/zinc/wayland/browser.work/wayland-1"
+	got := appArgs(t, cfg, opt, netNone())
+
+	assertContainsSeq(t, got, "-v", "/run/user/1000/zinc/wayland/browser.work/wayland-1:/run/zinc/wayland-1:ro")
+	assertContainsSeq(t, got, "-e", "WAYLAND_DISPLAY=wayland-1")
+	assertContainsSeq(t, got, "--label", "zinc.wayland=security-context")
+	mustNotContain(t, got, "/run/user/1000/wayland-1:/run/zinc/wayland-1:ro") // never the compositor's own
+}
+
+// The escape hatch keeps its meaning: an app that opted out gets the raw socket even when the
+// launch path had a derived one to offer, and the label does not claim otherwise.
+func TestAppRunArgs_SecurityContextDisabledMountsRawSocket(t *testing.T) {
+	cfg := schema.AppConfig{
+		AppNameID:   "legacy",
+		ImageMeta:   schema.ImageMeta{Image: "img@sha256:abc"},
+		DisplayMeta: schema.DisplayMeta{DisableSecurityContext: true},
+	}
+	opt := baseOpts()
+	opt.WaylandSocket = "/run/user/1000/zinc/wayland/legacy/wayland-1"
+	got := appArgs(t, cfg, opt, netNone())
+
+	assertContainsSeq(t, got, "-v", "/run/user/1000/wayland-1:/run/zinc/wayland-1:ro")
+	assertContainsSeq(t, got, "--label", "zinc.wayland=passthrough")
+	mustNotContain(t, got, "/run/user/1000/zinc/wayland/legacy/wayland-1:/run/zinc/wayland-1:ro")
 }
 
 // A background app with GPU, a host bind mount, pipewire, and an extra cap: the
@@ -544,5 +583,28 @@ func TestHelperImageHint_OnlyForMissingImages(t *testing.T) {
 	cmd := ports.Command{Args: []string{"run", "zinc/netfilter:local", "nft", "-f", "-"}}
 	if got := helperImageHint(cmd, []byte("Error: nft: syntax error")); got != "" {
 		t.Errorf("hint offered for an unrelated failure: %q", got)
+	}
+}
+
+// The pid table is what bus attribution resolves a connection against, so a line podman could
+// not fill in has to be dropped rather than recorded: a pid of 0 would match every other
+// unfilled line and attribute a bus connection to whichever app happened to sort first.
+func TestParsePIDs(t *testing.T) {
+	got := parsePIDs("notes 4001\nzinc-dbus-notes 4002\nbroken\nempty \nzero 0\n\n")
+	want := map[string]int{"notes": 4001, "zinc-dbus-notes": 4002}
+	if len(got) != len(want) {
+		t.Fatalf("parsePIDs = %v, want %v", got, want)
+	}
+	for name, pid := range want {
+		if got[name] != pid {
+			t.Errorf("parsePIDs[%q] = %d, want %d", name, got[name], pid)
+		}
+	}
+}
+
+// No running containers is an empty table, not a table with one empty entry.
+func TestParsePIDsEmpty(t *testing.T) {
+	if got := parsePIDs("\n"); len(got) != 0 {
+		t.Errorf("parsePIDs of empty output = %v, want nothing", got)
 	}
 }

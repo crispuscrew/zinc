@@ -5,6 +5,134 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.9.0] - 2026-07-31
+
+The last three of ZDE's seven asks, which closes the list. All three are about the same
+thing from different angles: a sandbox nobody outside can inspect is one nobody outside can
+trust. 0.8.x made an instance addressable; this makes it attestable.
+
+The Wayland change is the substantive one. Until now Zinc labelled the container and handed
+over the compositor's own socket, so a desktop had nothing to go on but what the app said
+about itself. It now creates a real security context, and the identity the compositor holds
+is the one Zinc constructed. The same principle drives the other two: bus attribution
+publishes the mapping Zinc already holds rather than asking the app to claim a name, and
+`zcr net` reports what the ruleset counted rather than what it was configured to do.
+
+### Added
+
+- **Bus attribution: `zcr bus [--json]`, and `zcr where` now reports the bus.** Given
+  something observed on the host session bus, a desktop can now say which Zinc app and
+  instance it is. `zcr bus` prints every running D-Bus proxy with its host pid and the
+  `app@instance` it serves; `zcr where` gains the app's filtered socket and proxy container
+  (`none`, or JSON `null`, for an app that asked for no bus). Both have a `--json` form whose
+  exact shape is pinned by tests, since it is what a desktop scripts against.
+
+  The mapping is one Zinc already holds by construction - it creates the proxy container and
+  names it after an app it has resolved - so nothing is taken from the app. The rejected
+  alternative is worth recording: having each app own a name like `zinc.app.<app>.<instance>`
+  cannot work, because `xdg-dbus-proxy` is a relay with no bus identity of its own and
+  `--own=` merely grants THE APP permission to claim that name. The app would then have to
+  claim it, which is a self-assertion - the thing attribution exists to stop trusting.
+
+  Honest about the links: connection to pid is the bus's own `SO_PEERCRED` answer, and proxy
+  container to app is the name Zinc gave it, both solid; pid to proxy is read live and is
+  best-effort across time, since a dead proxy whose pid was recycled would be attributed to
+  whoever holds the number now. Measured, and worth knowing before reading an empty answer as
+  "no bus": the proxy opens one upstream connection PER CLIENT, so an app with no live bus
+  client has no host-bus connection at all, and one with several has several - all on the
+  proxy's single pid.
+
+  **Observable:** with an app running, `zcr bus --json` lists it; asking the host bus for a
+  connection's `GetConnectionUnixProcessID` and looking that pid up in the table names the
+  app. The end-to-end suite walks exactly that chain against the real session bus.
+
+- **`zcr net` - seeing what the lock-down actually did.** A firewall nobody can inspect from
+  outside is one nobody can trust. One verb answers both halves: `zcr net` lists every running
+  app with its network posture, and `zcr net <app[@instance]>` reports what that app's ruleset
+  has counted. `--json` gives either as a machine-readable document, since the consumer is a
+  desktop shell.
+
+  The two postures are never merged. `filtered` means the app has `NetworkLists`, so a pod
+  netns of its own with the nft ruleset locked in it; `isolated` means it has none, so
+  `--network none` - it reaches only its own localhost and has no netns or ruleset at all. An
+  isolated app is not a filtered one whose counters happen to be zero, and showing them alike
+  would say the opposite of what is true about one of them. Apps are named the way a person
+  types them (`app@instance`), never the runtime form; anything running that is not a defined
+  app - Zinc's own D-Bus proxies, a container the user started - is left out rather than
+  listed with a posture Zinc cannot vouch for.
+
+  The read takes the same route as the lock-down: same helper image, same pod, same one
+  capability, `nft -j list ruleset` instead of `nft -f -`. Reading nftables is not a lesser
+  privilege than writing it, so there is no weaker path to take; it joins the pod's network
+  namespace and nothing else (a pod shares net, ipc and uts, not pid), and exits as soon as
+  the dump is written.
+
+  **Observable:** `zcr net` shows `netprobe@work  filtered  netprobe.work-pod` beside `quiet
+  isolated  -`; three connections to an allowed destination and one query to an undeclared
+  resolver read back as `list[0] ip tcp 3 180` and `undeclared dns udp 1 57`.
+
+- **Counters on the rules that decide something.** The generated ruleset now carries a
+  `counter` and a naming `comment` on each rule a `NetworkList` produced (labelled `list[N]`
+  by its index in the config, so a number points at the line that produced it), on the link
+  and tunnel accepts, and on the DNS deny. Deliberately not on `oif "lo"` or `ct state
+  established,related`: between them they are almost all the traffic and neither answers a
+  question about policy.
+
+  Every default-drop chain also gets a trailing `counter drop`, because nftables counts rules
+  and not policies - a fail-closed chain refuses by policy, so the most valuable number of all
+  would otherwise be permanently zero whether the lock-down worked or not. It changes no
+  behaviour, and is emitted only for a drop policy: on an all-blacklist chain the same line
+  would turn allow-all-except into deny-all.
+
+  Because the conntrack accept stays bare and stays above them, an accept counter counts the
+  packets that OPENED flows rather than the traffic they carried - the more useful reading,
+  and why the byte column is small.
+
+  **Counters are not lifetime totals.** They live in the pod's netns and are created with it,
+  so `stop`, `restart` and any failed launch reset them to zero. The output says so in both
+  forms rather than leaving it to be assumed.
+
+- **A real Wayland security context per app instance.** Zinc no longer just labels the
+  container and hands over the compositor's own socket. It connects to the real compositor,
+  binds a socket of its own under `$XDG_RUNTIME_DIR/zinc/wayland/<instance>/`, and registers
+  it with `wp_security_context_v1` before the app container is created. The app mounts that
+  socket at the same container-side path with the same `WAYLAND_DISPLAY`, so nothing inside
+  the app changes - but every connection it makes is tagged by the compositor with an
+  identity the app cannot forge.
+
+  The identity is `sandbox_engine=com.github.crispuscrew.zinc`, `app_id` = the app name
+  (stable across instances, as the protocol requires) and `instance_id` = the runtime name,
+  which is deliberately the same string that names the podman container and that `zcr where`
+  reports - so a compositor holding an `instance_id` can find the container behind the window
+  instead of holding an opaque uuid.
+
+  A hidden `zcr __wayland <app[@instance]>` process holds the context open for the app's
+  lifetime and revokes it when the container is gone, the same shape `__term` uses, because
+  `zcr run` detaches and a context is revoked by closing a descriptor.
+
+  **Observable:** `podman inspect <app> --format '{{.Config.Labels}}'` reports
+  `zinc.wayland=security-context`, its bind is the derived socket, and a client connecting
+  through it sees a restricted global set (measured: 39 globals versus 62 on Hyprland 0.51.1,
+  29 versus 42 on niri 26.04, with `wp_security_context_manager_v1` withheld in both).
+
+### Changed
+
+- **`zcr where` requires the app to be defined.** It now loads the config, because whether
+  there is a bus socket to report is a fact about the config; guessing for an unknown name
+  would report a path with the same confidence as a real one. A VM app is refused there for
+  the same reason every other `zcr` command refuses one.
+
+- **The `zinc.wayland` label is now honest about which mode happened.** It was applied
+  whenever an app had not opted out, which claimed a security context on every launch
+  including the ones that never created one. It is now `security-context` or `passthrough`,
+  always present when a Wayland socket is mounted at all. A label that is wrong is worse than
+  no label - it is what a desktop reads to decide how much to trust a client.
+
+- **A compositor without `wp_security_context_v1` falls back to the raw socket with a warning
+  on stderr** rather than failing the launch, so Zinc stays usable on desktops that have not
+  adopted the protocol. Every other failure - a socket that cannot be bound, a compositor that
+  cannot be reached, a rejected request - fails the launch instead.
+
 ## [0.8.2] - 2026-07-31
 
 Work driven by what ZDE is blocked on. Five of its seven asks; the two still open are
