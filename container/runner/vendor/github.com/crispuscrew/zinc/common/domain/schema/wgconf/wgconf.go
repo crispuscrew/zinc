@@ -10,6 +10,7 @@ package wgconf
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 )
@@ -129,7 +130,11 @@ func (cfg *Config) absorb(setConf *strings.Builder, section, key, value string, 
 	case "interface":
 		switch key {
 		case "address":
-			cfg.Addresses = append(cfg.Addresses, splitList(value)...)
+			addresses, err := parseCIDRList(value, line, "Address")
+			if err != nil {
+				return err
+			}
+			cfg.Addresses = append(cfg.Addresses, addresses...)
 			return nil
 		case "mtu":
 			mtu, err := strconv.Atoi(value)
@@ -145,7 +150,11 @@ func (cfg *Config) absorb(setConf *strings.Builder, section, key, value string, 
 	case "peer":
 		switch key {
 		case "allowedips":
-			cfg.Routes = append(cfg.Routes, splitList(value)...)
+			routes, err := parseCIDRList(value, line, "AllowedIPs")
+			if err != nil {
+				return err
+			}
+			cfg.Routes = append(cfg.Routes, routes...)
 		case "endpoint":
 			endpoint, err := parseEndpoint(value)
 			if err != nil {
@@ -211,6 +220,33 @@ func isAddress(text string) bool {
 }
 
 // splitList reads a comma-separated value into its entries.
+// parseCIDRList splits a comma-separated list and requires every entry to be an address or
+// a network, so nothing else can be in one.
+//
+// This is a security boundary, not tidiness. Both lists it guards are interpolated into the
+// `sh -c` script that the netfilter helper runs, and that helper holds CAP_NET_ADMIN in the
+// app's network namespace and runs BEFORE the egress ruleset is loaded - so a value here
+// carrying `; command` would execute with the netns still unfiltered. This package already
+// refuses PostUp and PreUp on the grounds that "a config file is not a place to accept code
+// from"; an unchecked Address is the same hole by another name, and a wg-quick file is
+// exactly the thing a person pastes in from a VPN provider.
+//
+// Bare addresses are accepted alongside prefixes because wg-quick takes both, and `ip` reads
+// a bare address as a host route.
+func parseCIDRList(value string, line int, setting string) ([]string, error) {
+	entries := splitList(value)
+	for _, entry := range entries {
+		if _, _, err := net.ParseCIDR(entry); err == nil {
+			continue
+		}
+		if net.ParseIP(entry) != nil {
+			continue
+		}
+		return nil, fmt.Errorf("line %d: %s %q: want an address or a network like 10.0.0.2/32", line, setting, entry)
+	}
+	return entries, nil
+}
+
 func splitList(value string) []string {
 	var out []string
 	for _, entry := range strings.Split(value, ",") {

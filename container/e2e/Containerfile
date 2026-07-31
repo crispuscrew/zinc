@@ -1,8 +1,14 @@
 # Minimal image for the end-to-end tests: a shell plus busybox nc, with the five
 # entrypoint scripts baked in. The runtime passes an app's Entrypoint as a single-token
-# --entrypoint, so each scenario points at exactly one script. Not a production image;
-# it is referenced as a localhost/ tag, which the validator exempts from digest pinning.
-FROM docker.io/library/alpine:3.20
+# --entrypoint, so each scenario points at exactly one script.
+#
+# The BASE is digest-pinned like every other third-party image. The exemption that applies
+# here covers the image this Containerfile PRODUCES (`localhost/zinc/e2e-app:local`, which
+# the validator lets carry a mutable tag), not the base it is built from. Leaving the base
+# on `alpine:3.20` would mean the scenarios that assert the egress lock-down holds could
+# change behaviour whenever Alpine re-pushes that tag - a crown-jewel test passing or
+# failing for reasons outside this repo.
+FROM docker.io/library/alpine@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e
 
 COPY sleeper.sh listen.sh probe.sh capped.sh slowdep.sh /
 RUN chmod +x /sleeper.sh /listen.sh /probe.sh /capped.sh /slowdep.sh

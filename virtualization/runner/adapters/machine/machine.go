@@ -150,7 +150,13 @@ func (runtime Runtime) Stop(app string, force bool, timeout time.Duration) error
 	if err != nil {
 		return fmt.Errorf("%s is not running", app)
 	}
-	if !alive(pid) {
+	// A live pid is not enough: it must still be THIS app's guest. qemu can die without
+	// clearing its pidfile (SIGKILL, the OOM killer, a crash), and the kernel eventually
+	// reissues that number to something unrelated - at which point signalling on the pidfile
+	// alone is "terminate an arbitrary process of this user". State already applies this
+	// check, and firmware.isSwtpm cites the supervisor as the precedent for it; the
+	// supervisor was the one place not doing it.
+	if !alive(pid) || !isGuestProcess(pid, app) {
 		runtime.clean(app)
 		return fmt.Errorf("%s is not running (cleaned up a stale pidfile)", app)
 	}
@@ -261,10 +267,20 @@ func isGuestProcess(pid int, app string) bool {
 	if err != nil {
 		return false
 	}
-	// /proc cmdline is NUL-separated; a plain contains check over the whole blob is enough
-	// to recognise our own command line.
-	command := strings.ReplaceAll(string(data), "\x00", " ")
-	return strings.Contains(command, "qemu-system") && strings.Contains(command, app)
+	// /proc cmdline is NUL-separated, so compare argv ELEMENTS rather than searching the
+	// whole blob. A substring check over the joined line matches any command line that
+	// merely mentions the name, and every guest's own cmdline contains its overlay path -
+	// so one app's pid could be read as another's, which for Stop means signalling the
+	// wrong guest. `-name <app>` is what the launcher writes, so require exactly that.
+	argv := strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
+	named := false
+	for index, arg := range argv {
+		if arg == "-name" && index+1 < len(argv) && argv[index+1] == app {
+			named = true
+			break
+		}
+	}
+	return named && strings.Contains(argv[0], "qemu-system")
 }
 
 func waitGone(pid int, timeout time.Duration) bool {

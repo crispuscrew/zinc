@@ -14,9 +14,13 @@
 # Build:  make -C container/runner netfilter-image
 FROM docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 
-# Pinned to the version in the pinned base's repo (alpine v3.22/main) for
+# Pinned to the versions in the pinned base's repo (alpine v3.22/main) for
 # reproducibility - this image runs with CAP_NET_ADMIN and writes the egress
-# ruleset. apk resolves the dep tree, so only the top-level package is pinned.
+# ruleset, so two builds of one commit must not produce different `nft`, `ip` or `wg`.
+# ALL FOUR top-level packages carry a version; apk resolves the dep tree below them, so
+# transitive versions still follow the branch. Note the standing cost: Alpine deletes
+# superseded -rN builds from a branch, so these pins eventually stop resolving and need a
+# deliberate refresh, exactly like the Go image digest.
 # iproute2 and wireguard-tools are here for the tunnel step: Zinc creates and configures the
 # app's WireGuard interface itself, in this helper, so the APP never needs CAP_NET_ADMIN -
 # which it may not have anyway, since NET_ADMIN in the pod netns would let it flush the very
@@ -27,7 +31,7 @@ FROM docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9b
 # in its own container, serving the filtered socket. It lives here rather than in a second
 # image because it is the same kind of thing - a vetted helper Zinc drives, never the app's
 # own image - and one helper image is one thing to build and keep pinned.
-RUN apk add --no-cache nftables=1.1.3-r0 iproute2 wireguard-tools xdg-dbus-proxy=0.1.6-r0
+RUN apk add --no-cache nftables=1.1.3-r0 iproute2=6.15.0-r0 wireguard-tools=1.0.20250521-r0 xdg-dbus-proxy=0.1.6-r0
 
 # No ENTRYPOINT: zcr invokes `nft -f -` explicitly (the netenforce adapter builds
 # the apply args).

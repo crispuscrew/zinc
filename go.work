@@ -10,6 +10,8 @@ use (
 	./container/runner
 	./creator
 	./launcher/common
+	./launcher/gui
 	./launcher/tui
+	./menu
 	./virtualization/runner
 )

@@ -417,15 +417,12 @@ func cmdLifecycle(svc app.Service, opt options.HostOptions, cmd string, argv []s
 		return fmt.Errorf("usage: zcr %s <app>", cmd)
 	}
 	name := argv[0]
-	if cmd == "inspect" {
-		if err := refuseVM(svc, name); err != nil {
-			return err
-		}
-		return svc.Do(podman.InspectArgs(name))
-	}
 	cfg, err := loadApp(svc, name)
 	if err != nil {
 		return err
+	}
+	if cmd == "inspect" {
+		return svc.Do(podman.InspectArgs(cfg.AppNameID))
 	}
 	switch cmd {
 	case "stop":
@@ -437,7 +434,10 @@ func cmdLifecycle(svc app.Service, opt options.HostOptions, cmd string, argv []s
 			_ = svc.Stop(cfg)
 			return svc.Launch(cfg, opt)
 		}
-		return svc.Do(podman.RestartArgs(name))
+		// cfg.AppNameID, not name: loadApp has already resolved "app@instance" (and a config
+		// given by path) to the runtime name podman actually knows. Passing the raw argument
+		// looked for a container literally called "app@instance", which never exists.
+		return svc.Do(podman.RestartArgs(cfg.AppNameID))
 	}
 	return fmt.Errorf("unreachable: %q", cmd)
 }
@@ -451,10 +451,14 @@ func cmdLogs(svc app.Service, argv []string) error {
 	if fset.NArg() != 1 {
 		return fmt.Errorf("usage: zcr logs <app> [-f]")
 	}
-	if err := refuseVM(svc, fset.Arg(0)); err != nil {
+	// loadApp rather than refuseVM: it refuses a VM app the same way, and additionally
+	// resolves "app@instance" to the runtime name podman knows. Logs asked for the raw
+	// argument, so an instance's logs were never reachable.
+	cfg, err := loadApp(svc, fset.Arg(0))
+	if err != nil {
 		return err
 	}
-	return svc.Do(podman.LogsArgs(fset.Arg(0), *follow))
+	return svc.Do(podman.LogsArgs(cfg.AppNameID, *follow))
 }
 
 // parseTermArgs splits `<app> [--shell]`, shared by `term` and the hidden `__term`.

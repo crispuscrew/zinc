@@ -228,9 +228,9 @@ func TestNFTRuleset_IngressInputChain(t *testing.T) {
 	for _, want := range []string{
 		"chain input {",
 		"hook input priority 0; policy drop;",
-		`iif "lo" accept`,
 		`ip saddr { 192.168.1.0/24 } tcp dport { 80, 443 } counter accept comment "list[0] ip tcp"`,
 		`ip saddr { 192.168.1.0/24 } udp dport { 80, 443 } counter accept comment "list[0] ip udp"`,
+		`iif "lo" ip saddr 127.0.0.0/8 ip daddr 127.0.0.0/8 accept`,
 		"hook output priority 0; policy drop;", // pure publisher: no egress
 	} {
 		if !strings.Contains(rules, want) {
@@ -247,8 +247,10 @@ func TestNFTRuleset_IngressAnySource(t *testing.T) {
 	if !strings.Contains(rules, `tcp dport { 8080 } counter accept comment "list[0] tcp"`) {
 		t.Errorf("no CIDR should accept the port from any source:\n%s", rules)
 	}
-	if strings.Contains(rules, "saddr") {
-		t.Errorf("no CIDR should emit no saddr match:\n%s", rules)
+	// The loopback accept carries 127.0.0.0/8, so the claim is about the INGRESS rule, not
+	// about the chain containing no saddr anywhere.
+	if strings.Contains(rules, "ip saddr { ") {
+		t.Errorf("no CIDR should emit no saddr match on the ingress rule:\n%s", rules)
 	}
 }
 
@@ -332,8 +334,15 @@ func TestTier2_ProducerRuleset(t *testing.T) {
 			t.Errorf("producer link ruleset missing %q\n---\n%s", want, rules)
 		}
 	}
-	if strings.Contains(rules, "daddr") || strings.Contains(rules, "saddr") {
-		t.Errorf("a tier-2 ruleset must be interface-gated, not address-gated:\n%s", rules)
+	// Excluding the loopback accept, which is address-scoped on purpose so a pasta-spliced
+	// inbound connection falls through to the rules that decide about it.
+	for _, line := range strings.Split(rules, "\n") {
+		if strings.Contains(line, `iif "lo"`) {
+			continue
+		}
+		if strings.Contains(line, "daddr") || strings.Contains(line, "saddr") {
+			t.Errorf("a tier-2 ruleset must be interface-gated, not address-gated:\n%s", rules)
+		}
 	}
 }
 
@@ -386,7 +395,7 @@ func TestEnforcer_Unfiltered(t *testing.T) {
 		t.Fatalf("unfiltered app has nothing to prepare, got %v", steps)
 	}
 	steps := (Enforcer{}).Teardown(cfg)
-	if len(steps) != 1 || !slices.Equal(steps[0].Args, []string{"stop", "solo"}) {
+	if len(steps) != 1 || !slices.Equal(steps[0].Args, []string{"rm", "-f", "--ignore", "solo"}) {
 		t.Fatalf("unfiltered teardown: got %v", steps)
 	}
 }
@@ -638,7 +647,9 @@ func TestForward_GatewayGetsForwardingAndNAT(t *testing.T) {
 // privilege and must never be implied by another app naming it.
 func TestForward_NotImpliedForAnOrdinaryApp(t *testing.T) {
 	got := NFTRuleset(gatewayApp()) // has a link and egress, but no Forward
-	for _, unwanted := range []string{"hook forward", "table ip nat"} {
+	// "table ip nat {" with the brace: every ruleset now starts by clearing that table, so
+	// the bare name appears even when nothing defines one.
+	for _, unwanted := range []string{"hook forward", "table ip nat {"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("an app that did not opt in must not get %q:\n%s", unwanted, got)
 		}

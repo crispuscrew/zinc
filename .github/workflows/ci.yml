@@ -23,21 +23,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: false # common and e2e have no external deps, so there is nothing to cache
-      - name: gofmt
-        working-directory: common
-        run: |
-          unformatted="$(gofmt -l $(find . -path ./vendor -prune -o -name '*.go' -print))"
-          if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
-      - name: vet
-        working-directory: common
-        run: GOWORK=off go vet ./...
-      - name: test
-        working-directory: common
-        run: GOWORK=off go test ./...
+      # Through the pinned container like every other module, not a host Go. `common` is a
+      # library, not an e2e suite, so it gets no exception from golden rule 1: a floating
+      # setup-go resolves to whatever 1.24.x is newest at job time, which is the version
+      # skew GOTOOLCHAIN=local and the digest pin exist to prevent.
+      - run: .github/scripts/ensure-podman.sh
+      - run: make -C common check
+      # common vendors yaml.v3, so it can drift like any other module - and `check` would
+      # not notice, since it builds from the vendored copy.
+      - run: make -C common vendor-check
 
   check:
     name: check + build (${{ matrix.module }})
@@ -105,7 +99,7 @@ jobs:
           got="$(nix run --print-build-logs .#zc -- version)"
           echo "zc reports: $got"
           case "$got" in
-            *v0.9.0*) ;;
+            *v0.9.1*) ;;
             *) echo "expected the flake version from 'zc version', got: $got" >&2; exit 1 ;;
           esac
 

@@ -8,6 +8,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
@@ -129,10 +130,29 @@ func (svc Service) machineLayout(cfg schema.AppConfig, installing, startServices
 	return layout, nil
 }
 
+// guestName screens a name that is about to be joined into a state path. Every command that
+// goes through the store already gets this from the store's own guard, but Stop and Reset
+// take the argument straight from argv - and filepath.Join CLEANS `..` segments away rather
+// than refusing them, so an unchecked name reaches outside the state directory entirely.
+//
+// Reset is the one that makes this urgent: it deletes an overlay, a seed ISO, a UEFI
+// variable store and, recursively, a TPM state directory. Unchecked, that is a delete
+// primitive pointed at any path the user can write, reported as success for an app that was
+// never defined. Stop is the same shape aimed at a pidfile.
+func guestName(name string) error {
+	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+		return fmt.Errorf("invalid app name %q", name)
+	}
+	return nil
+}
+
 // Stop shuts a guest down, gracefully unless force is set. The TPM emulator is a separate
 // process, so it has to be stopped with the guest rather than left running against a
 // machine that no longer exists.
 func (svc Service) Stop(name string, force bool, timeout time.Duration) error {
+	if err := guestName(name); err != nil {
+		return err
+	}
 	err := svc.Runtime.Stop(name, force, timeout)
 	firmware.StopTPM(svc.Paths.TPMSocket(name), svc.Paths.TPMPID(name))
 	return err
@@ -148,6 +168,9 @@ func (svc Service) Running() ([]machine.State, error) { return svc.Runtime.Runni
 // the disposability the design promises: the base is never written to, so everything the
 // guest changed lives in the one file this removes.
 func (svc Service) Reset(name string) error {
+	if err := guestName(name); err != nil {
+		return err
+	}
 	state, _ := svc.Runtime.State(name)
 	if state.Alive {
 		return fmt.Errorf("%s is running; stop it before resetting its disk", name)

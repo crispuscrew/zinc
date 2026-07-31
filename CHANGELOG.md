@@ -5,6 +5,132 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
+## [0.9.1] - 2026-07-31
+
+A whole-repo audit, every finding verified against a running system rather than by
+reading. 22 defects fixed. Two of them are the reason this is a release and not a
+housekeeping commit.
+
+### Security
+
+- **A wg-quick file could run arbitrary commands in the privileged helper.** `Address` and
+  `AllowedIPs` were spliced unquoted into the `sh -c` script the netfilter helper runs, and
+  that helper holds `CAP_NET_ADMIN` in the app's network namespace and runs BEFORE the egress
+  ruleset is loaded. A `.conf` from a VPN provider - the artefact this feature exists to
+  consume - could therefore execute as uid 0 with the namespace still unfiltered. Demonstrated
+  end to end: an injected payload installed its own nft accept rule and the app then reached
+  the internet despite an allow list naming only its tunnel endpoint.
+
+  `wgconf` already refused `PostUp` and `PreUp` because "a config file is not a place to accept
+  code from". These two fields were the same hole under a different name. Every entry must now
+  parse as an address or a network.
+
+  **Note the layer:** `zcr validate` does not read the referenced file, so it still reports
+  `ok`. The refusal happens at launch, where the file is actually parsed, with a line-numbered
+  error naming the offending value.
+
+- **The nftables load was additive, not a replacement.** `nft -f -` merges into whatever is
+  already in the namespace, so a rule that was there first evaluated ABOVE everything Zinc
+  wrote. The ruleset is meant to be a function of the validated config alone; it was a function
+  of the config plus whatever got there first. Both tables are now cleared in the same atomic
+  transaction that installs them.
+
+- **A tunnel app had no `input` base chain, so inbound over `wg0` was unfiltered.** nftables
+  applies no policy to a hook with no base chain, which the code comment three lines above the
+  bug states outright - it just did not list the tunnel among the cases needing one. With
+  `AllowedIPs = 0.0.0.0/0` the peer could address any port on the app. `zc new --tunnel`
+  authors exactly this shape, so it was the common case.
+
+- **`iif "lo" accept` bypassed a publish's source filter.** pasta delivers a connection
+  forwarded from the host's loopback into the namespace over `lo`, so the rule intended for
+  "the app talking to itself" took those before the source-CIDR rules were consulted: a publish
+  naming one remote /24 was reachable by every process on the host. Now scoped to loopback
+  addresses, so a spliced connection falls through to the rules that decide about it.
+
+- **A comma in a VM image or `InstallMedia` path injected qemu drive options.** qemu separates
+  `-drive` properties with commas and resolves a duplicate key to the last one, so a second
+  `file=` in the tail replaced the absolute path validation had approved - and qemu will open a
+  URL. Since `zvr install` boots from that medium, the boot disk could be made remote, mutable
+  and unauthenticated, which is exactly what `BaseDigest` exists to prevent for the main disk.
+
+- **`zvr stop` signalled whatever pid was in the pidfile**, with no `/proc` check, so a
+  recycled pid meant terminating an unrelated process. `State` already applied that check and
+  the TPM code cites the supervisor as its precedent; the supervisor was the one place not
+  doing it. The cmdline match is also now an exact `-name <app>` argv comparison rather than a
+  substring search that any guest's own overlay path could satisfy.
+
+- **`zvr reset` and `zvr stop` took an unchecked name into a path join.** `filepath.Join`
+  cleans `..` away rather than refusing it, and `reset` deletes an overlay, a seed, a UEFI
+  variable store and recursively a TPM state directory - a delete primitive aimed at any path
+  the user can write, reported as success for an app that was never defined.
+
+- **An unparseable `DBUS_SESSION_BUS_ADDRESS` fell back to the main user bus.** The function's
+  own comment promised the opposite ("anything else resolves to empty ... which is the
+  fail-closed answer"). A user who pointed the session at a nested or restricted bus got a
+  sandbox proxied onto the main one instead, silently. It also split on `,`, which separates
+  key-value pairs inside one address, not the addresses themselves.
+
+### Fixed
+
+- **Launching an app that was already running tore down the running app.** The second launch
+  failed on its first prepare step, and its fail-closed teardown then removed the pod, D-Bus
+  proxy and socket directory belonging to the first, healthy launch. A double Enter in a
+  launcher killed the app the person was working in; two concurrent launches left nothing
+  alive. A launch now refuses before it prepares anything.
+
+- **The Wayland holder revoked the security context on the first container stop.** `podman
+  wait` returns on every exit, including one podman is about to undo, so a `zcr restart` or an
+  `Autorestart` app's first crash revoked the context and the container came back bind-mounted
+  onto a socket the compositor no longer accepts on - no display at all.
+
+- **A `KeepAlive` app could never be started again after `zcr stop`.** It runs without `--rm`,
+  so `stop` left an Exited container holding the name and every later launch collided with it.
+  The unfiltered teardown now removes rather than stops.
+
+- **`zcr logs`, `zcr inspect` and unfiltered `zcr restart` never worked for `app@instance`.**
+  They passed the raw argument to podman instead of the resolved runtime name.
+
+- **A leaked D-Bus proxy blocked every future launch of its app.** The proxy container is now
+  created with `--replace`, since Zinc owns that name by construction.
+
+- The D-Bus socket directory is created `0700`, matching what the Wayland side already argued
+  for; it was inheriting the helper image's umask.
+
+### Changed
+
+- **`make check` is hermetic, not merely containerized.** The check containers now run with
+  `--network=none` and `--cap-drop=ALL`. `go test` runs arbitrary test code, so with a network
+  a test could quietly depend on fetching something and still pass.
+
+  This immediately exposed a test that had only ever passed because the container ran as root:
+  it made a file `0o000` to prove a cached digest verification never reopened it, but the chmod
+  moves ctime, which is part of the cache identity, so the cache always missed and
+  `CAP_DAC_OVERRIDE` reopened the file anyway. The assertion was vacuous wherever it passed and
+  failed for any ordinary user.
+
+- **The Nix flake is pinned to a nixpkgs revision** rather than tracking `nixos-unstable`. CI's
+  own logs showed nix creating a lock file on every run and resolving the branch to that day's
+  HEAD, so one Zinc tag could build against different compilers on different machines.
+
+- **`make build` no longer reports success when the binary extraction failed.** Three commands
+  chained with `;` meant the recipe's exit status came from the cleanup, so a failed `podman cp`
+  printed "built" and left the previous binary in place - which the e2e harness then accepts as
+  current, because it only builds what is missing.
+
+- The CI `common` job runs through the pinned container with `vendor-check`, instead of a host
+  Go that floated to whatever 1.24.x was newest. The e2e base image and the netfilter helper's
+  remaining packages are digest- and version-pinned.
+
+### Still open
+
+The audit found more than was fixed. These are recorded rather than quietly dropped, and each
+needs the same reproduce-then-fix treatment: the D-Bus proxy has no watcher, so it is not torn
+down when an app exits on its own; `zcr run --exec` leaks a pod when the app dies post-fork;
+dependencies bypass mount templating and the VM-app refusal; `{state}` directories are never
+created, so the `zc init` example does not run; the `$EDITOR` round-trip in `zc tui` can
+silently restore a D-Bus grant the user narrowed; `zinc-dbus-<name>` is a legal app name and
+can forge an attribution row; and an app name ending in `.yaml` is re-read as a path.
+
 ## [0.9.0] - 2026-07-31
 
 The last three of ZDE's seven asks, which closes the list. All three are about the same
