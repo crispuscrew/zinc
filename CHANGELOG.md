@@ -5,10 +5,20 @@ All notable changes to Zinc are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version line is
 tracked in [RELEASES.md](RELEASES.md).
 
-## [Unreleased]
+## [0.9.0] - 2026-07-31
+
+The last three of ZDE's seven asks, which closes the list. All three are about the same
+thing from different angles: a sandbox nobody outside can inspect is one nobody outside can
+trust. 0.8.x made an instance addressable; this makes it attestable.
+
+The Wayland change is the substantive one. Until now Zinc labelled the container and handed
+over the compositor's own socket, so a desktop had nothing to go on but what the app said
+about itself. It now creates a real security context, and the identity the compositor holds
+is the one Zinc constructed. The same principle drives the other two: bus attribution
+publishes the mapping Zinc already holds rather than asking the app to claim a name, and
+`zcr net` reports what the ruleset counted rather than what it was configured to do.
 
 ### Added
-
 
 - **Bus attribution: `zcr bus [--json]`, and `zcr where` now reports the bus.** Given
   something observed on the host session bus, a desktop can now say which Zinc app and
