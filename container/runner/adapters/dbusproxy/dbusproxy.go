@@ -179,7 +179,7 @@ func (brk Broker) Prepare(cfg schema.AppConfig) ([]ports.Command, error) {
 			"--network", "none",
 			"-v", brk.RuntimeDir + ":" + ctrRuntimeRoot + ":rw",
 			brk.image(),
-			"mkdir", "-p", ctrSocketDir(cfg.AppNameID),
+			"mkdir", "-m", "700", "-p", ctrSocketDir(cfg.AppNameID),
 		},
 		Desc: "create bus socket dir for " + cfg.AppNameID,
 	}}
@@ -192,7 +192,11 @@ func (brk Broker) Prepare(cfg schema.AppConfig) ([]ports.Command, error) {
 	// container as the host uid, and an app in a different user namespace could not connect.
 	proxyArgs := []string{
 		"run", "-d", "--rm", "--pull", "never",
-		"--name", ContainerName(cfg.AppNameID),
+		// --replace because Zinc owns this name by construction. Without it a proxy left
+		// behind by an app that exited on its own blocks every future launch of that app
+		// with a name collision, and the failure is confusing: the message names a
+		// container the user never created.
+		"--replace", "--name", ContainerName(cfg.AppNameID),
 		"--userns=keep-id",
 		"--security-opt", "no-new-privileges", "--cap-drop", "all",
 		"--network", "none", // a bus relay needs no network, and this is the app's most privileged neighbour

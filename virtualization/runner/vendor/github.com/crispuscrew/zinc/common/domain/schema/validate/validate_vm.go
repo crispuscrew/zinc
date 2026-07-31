@@ -95,6 +95,10 @@ func checkBaseImage(image, digest string, add addFunc) {
 		add("ImageMeta.Image: must not be empty (a VM app needs a base disk image)")
 	case hasUnsafe(image):
 		add("ImageMeta.Image %q: must be a single-line path (no whitespace or control characters)", image)
+	case strings.ContainsRune(image, ','):
+		// Same reason as InstallMedia below: a comma is qemu's -drive property separator, so
+		// it appends options rather than staying inside the path.
+		add("ImageMeta.Image %q: must not contain ',' - it separates qemu's -drive properties, so a comma appends options to the drive rather than staying in the path", image)
 	case !filepath.IsAbs(image):
 		// Resolved by whichever process happens to run zvr otherwise: a relative base would
 		// mean a different disk depending on the working directory a hotkey inherited.
@@ -134,6 +138,15 @@ func checkInstallMedia(index int, media string, add addFunc) {
 		add("VirtualizationMeta.InstallMedia[%d]: must not be empty", index)
 	case hasUnsafe(media):
 		add("VirtualizationMeta.InstallMedia[%d] %q: must be a single-line path (no whitespace or control characters)", index, media)
+	case strings.ContainsRune(media, ','):
+		// A comma separates qemu's -drive properties, so it does not stay inside the path:
+		// it appends options to the drive. qemu resolves a duplicate key to the LAST one, so
+		// a second file= in the tail replaces the absolute path this check just approved,
+		// and qemu will happily open a URL. `zvr install` boots from this medium, which
+		// would make the boot disk remote, mutable and unauthenticated - exactly what
+		// BaseDigest exists to prevent for the main disk. The container side has refused
+		// ',' in mount paths since 0.1 for the same reason.
+		add("VirtualizationMeta.InstallMedia[%d] %q: must not contain ',' - it separates qemu's -drive properties, so a comma appends options to the drive rather than staying in the path", index, media)
 	case !filepath.IsAbs(media):
 		add("VirtualizationMeta.InstallMedia[%d] %q: must be an absolute path", index, media)
 	case hasDotDot(media):

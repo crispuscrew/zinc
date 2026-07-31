@@ -16,7 +16,15 @@
   # nixpkgs only. Deliberately no flake-utils: a consumer pinning this flake inherits every
   # input it declares, and a desktop that already has a nixpkgs wants to override one input,
   # not three.
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  #
+  # Pinned to an immutable revision, NOT to the `nixos-unstable` branch. A branch ref is
+  # resolved afresh on every evaluation, so the same Zinc tag would build against whatever
+  # nixpkgs happened to be current - a different Go compiler on two machines, and a CI job
+  # that can go red on a commit that changed nothing. That also made the claim below false:
+  # nixpkgs pins packages by hash WITHIN a revision, and the revision is the thing that has
+  # to be pinned for it to mean anything. Refresh deliberately, the way the Go image digest
+  # is refreshed.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/0954f7ee2f6bb3dc7d4e3d0d8bcb8fd4bde4cfc5";
 
   outputs = { self, nixpkgs }:
     let

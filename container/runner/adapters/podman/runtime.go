@@ -553,7 +553,22 @@ func WaitGone(name string) error {
 		}
 		time.Sleep(appearPoll)
 	}
-	return exec.Command("podman", "wait", name).Run()
+	// "Gone", not "stopped once". `podman wait` returns on EVERY exit, including one podman
+	// is about to undo: a `--restart on-failure` app's first crash, or a plain
+	// `podman restart`. The caller closes the Wayland close_fd on return, so returning too
+	// early revoked the security context of an app that came straight back - and the
+	// restarted container was then bind-mounted onto a socket the compositor no longer
+	// accepts on, leaving it with no display at all. Re-checking Exists distinguishes the
+	// two: a --rm app disappears, a restarting one does not.
+	for {
+		if err := exec.Command("podman", "wait", name).Run(); err != nil {
+			return err
+		}
+		if !engine.Exists(name) {
+			return nil
+		}
+		time.Sleep(appearPoll)
+	}
 }
 
 // Do runs a user-facing podman command (stop/restart/inspect/logs) with the host's

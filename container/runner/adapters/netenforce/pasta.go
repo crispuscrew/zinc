@@ -188,7 +188,15 @@ func (enf Enforcer) Prepare(cfg schema.AppConfig, opt options.HostOptions) ([]po
 // unfiltered app.
 func (Enforcer) Teardown(cfg schema.AppConfig) []ports.Command {
 	if !filtered(cfg) {
-		return []ports.Command{{Args: []string{"stop", cfg.AppNameID}, Desc: "stop " + cfg.AppNameID}}
+		// rm -f, not stop. A KeepAlive app runs without --rm, so `stop` leaves an Exited
+		// container holding the name, and the next `podman run --name <app>` fails with
+		// "name already in use" - permanently, since every later launch hits the same thing.
+		// StartApp is detached, so the CLI reports success while nothing starts. --ignore
+		// makes it idempotent, the same reason dbusproxy.Teardown uses it for the proxy.
+		return []ports.Command{{
+			Args: []string{"rm", "-f", "--ignore", cfg.AppNameID},
+			Desc: "remove " + cfg.AppNameID,
+		}}
 	}
 	steps := []ports.Command{{
 		Args: []string{"pod", "rm", "-f", PodName(cfg.AppNameID)},
@@ -366,6 +374,20 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	linkEntries := links(cfg)
 
 	var bld strings.Builder
+
+	// Replace, never merge. `nft -f -` loads INTO the namespace's existing ruleset, so
+	// without this a table that is already there keeps its rules and they evaluate ABOVE
+	// everything below - which would make the ruleset a function of the config plus whatever
+	// was there first, rather than of the validated config alone. The create-then-delete pair
+	// is the idempotent way to say "start from nothing": `table` is a no-op when it already
+	// exists, so the `delete` that follows always has something to remove and never errors on
+	// a clean namespace. The whole file is one atomic transaction, so there is no window in
+	// which the table is gone.
+	// Both tables Zinc writes are cleared, not just the filter one: the DNS redirect lives in
+	// `ip nat`, and a stale rule there would send the app's queries somewhere the config never
+	// named. The netns is created fresh for this launch, so nothing else owns either table.
+	bld.WriteString("table inet zinc\ndelete table inet zinc\n")
+	bld.WriteString("table ip nat\ndelete table ip nat\n")
 	bld.WriteString("table inet zinc {\n")
 
 	// output (egress): where the app may connect out to.
@@ -406,12 +428,26 @@ func NFTRuleset(cfg schema.AppConfig) string {
 	// sibling still sits on that shared bridge, where the producer and every other consumer
 	// can reach it. Leaving the chain out does not leave inbound closed, it leaves inbound
 	// UNFILTERED, because nftables applies no policy to a hook that has no base chain.
+	// hasTunnel is in this condition for exactly the reason the paragraph above gives about
+	// links: an app with a WireGuard tunnel sits on an interface its peer can address, so
+	// leaving the chain out leaves that direction UNFILTERED rather than closed. With
+	// AllowedIPs 0.0.0.0/0 the peer can reach any port on the app's tunnel address, and the
+	// reply leaves through the tunnel accept in the output chain. `zc new --tunnel` authors
+	// precisely this shape, so it was the common case that was open.
 	own := ownLinkIface(cfg)
-	if len(ingress) > 0 || own != "" || len(linkEntries) > 0 {
+	if len(ingress) > 0 || own != "" || len(linkEntries) > 0 || hasTunnel(cfg) {
 		ingressPolicy := chainPolicy(ingress)
 		bld.WriteString("\tchain input {\n")
 		fmt.Fprintf(&bld, "\t\ttype filter hook input priority 0; policy %s;\n", ingressPolicy)
-		bld.WriteString("\t\tiif \"lo\" accept\n")
+		// Scoped to genuinely loopback-addressed traffic, NOT to the interface alone. pasta
+		// delivers a connection forwarded from the host's loopback INTO the namespace over lo,
+		// so a bare `iif "lo" accept` took those before the source rules below were ever
+		// consulted - meaning a publish that named one remote /24 was in fact reachable by
+		// every process on the host. Matching the addresses too leaves the app talking to
+		// itself accepted, which is all this rule was ever for, and lets a spliced inbound
+		// connection fall through to the rules that decide about it.
+		bld.WriteString("\t\tiif \"lo\" ip saddr 127.0.0.0/8 ip daddr 127.0.0.0/8 accept\n")
+		bld.WriteString("\t\tiif \"lo\" ip6 saddr ::1 ip6 daddr ::1 accept\n")
 		bld.WriteString("\t\tct state established,related accept\n")
 		if own != "" {
 			for index, netList := range cfg.NetworkMeta.NetworkLists {
