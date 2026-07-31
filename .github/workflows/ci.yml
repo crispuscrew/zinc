@@ -99,7 +99,7 @@ jobs:
           got="$(nix run --print-build-logs .#zc -- version)"
           echo "zc reports: $got"
           case "$got" in
-            *v0.9.0*) ;;
+            *v0.9.1*) ;;
             *) echo "expected the flake version from 'zc version', got: $got" >&2; exit 1 ;;
           esac
 
