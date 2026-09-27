@@ -4,6 +4,7 @@
 package wire
 
 import (
+	"github.com/crispuscrew/zinc/common/adapters/dnsproxy"
 	"github.com/crispuscrew/zinc/container/runner/adapters/dbusproxy"
 	"github.com/crispuscrew/zinc/container/runner/adapters/fs"
 	"github.com/crispuscrew/zinc/container/runner/adapters/host"
@@ -21,7 +22,7 @@ import (
 // config and no HostOptions and still has to tear down the proxy and its socket directory.
 func Service(store ports.Store) app.Service {
 	opt := host.Options()
-	return app.New(store, podman.Runtime{}, podman.Builder{}, podman.Resolver{}, netenforce.Enforcer{},
+	return app.New(store, podman.Runtime{}, podman.Builder{}, podman.Resolver{}, netenforce.Enforcer{Lookup: dnsproxy.Lookup},
 		dbusproxy.New(opt.NetfilterImage, opt), waylandctx.Broker{}, pipewirectx.Broker{}, notifyfilter.Broker{})
 }
 

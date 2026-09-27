@@ -6,10 +6,7 @@ package runner
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -25,61 +22,6 @@ const (
 type Result struct {
 	Name        string
 	Description string
-}
-
-// find locates the zcr binary, returning an actionable error if it is not installed.
-func find() (string, error) { return findBinary(Binary) }
-
-func findBinary(name string) (string, error) {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return "", fmt.Errorf("%s not found on $PATH: install the Zinc runtime to run apps (authoring still works without it)", name)
-	}
-	return path, nil
-}
-
-// Passthrough runs `zcr <args...>` wired to the caller's own stdio and returns zcr's
-// exit error verbatim. It is the CLI forwarder: `zc run X` becomes `zcr run X`,
-// streaming output live (follow logs, inspect JSON, the launch plan) and preserving the
-// exit status, so `zc` is a thin front-end over the runtime for those commands.
-func Passthrough(args ...string) error { return PassthroughTo(Binary, args...) }
-
-// PassthroughTo is Passthrough against a named runtime, so a VM app's commands reach zvr
-// while a container's reach zcr.
-func PassthroughTo(binary string, args ...string) error {
-	path, err := findBinary(binary)
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(path, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// capture runs `zcr <args...>` and returns its stdout. On failure it folds zcr's stderr
-// into the error so a caller (the TUI) can surface what went wrong. Used for the
-// programmatic actions that need the output as data rather than streamed to a terminal.
-func capture(args ...string) (string, error) {
-	path, err := find()
-	if err != nil {
-		return "", err
-	}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(path, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return "", fmt.Errorf("%s", msg)
-		}
-		if msg := strings.TrimSpace(stdout.String()); msg != "" {
-			return "", fmt.Errorf("%s", msg)
-		}
-		return "", fmt.Errorf("%s %s: %w", Binary, strings.Join(args, " "), err)
-	}
-	return stdout.String(), nil
 }
 
 // safeName screens a name before it becomes an argument to a runner. Two shapes matter: a leading '-'
@@ -132,7 +74,7 @@ func Build(name string) (string, error) {
 	return captureApp("build", name)
 }
 
-// OpenTerminal opens one more terminal for a multiterminal app (`zcr term <name>`,
+// OpenTerminal opens one more terminal for an Attached app (`zcr term <name>`,
 // `--shell` for a shell). zcr spawns a detached waiter and returns.
 func OpenTerminal(name string, shell bool) error {
 	var extra []string

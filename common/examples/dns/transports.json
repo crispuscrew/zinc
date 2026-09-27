@@ -1,0 +1,9 @@
+{
+  "ResolversByPriority": [
+    {"Protocol": "HTTPS", "Endpoint": "resolver.example:443", "Path": "/dns-query", "BootstrapIPs": ["192.0.2.54"]},
+    {"Protocol": "TLS", "Endpoint": "resolver.example:853", "BootstrapIPs": ["192.0.2.54"]},
+    {"Protocol": "QUIC", "Endpoint": "resolver.example:853", "BootstrapIPs": ["192.0.2.54"]},
+    {"Protocol": "TCP", "Endpoint": "192.0.2.54:53"},
+    {"Protocol": "UDP", "Endpoint": "192.0.2.54:53"}
+  ]
+}

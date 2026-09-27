@@ -1,220 +1,149 @@
-# zvr - the Zinc virtualization runner
+# zvr - VM runner
 
-`zvr` boots VM apps as qemu guests. It is the sibling of `zcr`: one app store, one schema,
-split by `Type`, with each runner taking the apps it owns and refusing the other's by name.
-
-```sh
-zvr run <app>            boot a guest (detached; the window, if any, is qemu's)
-zvr run <app> --dry-run  print the exact command line and ruleset, change nothing
-zvr stop <app> [--force] shut it down (ACPI power button, or signal the process)
-zvr ps                   running guests
-zvr status <app>         one guest's state
-zvr validate <app>       check a config, run nothing
-zvr reset <app>          delete the guest's disk, back to the pinned base
-zvr pin <image.qcow2>    print the sha256 pin to put in a config
-zvr net <app> [--json]   what the guest's egress ruleset has seen
-zvr console <app>        where to attach for the serial console
-```
-
-Apps are authored with `zc` (`zc new <name> --vm ...`, or the `tui` form), never here: a
-runner that could rewrite a config could quietly change what it is about to run.
-
-## Why qemu directly, and not libvirt
-
-libvirtd spawns the qemu process, so that process is not in your session and cannot open a
-window on your compositor. libvirt's answer is SPICE plus a separate viewer, which puts a hop
-between the guest's frames and the screen - and for a VM that exists to run something
-interactive, that hop is the whole problem.
-
-`zvr` starts qemu as a child of your session instead, so a guest gets a local,
-GPU-accelerated window whose frames never leave the machine. It also matches the container
-side exactly: build an argv from validated config, exec a binary, and print it with
-`--dry-run` before anything runs.
-
-The cost is paid knowingly: **zvr owns supervision.** Starting, finding and stopping guests
-is its job, and there are no snapshots or managed save, both of which libvirt would have
-provided.
-
-## What a guest gets
-
-Exactly what its config asked for. qemu is started with `-nodefaults`, so no device arrives
-merely because it was compiled in, and the host process runs inside qemu's own seccomp jail
-(`-sandbox on`, denying privilege elevation, helper spawning and scheduling changes).
-
-**Disks are copy-on-write.** The base image is never opened for writing; each app has its own
-overlay backed by it. `zvr reset` deletes that overlay and the app is back to its authored
-image - the VM reading of a disposable container.
-
-**The base is pinned.** `VirtualizationMeta.BaseDigest` is the sha256 of the file's bytes,
-because a file digest cannot ride inside a path the way a container digest rides inside a
-reference. `zvr pin` prints it. The image is hashed in full on first use and then whenever
-its identity moves - device, inode, size and both timestamps at nanosecond resolution - which
-catches a base that was replaced, rebuilt or restored. It is not a defence against someone
-who can already write to your image directory, since they can rewrite the cache beside it.
-
-**Stopping is graceful by default.** `zvr stop` presses the guest's ACPI power button over
-QMP and waits, so the guest's own OS flushes and unmounts; `--force` signals the process
-instead, for a guest that has stopped answering.
-
-## The network
-
-A guest that declares `NetworkLists` runs inside a network namespace of its own, made by
-`pasta --config-net`, with an nftables ruleset loaded before qemu execs - so it never exists on
-an unfiltered network. The rules are rendered by the same code a container's are, so a
-`NetworkList` means one thing across both runtimes.
+`zvr` combines authored app YAML, separate host-local VM options, and explicitly
+provisioned network topology. A detached supervisor owns each running instance.
 
 ```sh
-zvr net <app>            what the ruleset has counted, per rule
-zvr net <app> --json     the same, for a desktop to read
-zvr run <app> --dry-run  the ruleset and the command line, without running either
+zvr pin /absolute/base.qcow2
+zc new guest --vm --image /absolute/base.qcow2 --base-digest sha256:... \
+    --memory 2048 --vcpus 2 --display None --loader-bios --cloud-init=false
+zvr validate guest
+zvr run guest --dry-run
+zvr run guest
+zvr status guest
+zvr console guest
+zvr stop guest
+zvr reset guest --confirm
 ```
 
-Two things are easy to get wrong and are handled for you:
+## Runtime options
 
-- **Name a resolver.** If your lists are allowances, the chain defaults to drop, and DNS goes
-  with everything else - qemu asks the host's resolver and your own rules refuse it. Put one in
-  `NetworkMeta.DNSServers` and the guest is pointed at it. `zc` warns if you forget.
-- **`ForwardPorts` is published by pasta**, not by qemu, since qemu's own forward would bind
-  inside the namespace where nothing on the host can reach it.
+`$XDG_CONFIG_HOME/zinc/runtime/vm/<app>.json` (default `~/.config/...`) stores
+Version 1, AppNameID, Image, BaseDigest, DiskSizeGiB, Display, Devices,
+InstallMedia and ForwardPorts. Image/AppNameID bind the options to app intent.
+The disk pin is required; launch never authorizes a newly calculated digest.
 
-**A guest with no lists is unfiltered.** It keeps qemu's user-mode NAT and reaches whatever the
-host can. This is the opposite of a container with no lists, which gets no network at all, so it
-is worth saying plainly: for a guest, an empty `NetworkLists` is the *weaker* posture, not the
-stronger one. `zvr net` reports which of the two a running guest is in.
+`--runtime-options /absolute/file.json` selects an explicit file. `--base-digest`,
+`--disk`, `--display`, `--devices`, repeatable `--media` and `--forward` override
+it for one invocation. Media/forward overrides replace lists; `--clear-media`
+and `--clear-forwards` empty them. Running YAML by path requires explicit options
+or an explicit pin. CLI overrides never rewrite app YAML or options files.
 
-## Display
+Forward syntax: `[BIND:]HOST:GUEST[/TCP|UDP][@NIC]`, with brackets for IPv6 binds.
+Defaults are loopback, TCP and the first declared logical NIC. Mappings must
+already be provisioned and match protocol, bind address, both ports and NIC
+exactly. A wildcard publication cannot satisfy a loopback request.
 
-`VirtualizationMeta.Display` is explicit, never inferred - whether a guest gets an
-accelerated window is the difference between a playable game and a slideshow:
+## Network integration
 
-| Value | What it does |
-| --- | --- |
-| `Accelerated` | `virtio-gpu-gl` plus a local window: guest 3D runs on the host GPU and reaches the compositor as a dmabuf |
-| `Window` | a local window with no 3D acceleration |
-| `None` | headless; the way in is the serial console |
+Empty Interfaces gives no managed NIC. Declared NICs require an authoritative
+[network manifest](../../common/adapters/network/README.md). The runner loads it,
+checks all publications, and applies `netns.ConfigureResolved` before QEMU
+validation. Assigned MACs only modify a runtime copy; authored intent remains
+unchanged for validation, auditing and subsequent restarts.
 
-Accelerated 3D needs a guest with the virtio-gpu driver, which in practice means Linux.
+`Service.Lookup` has the `common/adapters/network.Lookup` signature. The CLI and
+supervisor wire `dnsproxy.Lookup`, which uses each policy owner's explicit DNS
+configuration. Domain results are frozen launch snapshots; no host resolver
+fallback is allowed. Configured guest DNS still needs the provisioner's matching
+proxy addresses/digest and a permitted route to that proxy.
 
-### Vulkan (`VirtualizationMeta.Vulkan`)
+`qemu.Layout.NetworkAttachments` maps InterfaceID to a pre-created TapName.
+QEMU uses `script=no,downscript=no`. The adapter does not create namespaces,
+TAPs, routes, listeners or host firewall rules. SCTP and other packet protocols
+use provisioned TAPs, never a claimed slirp approximation.
 
-`Accelerated` gives the guest **OpenGL** through virgl out of the box. Guest **Vulkan** is
-opt-in with `Vulkan: true`, and it matters because Proton, DXVK and vkd3d are all Vulkan -
-without it a game in a guest renders on the CPU however good the host GPU is.
+With no declared NICs, explicit raw RunnerFlags may add networking. This is a
+warned opt-out: such a run is not guaranteed network-isolated. With a provisioned
+topology, the network adapter checks the actual QEMU NIC/backend arguments.
 
-It costs two things, both stated rather than hidden:
+## Shared hardware and disk fields
 
-- **A venus-capable virglrenderer.** Distributions ship virglrenderer built *without* venus
-  (Fedora 43's has no venus symbols at all), so one has to be built. `zvr` prints the recipe
-  if it cannot find one, and `ZVR_VIRGL_PREFIX` points at an existing build:
+- ResourcesMeta supplies positive RAM and a positive whole VM CPU count.
+- LoaderBIOS false selects UEFI. SecureBoot requires matching trusted firmware;
+  TPM requires swtpm and compatible firmware.
+- Empty runtime Display infers None for Terminal, Compatible for DisableGpuAccess,
+  otherwise Accelerated. Contradictions with GPU denial/Vulkan are rejected.
+- ImageMeta.CloudInit explicitly enables provisioning. PublicSSHKeyPath contains
+  a public key; InternalUserMeta selects a guest account without implicit sudo or
+  passwords. Install is first-boot provisioning, not a command replayed per launch.
+- ReadOnlyRootfs attaches the root block device read-only, not in snapshot mode.
+  Installation and writable cloud-init provisioning cannot use it. The base OS
+  must itself support a read-only root.
+- MinimizeFingerprint uses neutral SMBIOS branding and locally administered
+  generated MACs. Explicit/provisioned MACs and stable UUIDs are preserved.
 
-  ```sh
-  make -C virtualization/runner virgl-venus
-  ```
+Overlays remain under `$XDG_DATA_HOME/zinc/vms`. Run never recreates or resizes an
+existing overlay; it verifies the backing image, format and size. Instance
+manifests prevent silent base-pin/device/firmware changes. Reset explicitly
+deletes guest disk/NVRAM/TPM state while preserving base images and runtime options.
 
-  It installs into your own data directory and never touches the system copy. `zvr` finds it
-  there automatically; `ZVR_VIRGL_PREFIX` points at a different build.
+## Audio broker
 
-- **qemu's seccomp sandbox, for that app.** venus runs in a helper process that
-  virglrenderer forks, and the sandbox both forbids the fork and kills the child that
-  inherits its filter - silently, surfacing only as a generic "virgl could not be
-  initialized". So an app with `Vulkan: true` runs qemu unsandboxed, and `zc validate` warns
-  about it. The guest gains GPU Vulkan; the host process loses its syscall filter. That is
-  the caller's trade to make, which is why it is off by default.
+Every PipeWire grant uses `common/adapters/audio.Prepare` in a detached holder.
+The complete directional request travels over bounded inherited pipes. The
+holder reports readiness, private endpoint names and its private socket before
+QEMU starts. QEMU receives only these endpoints and `PIPEWIRE_REMOTE` for that
+socket; naked named-host routing is never treated as isolation.
 
-Measured on a host with the proprietary NVIDIA driver, rendering real frames rather than
-just enumerating a device:
+Default and named PipeWire selections are additive. Monitor is a separate capture
+endpoint. ALSA PCM/control selections use the shared plan and must be real kernel
+ALSA character devices at launch. Planning only converts their paths to hw:C,D.
+Microphone/monitor codecs disable host output voices; playback disables host input.
 
-| | Renderer the guest reports | Benchmark |
-| --- | --- | --- |
-| Vulkan | `Virtio-GPU Venus (NVIDIA GeForce RTX 5080)` | vkmark **2243** (2268 fps) |
-| OpenGL | `virgl (NVIDIA GeForce RTX 5080/PCIe/SSE2)` | glmark2 **3947** |
+The supervisor owns the holder lifeline. Startup failure, guest exit and explicit
+stop close it; holder shutdown calls Session.Close. Lost policy, heartbeat or
+holder process revokes audio and is reported in status/logs. Audio failure does
+not force-kill the guest or discard its storage. The shared WirePlumber policy
+must be installed by the host owner; this runner never modifies host audio services.
 
-The control that makes those numbers mean something: the same OpenGL benchmark against a
-software renderer scores **931**, so the accelerated path is about 4x faster on this
-workload and far more on anything heavier.
+## Supervision and lifecycle
 
-Neither `max_hostmem` nor a shared `memory-backend-memfd` turned out to be necessary; the
-working set is `venus=on,blob=on,hostmem=8G` plus the two points above.
+The detached supervisor receives the complete launch snapshot over private pipes,
+confirms guest/QMP readiness, then waits for launcher acknowledgement. Restarting
+revalidates the authored snapshot, disk pin, manifest and current host capabilities.
 
-## Try it
+Initial supervisor readiness has a fixed 10-minute preparation budget
+(`app.DefaultPreparationTimeout`) covering DNS lookups, base verification,
+dependencies, disks, TPM, audio and QEMU startup. Internal callers/tests can set
+`Service.PreparationTimeout`; zero uses the default and negative values fail.
+This is separate from 30-second IPC message/acknowledgement bounds and the cleanup
+grace period. Timeout closes the launcher lifeline and rolls back unacknowledged
+startup; incoming status bytes never extend the preparation deadline.
 
-```sh
-make -C virtualization/runner demo
-```
+Autorestart handles unexpected nonzero QEMU exits with 1, 2, 4, 8 and 16 second
+backoffs, at most five retries per burst. Five minutes of stable execution resets
+the burst. Clean QEMU exit, explicit stop, preparation failure and uncertain
+cleanup do not restart. This is process supervision, not guest OS/application health.
+Generation-specific stop intent is persisted before waiting for a startup lock,
+so manual stop also cancels pending restart. Reset refuses a live supervisor.
 
-Downloads a Fedora Cloud image once (~600 MB), verifies it against the digest Fedora
-publishes - refusing to boot if it does not match - authors a demo VM app with an
-accelerated display, and starts it. A qemu window opens on your compositor. To check the
-display path is really accelerated rather than falling back to software:
+Terminal opens the configured host terminal and serial session. KeepAlive uses
+`-no-shutdown` to retain QEMU after guest shutdown. Background graphical windows
+are refused: embedded GTK closure terminates QEMU, and a detachable frontend is
+not implemented. Serial Terminal plus Background retains the guest after closing
+the terminal. Guest attached commands, entrypoints/environments, filesystem/bus
+integration and exact UID/GID provisioning remain explicit errors.
 
-```sh
-ssh -p 2222 -o StrictHostKeyChecking=no zinc@127.0.0.1 glxinfo -B
-```
+## Planning, raw flags and installation
 
-Look for `virgl` or `virtio_gpu` in the renderer line; `llvmpipe` means the guest fell back
-to software rendering.
+Plan performs no audio connection, helper startup, device opening or state writes.
+It prints placeholder private audio endpoints and omits raw argument values,
+which can contain secrets. Domain rules may query explicitly configured DNS.
+The printed managed plan is not a shell replacement for launch-time preparation.
 
-## Build
+RunnerFlags append argv directly to normal QEMU; CreatorFlags append only to
+installer QEMU (`zvr install --app guest` can supply hardware defaults/flags).
+Each value is one argument, never shell-evaluated. Both warn before execution:
+raw arguments can override containment, disks and lifecycle controls.
 
-```sh
-make build        # reproducible static build -> ./bin/zvr
-make check        # gofmt + vet + test in the pinned container
-make repro        # prove the build is byte-identical
-```
+Installation requires --resume to write an existing target. The completed disk
+pin is printed for runtime options. Installed NVRAM is not covered by the disk
+hash; Secure Boot refuses untrusted adoption. TPM-sealed state is not cloned
+automatically. A disk alone is not a complete machine backup.
 
-Running guests needs `qemu-system-x86_64`, `qemu-img` and `xorriso` on the host, plus
-`/dev/kvm`.
+## Checks
 
-### The driver ISO is optional
-
-`windows-demo` fetches the virtio-win driver ISO (~790 MB), but **a Windows install does not
-need it**: Setup boots from the Windows media and installs onto the AHCI disk that
-`Devices: Compatible` provides. It matters afterwards: switching the installed guest to a
-virtio disk and network is a worthwhile speed win, and its display driver is what lifts the
-guest off a fixed 1824x1080 framebuffer. Both can be done any time - see below.
-
-So a slow or failed download never blocks an install - the target says so and carries on
-with just the Windows media.
-
-### Giving an installed guest its drivers
-
-An installed Windows guest with no display driver paints at most 1824x1080 and cannot be told
-about a new mode, so its window scales rather than resizes. The drivers that fix that (and
-that make the disk and network fast) are on the virtio-win disc and can only be staged from
-inside Windows, by a user holding an administrator token. So Zinc writes the guest a script
-instead of writing the reader instructions.
-
-Attach the driver disc:
-
-```sh
-zc new mywin --vm ... --display Compatible --resolution 1824x1080 \
-    --media ~/.local/share/zinc/images/virtio-win.iso
-zvr run mywin
-```
-
-Inside Windows, open the small CD drive (volume label `cidata`) and run **`zinc-setup.cmd`**.
-It elevates itself, finds the driver disc by its contents rather than by a drive letter that
-depends on what else is attached, and stages the display, disk and network drivers with
-`pnputil`. Nothing it does changes the running machine, so it is safe to run twice.
-
-That script is generated per app by `zvr` and lands on the same disc a Linux guest gets its
-cloud-init from - a guest on `Devices: Compatible` has never heard of cloud-init, so the disc
-carries what that guest can actually read.
-
-Then shut the guest down and re-author it:
-
-- `--display Window` and no `--resolution` - the machine gets a `virtio-gpu-pci`
-  (`PCI\VEN_1AF4&DEV_1050`, the ID `viogpudo.inf` claims), Windows binds the staged driver,
-  and the desktop becomes a real driven display that resizes with the window.
-- `--devices Virtio` - a virtio disk and NIC. Only after `viostor` is staged: without it
-  Windows cannot see its own boot disk and stops with `INACCESSIBLE_BOOT_DEVICE`.
-
-Re-authoring in the other order is what the launch-time warning about a virtio display on a
-compatible guest is there to catch.
-
-`make check-virtio-win` verifies the ISO on disk, and it does more than check that the file
-opens. An interrupted-and-resumed transfer can corrupt the middle of the image while leaving
-its ISO metadata perfectly readable: the volume mounts, the directory listing looks right,
-and a driver inside is silently garbage. The check therefore extracts two drivers Windows
-would actually load and confirms they are real Windows binaries. `windows-demo` runs it
-automatically and drops a damaged image rather than attaching it.
+`make check` uses pinned Podman tooling. During migration use a temporary workspace
+against canonical common code instead of stale vendors. `../e2e` contains a real
+QEMU offline lifecycle smoke test and a separately gated provisioned-network suite.

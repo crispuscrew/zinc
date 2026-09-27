@@ -1,34 +1,35 @@
-# Zinc app definition (schema v3). Copy this as a starting point for a new
-# container app; see firefox-broken.yaml for what Validate rejects.
-SchemaVersion: 3
-Type: ZincContainer          # container app (VM support: ZincVirtualization, later)
+# Offline browser example. See ../README.md for runtime prerequisites.
+SchemaVersion: 4
+Type: ZincContainer
 
-AppNameID: firefox           # also the container name; [a-z0-9._-], start alphanumeric
-Icon: firefox
-Description: Web browser
+AppNameID: firefox
+LauncherMeta:
+  Icon: firefox
+  Description: Offline web browser
+  Group: Web
 
 ImageMeta:
-  # Base image pinned by digest (third-party, section 5.5). Install builds a derived
-  # image: FROM Image + one RUN per entry (section 5.5, section 9.1).
+  # A derived build joins Install entries in one RUN layer.
   Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
   Install:
     - apk add --no-cache firefox font-dejavu
+    # Match this UID to the launching user when adapting the example.
+    - adduser -D -u 1000 app
 
 StartConditions:
   Entrypoint: firefox        # process to run; empty = image default
 
-# Locked down by default (fail-closed):
 DisplayMeta:
-  DisableSecurityContext: false   # false = wp_security_context_v1 enforced (restricted)
-  DisableGpuAccess: true          # no GPU passthrough
+  RequireSecurityContext: true    # refuse compositors without the protocol
+  DisableGpuAccess: true
 
 NetworkMeta:
-  NetworkLists: []                # no egress; add a NetworkList to allow-list CIDRs/ports
+  Interfaces: []                 # no NIC; networked apps require provisioning
 
 InternalUserMeta:
   UseNonRootUser: true            # run as a non-root user inside the container
   NonRootUserName: app
-  KeepUserID: false
+  KeepUserID: true               # app UID must map to the mode-0600 broker socket owner
 
 ResourcesMeta:
   MaxCPUCores: 2                  # fractional allowed, e.g. 0.5
@@ -36,21 +37,11 @@ ResourcesMeta:
   PIDsLimit: 512                  # fork-bomb guard
 
 AudioMeta:
-  Playback: default               # the session's own output device
-  # A browser plays sound; it has no business listening. Both directions are stated, so a
-  # reviewer sees that the microphone was considered and refused rather than forgotten.
-  #
-  # `default` is the session's device, reached through PipeWire. To grant exactly one
-  # microphone and nothing else, name its ALSA nodes instead - that form is enforced by the
-  # kernel rather than by PipeWire:
-  #   Microphone:
-  #     - /dev/snd/controlC0
-  #     - /dev/snd/pcmC0D0c
-  Microphone: none
-  # Recording what OTHER apps are playing is a third capability, and the socket grants it
-  # today whatever this says. Declared so the config states the intent.
-  Monitor: none
+  # Requires opt-in deployment of the Zinc WirePlumber policy. Native PipeWire
+  # clients only; a PulseAudio-only browser needs a separately restricted frontend.
+  Playback:
+    PipeWireDefault: true
+  Microphone: {}
+  Monitor: {}
 
-HostTheme: true                  # share the host's theme
-
-Capabilities: []                 # extra --cap-add entries (none)
+HostTheme: true                  # curated bundle, only if provided by the desktop

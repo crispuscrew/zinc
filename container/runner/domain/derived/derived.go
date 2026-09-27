@@ -21,15 +21,12 @@ import (
 // without any extra on-disk state.
 const BuildLabel = "zinc.build"
 
-// HasInstall reports whether cfg builds a derived image (ImageMeta.Install has at
-// least one non-blank step). When false the app runs straight from ImageMeta.Image
-// and no build ever happens.
+// HasInstall reports whether install steps or raw build options require a derived image.
 func HasInstall(cfg schema.AppConfig) bool {
-	return len(installSteps(cfg.ImageMeta.Install)) > 0
+	return len(installSteps(cfg.ImageMeta.Install)) > 0 || len(cfg.CreatorFlags) > 0
 }
 
-// RunImage is the image a container actually runs from: the locally built derived
-// image when ImageMeta.Install is set, otherwise ImageMeta.Image itself.
+// RunImage selects the derived build when requested, otherwise the pinned base.
 func RunImage(cfg schema.AppConfig) string {
 	if HasInstall(cfg) {
 		return DerivedImageRef(cfg.AppNameID)
@@ -43,18 +40,24 @@ func DerivedImageRef(name string) string {
 	return "zinc/app-" + name + ":local"
 }
 
-// DerivedContainerfile renders the pinned base plus a single RUN layer. The install line runs through
-// the image's own /bin/sh, so a package-manager invocation works as typed. Fed to `podman build` on
-// stdin, so no temp file and no host build context.
+// DerivedContainerfile renders the pinned base plus an optional RUN layer, fed on stdin.
 func DerivedContainerfile(cfg schema.AppConfig) string {
-	return "FROM " + cfg.ImageMeta.Image + "\nRUN " + installScript(cfg.ImageMeta.Install) + "\n"
+	text := "FROM " + cfg.ImageMeta.Image + "\n"
+	if script := installScript(cfg.ImageMeta.Install); script != "" {
+		text += "RUN " + script + "\n"
+	}
+	return text
 }
 
 // BuildFingerprint identifies a derived image's inputs and is written as the BuildLabel value. A
-// launch rebuilds only when the live image's label differs, so a re-pinned base or edited install
-// takes effect on the next run.
+// launch rebuilds when the base, install script or raw build argv changes.
 func BuildFingerprint(cfg schema.AppConfig) string {
-	sum := sha256.Sum256([]byte(cfg.ImageMeta.Image + "\n" + installScript(cfg.ImageMeta.Install)))
+	// NUL cannot occur in argv; delimiters retain argument boundaries and order.
+	inputs := cfg.ImageMeta.Image + "\n" + installScript(cfg.ImageMeta.Install)
+	for _, flag := range cfg.CreatorFlags {
+		inputs += "\x00" + flag
+	}
+	sum := sha256.Sum256([]byte(inputs))
 	return hex.EncodeToString(sum[:])
 }
 

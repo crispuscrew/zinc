@@ -3,7 +3,7 @@
 // dev-only: the containerized make targets build from each module's ./vendor (this
 // file is outside the per-tool build context, and `make vendor` runs with
 // GOWORK=off), so reproducible builds never depend on it.
-go 1.24.2
+go 1.26.0
 
 use (
 	./common

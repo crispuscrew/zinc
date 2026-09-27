@@ -15,19 +15,10 @@ import (
 	"github.com/crispuscrew/zinc/container/runner/domain/paths"
 )
 
-// countersNote is said in every readout, in both forms, because the number invites exactly
-// one wrong reading and nothing else in the output prevents it.
-const countersNote = "counters live in the pod's netns and are created with it: these are since this launch, not lifetime totals"
+const countersNote = "counters describe installed policy since this launch, not lifetime totals; endpoint returns require both policies before acceptance"
+const postureFiltered, postureIsolated = "filtered", "isolated"
+const netUsage = "usage: zcr net [app[@instance]] [--json]"
 
-// postureFiltered / postureIsolated are the two postures a running app can be in. Not "unfiltered":
-// an app with no NetworkLists gets --network none, the MOST restricted posture there is. What it
-// lacks is a netns of its own and therefore a ruleset.
-const (
-	postureFiltered = "filtered"
-	postureIsolated = "isolated"
-)
-
-// netEntry is one running app's network posture, addressed the way a person types it.
 type netEntry struct {
 	Address  string `json:"address"`
 	App      string `json:"app"`
@@ -36,32 +27,25 @@ type netEntry struct {
 	Netns    string `json:"netns,omitempty"`
 }
 
-// netReport is one app's counter readout: the same identity fields, plus what its ruleset
-// has seen.
 type netReport struct {
 	netEntry
 	Note     string                 `json:"note,omitempty"`
 	Counters []nftrules.RuleCounter `json:"counters"`
 }
 
-// cmdNet answers both questions a desktop shell asks about an app's network: which running apps have
-// a locked netns (no argument), and what one app's ruleset has counted (an argument). One verb
-// because the second is a drill-down into a row of the first, and the pair shares what is easy to get
-// wrong - resolving a runtime name back to an address, and not describing an isolated app as if it
-// had a ruleset.
 func cmdNet(svc app.Service, opt options.HostOptions, argv []string) error {
 	var name string
 	asJSON := false
-	for _, arg := range argv {
+	for _, argument := range argv {
 		switch {
-		case arg == "--json":
+		case argument == "--json":
 			asJSON = true
-		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown flag %q\n%s", arg, netUsage)
+		case strings.HasPrefix(argument, "-"):
+			return fmt.Errorf("unknown flag %q\n%s", argument, netUsage)
 		case name == "":
-			name = arg
+			name = argument
 		default:
-			return fmt.Errorf("unexpected argument %q\n%s", arg, netUsage)
+			return fmt.Errorf("unexpected argument %q\n%s", argument, netUsage)
 		}
 	}
 	if name == "" {
@@ -69,10 +53,6 @@ func cmdNet(svc app.Service, opt options.HostOptions, argv []string) error {
 	}
 	return netCounters(svc, opt, name, asJSON)
 }
-
-const netUsage = "usage: zcr net [app[@instance]] [--json]"
-
-// netList prints the network posture of every running Zinc app.
 func netList(svc app.Service, asJSON bool) error {
 	entries, err := netEntries(svc)
 	if err != nil {
@@ -85,33 +65,22 @@ func netList(svc app.Service, asJSON bool) error {
 	}
 	return printEntries(entries)
 }
-
 func printEntries(entries []netEntry) error {
 	if len(entries) == 0 {
-		return nil // same as `zcr ps`: nothing running is not an error and not a message
+		return nil
 	}
 	table := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(table, "ADDRESS\tPOSTURE\tNETNS")
 	for _, entry := range entries {
-		netns := entry.Netns
-		if netns == "" {
-			netns = "-"
-		}
-		fmt.Fprintf(table, "%s\t%s\t%s\n", entry.Address, entry.Posture, netns)
+		fmt.Fprintf(table, "%s\t%s\t%s\n", entry.Address, entry.Posture, entry.Netns)
 	}
 	if err := table.Flush(); err != nil {
 		return err
 	}
-	// The legend is not decoration. Which of the two words means "locked down" is the whole
-	// security content of this table, and it is not guessable from the words alone.
-	fmt.Println()
-	fmt.Println("filtered: has NetworkLists, so a pod netns of its own with the nft ruleset locked in it")
-	fmt.Println("          (zcr net <app> reads its counters)")
-	fmt.Println("isolated: no NetworkLists, so --network none - it reaches only its own localhost,")
-	fmt.Println("          and has no netns of its own and no ruleset to count")
+	fmt.Println("filtered: provisioned namespace with ordered default-deny policy (zcr net <app> reads counters)")
+	fmt.Println("isolated: no Interfaces, --network none; only its own localhost")
 	return nil
 }
-
 func netCounters(svc app.Service, opt options.HostOptions, name string, asJSON bool) error {
 	cfg, err := loadApp(svc, name)
 	if err != nil {
@@ -122,23 +91,24 @@ func netCounters(svc app.Service, opt options.HostOptions, name string, asJSON b
 		return err
 	}
 	if strings.Contains(name, "/") || strings.HasSuffix(name, ".yaml") {
-		// The argument was a file, not an address (loadApp accepts both). A path is not an
-		// identity, so report the one the app carries.
 		addr = paths.Address{App: cfg.AppNameID}
 	}
-	// An empty list, never a null: a consumer iterating the counters of an isolated app
-	// should find none, not have to handle the absence of the field as a third case.
-	report := netReport{
-		netEntry: entryFor(addr, cfg.AppNameID, len(cfg.NetworkMeta.NetworkLists) > 0),
-		Counters: []nftrules.RuleCounter{},
+	attached, err := observedFiltered(svc, cfg.AppNameID)
+	if err != nil {
+		return err
+	}
+	if attached != (len(cfg.NetworkMeta.Interfaces) > 0) {
+		return fmt.Errorf("running attachment differs from configuration; inspect the installed policy before reporting posture")
 	}
 	raw, filtered, err := svc.NetCounters(cfg, opt)
 	if err != nil {
 		return err
 	}
+	report := netReport{netEntry: entryFor(addr, cfg.AppNameID, filtered), Counters: []nftrules.RuleCounter{}}
 	if filtered {
-		report.Note = countersNote // said only where there are numbers to misread
-		if report.Counters, err = nftrules.ParseCounters([]byte(raw)); err != nil {
+		report.Note = countersNote
+		report.Counters, err = nftrules.ParseCounters([]byte(raw))
+		if err != nil {
 			return fmt.Errorf("%s: %w", cfg.AppNameID, err)
 		}
 	}
@@ -147,49 +117,27 @@ func netCounters(svc app.Service, opt options.HostOptions, name string, asJSON b
 	}
 	return printReport(report)
 }
-
 func printReport(report netReport) error {
-	fmt.Printf("address: %s\n", report.Address)
-	fmt.Printf("posture: %s\n", report.Posture)
+	fmt.Printf("address: %s\nposture: %s\n", report.Address, report.Posture)
 	if report.Posture != postureFiltered {
-		fmt.Println("this app declares no NetworkLists, so it runs with --network none: no netns of")
-		fmt.Println("its own, no ruleset, and nothing to count.")
+		fmt.Println("no Interfaces: --network none, no external NIC and no firewall counters")
 		return nil
 	}
-	fmt.Printf("netns:   %s\n", report.Netns)
-	fmt.Printf("note:    %s\n", countersNote)
-	fmt.Println()
+	fmt.Printf("netns: %s\nnote: %s\n", report.Netns, countersNote)
 	table := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(table, "CHAIN\tVERDICT\tRULE\tPACKETS\tBYTES")
 	for _, counter := range report.Counters {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\n",
-			counter.Chain, counter.Verdict, counter.Label, counter.Packets, counter.Bytes)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\n", counter.Chain, counter.Verdict, counter.Label, counter.Packets, counter.Bytes)
 	}
 	return table.Flush()
 }
-
-// observedFiltered asks the running system what an app is attached to, rather than re-reading
-// what its config asked for.
-//
-// This is an attestation surface: `zcr net` is what a desktop reads to decide whether an app is
-// contained. Deriving it from the config meant editing a YAML changed what was reported about an
-// app that was already running - the file could say "no NetworkLists" while the app kept the
-// filtered netns its launch built. A pod is what the netns and its ruleset live in, so pod
-// membership is the observation that answers it.
 func observedFiltered(svc app.Service, runtime string) (bool, error) {
 	pod, err := svc.PodOf(runtime)
 	if err != nil {
-		// Unknown is not "isolated". Reporting a weaker posture than an app may actually have is
-		// the answer a reader would act on, so this refuses rather than guesses.
-		return false, fmt.Errorf("%s: could not read what it is attached to: %w", runtime, err)
+		return false, fmt.Errorf("%s: could not read attachment: %w", runtime, err)
 	}
 	return pod != "", nil
 }
-
-// netEntries lists the posture of every running app, sorted by address. It enumerates what is RUNNING
-// rather than what is defined, because a netns exists only while its pod does. Anything running that
-// is not a defined app is skipped: `podman ps` also holds Zinc's own proxies and whatever else the
-// user runs.
 func netEntries(svc app.Service) ([]netEntry, error) {
 	defined, err := svc.List()
 	if err != nil {
@@ -199,49 +147,36 @@ func netEntries(svc app.Service) ([]netEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(running))
-	for name, up := range running {
-		if up {
+	var names []string
+	for name, alive := range running {
+		if alive {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
-
 	entries := []netEntry{}
 	for _, name := range names {
-		addr, ok := addressOf(name, defined)
-		if !ok {
+		addr, known := addressOf(name, defined)
+		if !known {
 			continue
 		}
-		cfg, err := svc.LoadResolved(addr.App)
+		filtered, err := observedFiltered(svc, name)
 		if err != nil {
-			// Loud rather than skipped. An app missing from this list reads as "not running",
-			// and the answer to "is anything unfiltered" must not be shortened by a file that
-			// happens to be unreadable.
-			return nil, fmt.Errorf("%s is running but its definition could not be read: %w", addr, err)
+			return nil, err
 		}
-		entries = append(entries, entryFor(addr, addr.Runtime(), len(cfg.NetworkMeta.NetworkLists) > 0))
+		entries = append(entries, entryFor(addr, name, filtered))
 	}
 	return entries, nil
 }
-
-// entryFor builds one row. The netns is named, not probed: a filtered app's container joins
-// its pod to get a network at all, so a running filtered app has that pod by construction.
 func entryFor(addr paths.Address, runtime string, filtered bool) netEntry {
 	entry := netEntry{Address: addr.String(), App: addr.App, Instance: addr.Instance, Posture: postureIsolated}
 	if filtered {
-		entry.Posture = postureFiltered
-		entry.Netns = netenforce.PodName(runtime)
+		entry.Posture, entry.Netns = postureFiltered, netenforce.PodName(runtime)
 	}
 	return entry
 }
-
-// addressOf is the inverse of paths.Address.Runtime, and it needs the defined set: the runtime form
-// joins app and instance with a dot and an app name may contain one, so "media.server" is either an
-// app or an instance of one. An exact match wins; otherwise the part before the LAST dot must be a
-// defined app, since an instance name may not contain a dot.
 func addressOf(runtime string, defined []string) (paths.Address, bool) {
-	known := make(map[string]bool, len(defined))
+	known := map[string]bool{}
 	for _, name := range defined {
 		known[name] = true
 	}
@@ -258,9 +193,6 @@ func addressOf(runtime string, defined []string) (paths.Address, bool) {
 	}
 	return paths.Address{App: appName, Instance: instance}, true
 }
-
-// writeJSON prints one value as indented JSON - the machine-readable half, for a desktop
-// shell scripting against this rather than reading it.
 func writeJSON(value any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")

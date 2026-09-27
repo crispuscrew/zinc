@@ -1,0 +1,42 @@
+# Documentation addresses are placeholders. Provision matching topology and DNS.
+SchemaVersion: 4
+Type: ZincContainer
+AppNameID: domain-web
+LauncherMeta:
+  Description: Launch-snapshot destination IP policy with explicit DNS access
+ImageMeta:
+  Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+StartConditions:
+  Entrypoint: /bin/sh
+  Terminal: true
+DisplayMeta:
+  DisableGpuAccess: true
+NetworkMeta:
+  Interfaces:
+    - ID: primary
+  RulesByPriority:
+    # This example assumes the provisioner registers 192.0.2.53 as a host IP.
+    - From: {Type: Self, Interface: primary}
+      To:
+        Type: Host
+        Filter: {IPv4CIDR: [192.0.2.53/32], Ports: [53]}
+      Protocols: [UDP, TCP]
+    # A deny match does not change the default-deny policy.
+    - From: {Type: Self}
+      To:
+        Type: Internet
+        Filter: {Ports: [80]}
+      Protocols: [TCP]
+      AllowAllExcept: true
+    - From: {Type: Self}
+      To:
+        Type: Internet
+        Filter: {Ports: [443]}
+      Domains: [example.com]
+      Protocols: [TCP]
+  DNS:
+    ResolversByPriority:
+      - Protocol: HTTPS
+        Endpoint: resolver.example:443
+        Path: /dns-query
+        BootstrapIPs: [192.0.2.54]

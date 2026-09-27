@@ -1,83 +1,65 @@
 package schema
 
 import (
+	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
-// The three forms have to survive a round trip, because zc re-writes a config every time it
-// saves one. The earlier shape for this field failed exactly here: "not granted" was encoded
-// as an absence, a nil slice marshalled as `[]`, and `[]` decoded back as "granted the
-// session default" - so an ordinary save silently handed every app a microphone.
-func TestAudioDevice_RoundTripsAllThreeForms(t *testing.T) {
-	for _, testCase := range []struct {
-		doc  string
-		want AudioDevice
-	}{
-		{"Playback: none", AudioDevice{}},
-		{"Playback: default", AudioDevice{Default: true}},
-		{"Playback: [/dev/snd/controlC0, /dev/snd/pcmC0D0c]",
-			AudioDevice{Devices: []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0c"}}},
+func TestAudioDeviceStructuredRoundTrip(t *testing.T) {
+	for _, device := range []AudioDevice{
+		{}, {PipeWireDefault: true}, {PipeWireDevices: []string{"speaker"}},
+		{ALSADevices: []string{"/dev/snd/pcmC0D0c"}},
+		{PipeWireDefault: true, PipeWireDevices: []string{"speaker"}, ALSADevices: []string{"/dev/snd/controlC0"}},
 	} {
-		t.Run(testCase.doc, func(t *testing.T) {
-			var first AudioMeta
-			if err := yaml.Unmarshal([]byte(testCase.doc), &first); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if first.Playback.Default != testCase.want.Default ||
-				strings.Join(first.Playback.Devices, ",") != strings.Join(testCase.want.Devices, ",") {
-				t.Fatalf("decoded %+v, want %+v", first.Playback, testCase.want)
-			}
-			out, err := yaml.Marshal(first)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var second AudioMeta
-			if err := yaml.Unmarshal(out, &second); err != nil {
-				t.Fatalf("re-decoding what we wrote failed: %v\n%s", err, out)
-			}
-			if second.Playback.Default != first.Playback.Default ||
-				strings.Join(second.Playback.Devices, ",") != strings.Join(first.Playback.Devices, ",") {
-				t.Fatalf("round trip changed the grant: %+v -> %+v via %q",
-					first.Playback, second.Playback, out)
-			}
-		})
+		encoded, err := yaml.Marshal(device)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), "PipeWireDefault:") || !strings.Contains(string(encoded), "ALSADevices:") {
+			t.Fatalf("audio was not serialized as a structured mapping: %s", encoded)
+		}
+		var decoded AudioDevice
+		decoder := yaml.NewDecoder(bytes.NewReader(encoded))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.PipeWireDefault != device.PipeWireDefault ||
+			strings.Join(decoded.PipeWireDevices, ",") != strings.Join(device.PipeWireDevices, ",") ||
+			strings.Join(decoded.ALSADevices, ",") != strings.Join(device.ALSADevices, ",") {
+			t.Fatalf("round trip changed grants: %+v -> %+v", device, decoded)
+		}
+		if device.IsZero() != reflect.DeepEqual(device, AudioDevice{}) {
+			t.Fatalf("wrong IsZero result for %+v", device)
+		}
 	}
 }
 
-// An absent field means the same as an explicit `none`, so a hand-written config that omits a
-// direction is not granted it.
-func TestAudioDevice_AbsentIsNotGranted(t *testing.T) {
+func TestAudioDeviceStrictDecode(t *testing.T) {
+	for _, input := range []string{"default", "none", "[/dev/snd/controlC0]", "{PipeWireDefualt: true}", "{Devices: []}"} {
+		var device AudioDevice
+		decoder := yaml.NewDecoder(strings.NewReader(input))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&device); err == nil {
+			t.Fatalf("strict decode accepted %q without migration", input)
+		}
+	}
 	var audio AudioMeta
-	if err := yaml.Unmarshal([]byte("{}"), &audio); err != nil {
+	if err := yaml.Unmarshal([]byte("Playback: {}\nMicrophone: null\n"), &audio); err != nil {
 		t.Fatal(err)
 	}
-	if !audio.Playback.IsZero() || !audio.Microphone.IsZero() {
-		t.Fatalf("an absent AudioMeta granted something: %+v", audio)
+	if !audio.Playback.IsZero() || !audio.Microphone.IsZero() || !audio.Monitor.IsZero() {
+		t.Fatalf("empty audio granted access: %+v", audio)
 	}
 }
 
-// A save must never turn "not granted" into a grant. This is the property the previous shape
-// broke, so it gets its own test rather than being implied by the round-trip table.
-func TestAudioDevice_NotGrantedIsWrittenExplicitly(t *testing.T) {
-	out, err := yaml.Marshal(AudioMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(out); !strings.Contains(got, "Playback: none") || !strings.Contains(got, "Microphone: none") {
-		t.Fatalf("a denied grant should be written out as none, got:\n%s", got)
-	}
-}
-
-// A typo has to be an error. Silently reading an unrecognised word as "not granted" would be
-// the safe direction for the app and the wrong one for the person, who would be told nothing
-// while their microphone setting did nothing.
-func TestAudioDevice_UnknownScalarIsRefused(t *testing.T) {
-	var audio AudioMeta
-	err := yaml.Unmarshal([]byte("Microphone: yes"), &audio)
-	if err == nil || !strings.Contains(err.Error(), "want none") {
-		t.Fatalf("want a refusal naming the accepted forms, got: %v", err)
+func TestDBusIsZero(t *testing.T) {
+	if !(DBusMeta{}).IsZero() || (DBusMeta{Talk: []string{"org.example.Service"}}).IsZero() ||
+		(DBusMeta{Own: []string{"org.example.App"}}).IsZero() {
+		t.Fatal("IsZero lost a bus grant")
 	}
 }

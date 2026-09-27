@@ -1,13 +1,18 @@
-SchemaVersion: 3
+SchemaVersion: 4
 Type: ZincContainer
 AppNameID: consumer
-Description: tier-2 scenario - links to the producer to reach its published port
+LauncherMeta:
+  Description: provisioned app network - probe the producer's allowed and denied ports
 ImageMeta:
   Image: localhost/zinc/e2e-app:local
 StartConditions:
   Entrypoint: /probe.sh
+  EntrypointEnv:
+    PRODUCER_ADDRESS: 10.203.0.2
 NetworkMeta:
-  NetworkLists:
-    # A sibling link: naming another app (no Host, no Ingress) attaches this app to the
-    # producer's private bridge. Only the producer's published ports are reachable.
-    - AppName: producer
+  Interfaces:
+    - ID: link
+  RulesByPriority:
+    - From: {Type: Self, Interface: link}
+      To: {Type: App, AppNameID: producer, Interface: link}
+      Protocols: [TCP]

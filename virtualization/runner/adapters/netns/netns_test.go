@@ -1,137 +1,108 @@
 package netns
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
+	provision "github.com/crispuscrew/zinc/common/adapters/network"
+	"github.com/crispuscrew/zinc/common/domain/network"
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-func vmWith(lists ...schema.NetworkList) schema.AppConfig {
-	return schema.AppConfig{
-		AppNameID:   "guest",
-		Type:        schema.ZincVirtualization,
-		NetworkMeta: schema.NetworkMeta{NetworkLists: lists},
+func vmFixture() (schema.AppConfig, provision.Manifest, []string) {
+	cfg := schema.AppConfig{Type: schema.ZincVirtualization, AppNameID: "guest", NetworkMeta: schema.NetworkMeta{
+		Interfaces:      []schema.NetworkInterface{{ID: "main", MacAddress: "02:00:00:00:00:01"}},
+		RulesByPriority: []schema.NetworkRule{{From: schema.NetworkPeer{Type: schema.NetworkPeerSelf}, To: schema.NetworkPeer{Type: schema.NetworkPeerAny}}},
+	}}
+	manifest := provision.Manifest{Version: 1, AppNameID: "guest", Generation: "launch-1", NetworkNamespace: "/run/zinc/guest.net", UserNamespace: "/run/zinc/guest.user",
+		NetworkInode: 123, UserInode: 456, PacketPreserving: true, Exclusive: true, StaticNeighbors: true, CompleteInventory: true, Policy: cfg.NetworkMeta,
+		Topology: network.Topology{Mode: network.VirtualMachine, Interfaces: []network.Attachment{{InterfaceID: "main", Device: "ztap0", MAC: "02:00:00:00:00:01", Addresses: []string{"10.0.0.2"}}}},
+	}
+	argv := []string{"qemu-system-x86_64", "-netdev", "tap,id=net0,ifname=ztap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=net0,mac=02:00:00:00:00:01"}
+	return cfg, manifest, argv
+}
+
+func TestEmptyInterfacesRequireNoNIC(t *testing.T) {
+	argv := []string{"qemu-system-x86_64", "-nodefaults"}
+	command, ruleset, err := Command(schema.AppConfig{}, argv, "")
+	if err != nil || ruleset != "" || !reflect.DeepEqual(command, argv) {
+		t.Fatal("isolated command changed")
+	}
+	for _, flag := range []string{"-netdev", "-nic", "-net", "--netdev", "--nic=user", "-netdev=user,id=net0"} {
+		if _, _, err := Command(schema.AppConfig{}, append(argv, flag, "user"), ""); err == nil {
+			t.Fatal("empty interfaces accepted NIC")
+		}
+	}
+	if _, _, err := Command(schema.AppConfig{}, append(argv, "-device", "virtio-net-pci"), ""); err == nil {
+		t.Fatal("empty interfaces accepted an implicit NIC")
 	}
 }
 
-// An app that declares no lists runs exactly as it did before: no namespace, no wrapper, no
-// change to the argv qemu is given.
-func TestCommand_UnfilteredAppIsUntouched(t *testing.T) {
-	qemu := []string{"qemu-system-x86_64", "-name", "guest"}
-	argv, stdin, err := Command(vmWith(), qemu, "")
+func TestCommandLoadsGuestPacketPolicyBeforeStartup(t *testing.T) {
+	cfg, manifest, argv := vmFixture()
+	command, ruleset, err := CommandResolved(cfg, argv, "", manifest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stdin != "" {
-		t.Errorf("no lists means no ruleset, got: %q", stdin)
+	if command[0] != Binary {
+		t.Fatal("wrong namespace entry program")
 	}
-	if strings.Join(argv, " ") != strings.Join(qemu, " ") {
-		t.Errorf("the argv should be untouched, got: %v", argv)
+	script := command[len(command)-1]
+	if strings.Index(script, "nft -f -") > strings.Index(script, "'qemu-system-x86_64'") || !strings.HasPrefix(script, "set -eu") || !strings.Contains(script, "trap ") {
+		t.Fatal("missing startup/rollback ordering")
+	}
+	if !strings.Contains(ruleset, "jump owner_forward") || !strings.Contains(ruleset, "table netdev zinc_link") {
+		t.Fatal("filters sockets instead of guest packets")
+	}
+	if strings.Contains(script, "mount --bind") {
+		t.Fatal("TAP guest must not modify host resolv.conf")
 	}
 }
 
-// The ordering is the guarantee: the ruleset loads and only then does qemu exec, so a guest
-// never exists on an unfiltered network. `set -e` is what makes a ruleset that will not load
-// stop the launch rather than boot the guest into the namespace anyway.
-func TestCommand_LoadsTheRulesetBeforeQemuExecs(t *testing.T) {
-	argv, stdin, err := Command(vmWith(schema.NetworkList{
-		IPv4CIDR: []string{"1.1.1.1/32"},
-		Ports:    []int{443},
-	}), []string{"qemu-system-x86_64", "-name", "guest"}, "")
+func TestCommandQuotesEveryArgument(t *testing.T) {
+	cfg, manifest, argv := vmFixture()
+	argv = append(argv, "-drive", "file=/home/a b/owner's disk.qcow2")
+	command, _, err := CommandResolved(cfg, argv, "", manifest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// argv[0] is what the caller execs, so it has to be the program and not its first flag.
-	if argv[0] != Binary {
-		t.Fatalf("argv[0] must be %q or nothing runs, got: %v", Binary, argv)
-	}
-	if argv[1] != "--config-net" {
-		t.Errorf("the guest must run in a namespace of its own, got: %v", argv)
-	}
-	script := argv[len(argv)-1]
-	nft := strings.Index(script, "nft -f -")
-	exec := strings.Index(script, "exec ")
-	switch {
-	case nft < 0:
-		t.Fatalf("the ruleset is never loaded: %s", script)
-	case exec < 0:
-		t.Fatalf("qemu is never started: %s", script)
-	case nft > exec:
-		t.Fatalf("qemu starts before the ruleset loads, which is the window this closes: %s", script)
-	}
-	if !strings.HasPrefix(script, "set -e") {
-		t.Errorf("a ruleset that fails to load must stop the launch: %s", script)
-	}
-	if !strings.Contains(stdin, "policy drop;") {
-		t.Errorf("the ruleset should be the rendered one, got: %s", stdin)
+	if !strings.Contains(command[len(command)-1], `'file=/home/a b/owner'\''s disk.qcow2'`) {
+		t.Fatal("shell argv quote broken")
 	}
 }
 
-// A path with a space in it stays one argument through the shell that loads the ruleset.
-func TestCommand_QuotesTheQemuArgv(t *testing.T) {
-	argv, _, err := Command(vmWith(schema.NetworkList{IPv4CIDR: []string{"1.1.1.1/32"}}),
-		[]string{"qemu-system-x86_64", "-drive", "file=/home/a b/disk.qcow2"}, "")
-	if err != nil {
-		t.Fatal(err)
+func TestBackendIdentityCannotDrift(t *testing.T) {
+	cfg, manifest, original := vmFixture()
+	for _, backend := range []string{"user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22", "tap,id=net0,ifname=wrong,script=no,downscript=no", "tap,id=net0,ifname=ztap0,script=/tmp/unsafe,downscript=no"} {
+		argv := append([]string{}, original...)
+		argv[2] = backend
+		if _, _, err := CommandResolved(cfg, argv, "", manifest, nil); err == nil {
+			t.Fatalf("accepted %s", backend)
+		}
 	}
-	script := argv[len(argv)-1]
-	if !strings.Contains(script, `'file=/home/a b/disk.qcow2'`) {
-		t.Errorf("a path with a space must survive as one argument: %s", script)
+	argv := append([]string{}, original...)
+	argv[4] = "virtio-net-pci,netdev=net0,mac=02:00:00:00:00:ff"
+	if _, _, err := CommandResolved(cfg, argv, "", manifest, nil); err == nil {
+		t.Fatal("ignored MAC drift")
 	}
-}
-
-// qemu's own hostfwd binds inside the namespace now, where the host cannot reach it, so the
-// forward has to be made by the thing that owns the namespace boundary.
-func TestCommand_ForwardPortsArePublishedByTheNamespace(t *testing.T) {
-	cfg := vmWith(schema.NetworkList{IPv4CIDR: []string{"1.1.1.1/32"}})
-	cfg.VirtualizationMeta.ForwardPorts = []schema.PortForward{{HostPort: 2222, GuestPort: 22}}
-	argv, _, err := Command(cfg, []string{"qemu-system-x86_64"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "-t 2222") {
-		t.Errorf("the published port should be forwarded into the namespace: %v", argv)
+	if _, _, err := CommandResolved(cfg, original[:1], "", manifest, nil); err == nil {
+		t.Fatal("ignored absent attachments")
 	}
 }
 
-// DNSServers was enforced and never delivered: the ruleset permits DNS to the declared server,
-// but qemu's user networking takes its upstream resolver from /etc/resolv.conf, which the rules
-// then drop. Measured, with a whitelist guest that resolved nothing until this bind mount.
-func TestCommand_PointsQemusResolverAtTheDeclaredServers(t *testing.T) {
-	cfg := vmWith(schema.NetworkList{IPv4CIDR: []string{"1.1.1.1/32"}})
-	cfg.NetworkMeta.DNSServers = []string{"1.1.1.1"}
-
-	argv, _, err := Command(cfg, []string{"qemu-system-x86_64"}, "/run/zinc/guest.resolv.conf")
-	if err != nil {
-		t.Fatal(err)
+func TestNoAmbientDNSOrImplicitResolverMount(t *testing.T) {
+	cfg, manifest, argv := vmFixture()
+	cfg.NetworkMeta.DNS.ResolversByPriority = []schema.DNSResolver{{Protocol: schema.DNSTLS, Endpoint: "1.1.1.1"}}
+	manifest.Policy = cfg.NetworkMeta
+	if _, _, err := CommandResolved(cfg, argv, "resolver-file", manifest, nil); err == nil {
+		t.Fatal("TLS endpoint became plaintext resolver")
 	}
-	script := argv[len(argv)-1]
-	if !strings.Contains(script, "mount --bind '/run/zinc/guest.resolv.conf' /etc/resolv.conf") {
-		t.Errorf("the declared resolver must be bound over the namespace's own:\n%s", script)
-	}
-	// Before qemu, or qemu reads the host's resolver and the rules drop what it sends.
-	if strings.Index(script, "mount --bind") > strings.Index(script, "exec ") {
-		t.Errorf("the resolver must be bound before qemu execs:\n%s", script)
-	}
-	if ResolvConf(cfg) != "nameserver 1.1.1.1\n" {
-		t.Errorf("resolv.conf body = %q", ResolvConf(cfg))
-	}
-}
-
-// An app that declares no resolver keeps the namespace's own, so the wrapper stays a ruleset
-// and an exec, with nothing mounted.
-func TestCommand_NoDeclaredResolverMountsNothing(t *testing.T) {
-	cfg := vmWith(schema.NetworkList{IPv4CIDR: []string{"1.1.1.1/32"}})
-	argv, _, err := Command(cfg, []string{"qemu-system-x86_64"}, "/run/zinc/guest.resolv.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(argv[len(argv)-1], "mount") {
-		t.Errorf("nothing was declared, so nothing should be mounted:\n%s", argv[len(argv)-1])
+	manifest.DNSProxyAddresses, manifest.DNSConfigDigest = []string{"10.0.0.1"}, provision.DNSDigest(cfg.NetworkMeta.DNS)
+	if _, _, err := CommandResolved(cfg, argv, "resolver-file", manifest, nil); err == nil || !strings.Contains(err.Error(), "dns_control_socket") {
+		t.Fatalf("unverified proxy must not allow startup: %v", err)
 	}
 	if ResolvConf(cfg) != "" {
-		t.Errorf("no servers means no file, got %q", ResolvConf(cfg))
+		t.Fatal("TAP configuration wrote host resolver")
 	}
 }

@@ -1,7 +1,4 @@
-// Package ports declares the contracts between the runner's application core and the adapters. The
-// app layer depends only on these interfaces, so a mechanism can be swapped by writing a new
-// adapter - the motivating case being egress enforcement, where "not pasta" later is one more
-// adapter rather than a cross-cutting edit (docs section 5.3, section 13). No I/O here.
+// Package ports declares contracts between the application core and adapters.
 package ports
 
 import (
@@ -48,21 +45,14 @@ type Store interface {
 type Runtime interface {
 	AppRunArgs(cfg schema.AppConfig, opt options.HostOptions, netFlags []string) ([]string, error)
 	Exec(cmd Command) error // run one prepared command (pod create / nft / holder); capture output on failure
-	// Capture runs one prepared command and returns its standard output. Exec is the wrong
-	// tool for a command whose output IS the answer: it keeps the output only to put it in
-	// an error, so on success - the case that matters here - it is already gone.
+	// Capture returns stdout separately from diagnostics.
 	Capture(cmd Command) (string, error)
 	// StartApp starts the app container detached (Setsid), terminal-wrapped if
 	// StartConditions.Terminal. It returns once the process is forked, before `podman
 	// run` succeeds; onFail is invoked from the reaping goroutine if the app exits with
 	// an error, so a post-fork failure can tear down the prepared (still-filtered) netns.
 	StartApp(cfg schema.AppConfig, opt options.HostOptions, runArgs []string, onFail func()) error
-	OpenSession(app string, cmd []string, opt options.HostOptions, hold bool) error // blocking `exec -it` into a holder, in a terminal window (multiterminal); hold keeps the window open after cmd exits
-	// HealthProbe answers "is this app ready right now?" once, without blocking: nil
-	// means ready. The app layer polls it to hold a launch until the apps it depends on
-	// can actually serve it (StartConditions.ReadyCheck); how the answer is obtained is
-	// the adapter's business.
-	HealthProbe(name string) error
+	OpenSession(app string, cmd []string, environment map[string]string, opt options.HostOptions, hold bool) error
 	Exists(name string) bool // does a container with this name exist (running or not)?
 	// IsRunning is Exists narrowed to "and is it actually running". A container that runs
 	// without --rm (KeepAlive, Autorestart) survives its own exit, so Exists cannot tell an
@@ -71,10 +61,7 @@ type Runtime interface {
 	IsRunning(name string) bool
 	Do(args []string) error            // user-facing passthrough (stop/restart/inspect/logs) with host stdio
 	Running() (map[string]bool, error) // names the runtime reports as running (list view)
-	// PodOf is the pod a running container has joined, or "" when it has none. It is how the
-	// posture reported for an app becomes an observation rather than a re-reading of its config:
-	// a filtered app joins the pod that carries its netns and its ruleset, and an isolated one
-	// runs with no network at all and joins nothing. Editing a YAML cannot change this answer.
+	// PodOf observes the running container's pod; configuration cannot change that answer.
 	PodOf(name string) (string, error)
 	// PIDs is the host PID of each running container's main process. Rootless podman does not remap
 	// pids, so these are the numbers other host tools report - which is what lets bus attribution turn
@@ -97,10 +84,7 @@ type ImageResolver interface {
 	Resolve(ref string) (string, error)
 }
 
-// DBusBroker gives an app a filtered session bus (DBusMeta): a socket of its own, served by a proxy
-// Zinc owns. A sibling of NetEnforcer and shaped the same way, because it is the same kind of
-// problem: a capability the app must never hold directly, established before the app exists and
-// removed after it dies. Adapter: adapters/dbusproxy.
+// DBusBroker gives an app a filtered session bus, established before launch.
 type DBusBroker interface {
 	// RunFlags are the flags that attach the filtered socket: the bind mount and
 	// DBUS_SESSION_BUS_ADDRESS. Empty when the app asked for no bus, so it is never handed an address
@@ -127,18 +111,9 @@ type DisplayBroker interface {
 	Establish(addr paths.Address, cfg schema.AppConfig, opt options.HostOptions) (string, error)
 }
 
-// AudioBroker gives an app a PipeWire socket of its own, created under a security context, and
-// holds it to the directions its config granted (section 3 AudioMeta). Adapter:
-// adapters/pipewirectx.
-//
-// A sibling of DisplayBroker and shaped the same way, with one difference worth knowing: a
-// PipeWire security context sets identity but not permissions - the session manager grants a
-// restricted client enough to open a microphone - so the adapter also sets the permissions
-// itself, and therefore keeps a process running for as long as the app does.
+// AudioBroker supplies a per-app PipeWire security context and enforces permissions.
 type AudioBroker interface {
-	// Establish creates the socket and returns the path to mount. An empty path means "mount the
-	// session's own", which is the answer for an app that asked for no session audio and on a
-	// daemon with no security context.
+	// Establish returns a restricted socket. Requested PipeWire audio fails closed if absent.
 	Establish(addr paths.Address, cfg schema.AppConfig, opt options.HostOptions) (string, error)
 }
 
@@ -154,9 +129,7 @@ type NotifyBroker interface {
 	Establish(addr paths.Address, cfg schema.AppConfig, opt options.HostOptions) (string, error)
 }
 
-// NetEnforcer establishes and enforces an app's network egress - THE swap point. Today
-// adapters/netenforce drives NetworkLists onto a pasta netns via nft. Callers gate unsupported
-// configs before invoking it (the app layer's checkNetwork).
+// NetEnforcer prepares and enforces canonical network policy; Prepare rejects unsupported topology.
 type NetEnforcer interface {
 	RunFlags(cfg schema.AppConfig) []string // app container network attach (--pod ... / --network ...)
 	// Prepare returns the steps that establish and LOCK the netns before the app starts.

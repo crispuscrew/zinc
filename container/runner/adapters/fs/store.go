@@ -41,8 +41,12 @@ func Load(path string) (schema.AppConfig, error) {
 // are reported as an error so dead config can't silently accumulate. origin names the file
 // for the error message; a merged config still names the app it was read for.
 func decode(data []byte, origin string) (schema.AppConfig, error) {
+	migrated, err := schema.Migrate(data)
+	if err != nil {
+		return schema.AppConfig{}, fmt.Errorf("config: migrate %s: %w", origin, err)
+	}
 	var cfg schema.AppConfig
-	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec := yaml.NewDecoder(bytes.NewReader(migrated))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		if errors.Is(err, io.EOF) {

@@ -1,13 +1,13 @@
 # Contributing to Zinc
 
 Guidance for contributing to this repo. It is the portable,
-in-repo companion to [`docs/architecture.md`](docs/architecture.md) (the single source of
-truth) and [`README.md`](README.md).
+in-repo companion to the [architecture index](docs/architecture.md) and
+[`README.md`](README.md). Canonical field declarations live in `common/domain/schema`.
 
 Zinc is a security-focused sandboxing core. Every user-facing app runs via a **rootless
-Podman container** (primary runtime) or a **qemu VM** (heavy isolation), walled off from the
-rest of the desktop through the Wayland security-context protocol. Zinc is
-compositor-agnostic and installs cleanly on any existing system. Priority order, always:
+Podman container** (primary runtime) or a **QEMU VM**. Desktop grants have explicit
+limits: Wayland identity depends on compositor policy, and VM guest-side bridges
+are unavailable. Runtime prerequisites are separate from installation. Priority order:
 **Stable, then Secure, then Beautiful.**
 
 ## Golden rules
@@ -23,7 +23,7 @@ compositor-agnostic and installs cleanly on any existing system. Priority order,
    speculative abstraction, no gold-plating.
 4. **Descriptive variable names, at least 3 letters** (`cmd` not `c`, `idx` not `i`). The
    only exception is `t *testing.T`.
-5. **Image trust (architecture section 5.5).** Third-party images must be pinned by a
+5. **[Image trust](docs/images-and-mounts.md).** Third-party images must be pinned by a
    canonical digest (`@sha256:` + 64 hex). Only `localhost/` images may use a mutable tag.
    Derived images (`FROM image` + the install layer) are local and inherit the pinned base.
 6. **No em dash and no section sign in any output**, including code comments, docs, and
@@ -32,8 +32,8 @@ compositor-agnostic and installs cleanly on any existing system. Priority order,
 
 ## Repo layout and the zc/zcr split
 
-- `common/` - the shared library: the app-config schema, its validation, and the config-inheritance resolver. Pure (no I/O); its one dependency is the YAML codec the resolver merges with.
-  Both the creator and the runner depend on it and nothing else shared.
+- `common/domain` - pure schema, validation, migration, inheritance and runtime policy types.
+- `common/adapters` - shared network, DNS and audio I/O; common now includes pinned DNS/QUIC dependencies.
 - `container/runner` (**zcr**) - the runtime. It reads an app file and runs it via rootless
   podman, applying the network lock-down. It is a ports-and-adapters hexagon (below).
 - `creator` (**zc**) - the authoring tool (CLI + keyboard-first TUI). It depends
@@ -75,33 +75,43 @@ cd container/runner    # or creator, common
 make check             # gofmt + go vet + go test, in the pinned container
 make build             # reproducible build, produces ./bin/<tool>
 make vendor            # refresh vendored deps (the only networked step; GOWORK=off)
-make netfilter-image   # (runner) build the nft lock-down helper image once
+make netfilter-image   # (container runner) helper for namespace nft policy and D-Bus
 ```
 
 The gate before declaring work done is **`make check` green in every module you touched**.
 The end-to-end suite (`make -C container/e2e e2e`) and CI (`.github/workflows/ci.yml`) run
 the two tools plus the podman-backed scenarios.
 
+Toolchain: Go 1.26.6-alpine, pinned by digest in `check.mk`/`Containerfile`.
+Host e2e Go must be supported and >=1.26.6. The common manifest declares Go 1.26;
+consumer `make vendor` refreshes lift their directives as needed. During this
+transition vendors may lag canonical sources: use explicit temporary overlays
+for canonical checks and report the distinction. Preserve owner-controlled
+`schema.go` formatting; report its format-gate failure rather than rewriting it.
+See [build/check details](docs/build-and-checks.md), including Nix compatibility.
+
 ## Security model (read before touching launch/network/image/mount/cap code)
 
 - Single-user, rootless host. "Privilege escalation" means a container gaining
   capability/host-access it was not granted, or **escaping its egress allowlist** - not
   root-on-host.
-- **Network enforcement is the crown jewel.** An app must never see an unfiltered network,
-  even briefly: the app's own netns is locked by nftables *before* the app process starts
-  (fail-closed). Any open window, any way config can relax the ruleset, or any
-  non-fail-closed path is high severity.
+- **Networked apps require packet-preserving provisioning.** The dedicated namespace
+  is locked before app startup. Adapters create no host topology and offer no
+  automatic pasta fallback. Review manifest trust, both endpoints' policy and
+  spoofing/bypass constraints in [network provisioning](docs/network-provisioning.md).
 - Baseline is least privilege: `--security-opt no-new-privileges --cap-drop all`. Anything
   re-adding capability or host access (caps, devices, mounts, sockets) is an attack-surface
   decision - validate it in the validator (`common/domain/schema/validate`).
 - Configs are **partly untrusted** (shared, distributed as examples), so trust/audit
   controls must hold up to a reviewer reading the YAML.
+- Raw backend argv is a warned override of typed guarantees. PipeWire grants
+  require opt-in WirePlumber deployment. DNS CLI/readiness integration is still
+  pending; do not document these prerequisites as automatically satisfied.
 
 ## Documentation map
 
-- [`docs/architecture.md`](docs/architecture.md) - single source of truth. Its section
-  numbers are cited in the code (for example section 5.5 image trust, section 5.3 the
-  network lock-down).
+- [`docs/architecture.md`](docs/architecture.md) - concise index with a mapping from
+  historical section numbers to focused current pages.
 - [`creator/README.md`](creator/README.md) and
   [`container/runner/README.md`](container/runner/README.md) - per-tool docs.
 - [`README.md`](README.md) - overview and quickstart.

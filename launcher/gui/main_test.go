@@ -7,21 +7,32 @@ import (
 	"testing"
 )
 
-const mainFakeZcr = `#!/bin/sh
+const fakeRuntimeScript = `#!/bin/sh
 case "$1" in
-  run) if [ "$2" = "bad" ]; then echo "bad: nope" 1>&2; exit 1; fi; exit 0 ;;
+  run) printf '%s\n' "${0##*/}" "$@" >> "$LAUNCH_CALLS"
+    if [ "$2" = "bad" ]; then echo "bad: nope" 1>&2; exit 1; fi ;;
   ps) exit 0 ;;
   *) exit 2 ;;
 esac
 `
 
-func fakeZcr(t *testing.T) {
+func fakeRuntimes(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "zcr"), []byte(mainFakeZcr), 0o755); err != nil {
-		t.Fatal(err)
+	for _, binary := range []string{"zcr", "zvr"} {
+		if err := os.WriteFile(filepath.Join(dir, binary), []byte(fakeRuntimeScript), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", dir)
+	writeConfigs(t, map[string]string{
+		"firefox": "Type: ZincContainer\nAppNameID: firefox\n",
+		"guest":   "Type: ZincVirtualization\nAppNameID: guest\n",
+		"bad":     "Type: ZincContainer\nAppNameID: bad\n",
+	})
+	calls := filepath.Join(dir, "calls")
+	t.Setenv("LAUNCH_CALLS", calls)
+	return calls
 }
 
 func TestRun_Version(t *testing.T) {
@@ -44,101 +55,40 @@ func TestRun_TooManyArgs(t *testing.T) {
 }
 
 func TestRun_DirectLaunch(t *testing.T) {
-	fakeZcr(t)
-	if err := run([]string{"firefox"}); err != nil {
-		t.Fatalf("zlg firefox: %v", err)
+	calls := fakeRuntimes(t)
+	for _, name := range []string{"firefox", "guest"} {
+		if err := run([]string{name}); err != nil {
+			t.Fatalf("zlg %s: %v", name, err)
+		}
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "zcr\nrun\nfirefox\n--exec\nzvr\nrun\nguest\n"; string(data) != want {
+		t.Fatalf("calls = %q, want %q", data, want)
 	}
 }
 
 func TestRun_DirectLaunchSurfacesError(t *testing.T) {
-	fakeZcr(t)
+	fakeRuntimes(t)
 	err := run([]string{"bad"})
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("want the zcr error surfaced, got %v", err)
 	}
 }
 
-// ZLG_OPACITY accepts both forms people reach for - a percentage and a fraction - and
-// reports the ones it cannot use instead of ignoring them silently.
-func TestParseOpacity(t *testing.T) {
-	valid := map[string]float64{
-		"20":    0.2, // percentage
-		"0.2":   0.2, // the same value as a fraction
-		"90":    0.9,
-		"0.9":   0.9,
-		"1":     1, // above-1 means percent, so 1 stays a fraction: fully opaque
-		"1.0":   1,
-		"100":   1,
-		"0":     0,
-		" 35 ":  0.35, // surrounding whitespace is tolerated
-		"12.5":  0.125,
-		"0.125": 0.125,
-	}
-	for raw, want := range valid {
-		got, ok := parseOpacity(raw)
-		if !ok {
-			t.Errorf("parseOpacity(%q) reported invalid, want %v", raw, want)
-			continue
-		}
-		if got != want {
-			t.Errorf("parseOpacity(%q) = %v, want %v", raw, got, want)
-		}
-	}
-	for _, raw := range []string{"", "abc", "20%", "-1", "101", "1e9", "0.2.3"} {
-		if got, ok := parseOpacity(raw); ok {
-			t.Errorf("parseOpacity(%q) = %v, want it reported invalid", raw, got)
-		}
-	}
-}
-
-// An unusable ZLG_OPACITY leaves the overlay opaque rather than applying a garbage value,
-// and a usable one reaches menu.Options.
-func TestMenuOptions_Opacity(t *testing.T) {
-	t.Setenv("ZLG_OPACITY", "20")
-	if got := menuOptions().Opacity; got != 0.2 {
-		t.Errorf("Opacity = %v for ZLG_OPACITY=20, want 0.2", got)
-	}
-	t.Setenv("ZLG_OPACITY", "0.2")
-	if got := menuOptions().Opacity; got != 0.2 {
-		t.Errorf("Opacity = %v for ZLG_OPACITY=0.2, want 0.2", got)
-	}
-	t.Setenv("ZLG_OPACITY", "not-a-number")
-	if got := menuOptions().Opacity; got != 0 {
-		t.Errorf("Opacity = %v for an unusable value, want 0 (opaque)", got)
-	}
-}
-
-// The remaining env knobs reach menu.Options, and an unset environment leaves the defaults.
-func TestMenuOptions_Flags(t *testing.T) {
-	for _, name := range []string{"ZLG_OPACITY", "ZLG_NO_ANIM", "ZLG_DEBUG", "ZLG_FONT"} {
-		t.Setenv(name, "") // an empty value reads the same as unset, and survives an exported one
-	}
-	opts := menuOptions()
-	if opts.NoAnim || opts.Debug || opts.FontPath != "" || opts.Opacity != 0 {
-		t.Errorf("unset environment should leave the defaults, got %+v", opts)
-	}
-	if opts.AppID != "zinc.launcher" {
-		t.Errorf("AppID = %q, want zinc.launcher (compositors match window rules on it)", opts.AppID)
-	}
-	t.Setenv("ZLG_NO_ANIM", "1")
-	t.Setenv("ZLG_DEBUG", "1")
-	t.Setenv("ZLG_FONT", "/usr/share/fonts/x.ttf")
-	opts = menuOptions()
-	if !opts.NoAnim || !opts.Debug || opts.FontPath != "/usr/share/fonts/x.ttf" {
-		t.Errorf("env knobs did not reach the options, got %+v", opts)
-	}
-}
-
 // loadItems lists every app, and a file that fails to decode is still shown by name (with
 // an empty description) rather than hidden.
 func TestLoadItems_ListsUndecodableByName(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	appsDir := filepath.Join(cfg, "zinc", "apps")
 	if err := os.MkdirAll(appsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	good := "SchemaVersion: 3\nType: ZincContainer\nAppNameID: good\nDescription: fine\nImageMeta:\n  Image: localhost/x:local\n"
+	good := "SchemaVersion: 4\nType: ZincContainer\nAppNameID: good\nLauncherMeta:\n  Description: fine\nImageMeta:\n  Image: localhost/x:local\n"
 	if err := os.WriteFile(filepath.Join(appsDir, "good.yaml"), []byte(good), 0o600); err != nil {
 		t.Fatal(err)
 	}

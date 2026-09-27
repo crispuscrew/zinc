@@ -4,7 +4,7 @@ package validate
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"regexp"
 	"strings"
 )
@@ -26,9 +26,6 @@ var digestRE = regexp.MustCompile(
 
 // ifaceRE: interface charset; no comma/space that would splice pasta options.
 var ifaceRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
-// capRE: one capability - optional CAP_ then [A-Z_]. ALL is rejected separately.
-var capRE = regexp.MustCompile(`^(CAP_)?[A-Z_]+$`)
 
 // addFunc collects one error; Validate threads it through every check so all problems
 // surface at once, not just the first.
@@ -71,11 +68,11 @@ func hasDotDot(rel string) bool {
 // validCIDR reports a valid CIDR in the wanted family (wantV6), so an address can't
 // sit under the wrong key (e.g. IPv6 in IPv4CIDR).
 func validCIDR(cidr string, wantV6 bool) bool {
-	addr, _, err := net.ParseCIDR(cidr)
+	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
 		return false
 	}
-	return (addr.To4() == nil) == wantV6
+	return !prefix.Addr().Is4In6() && prefix.Addr().Is6() == wantV6
 }
 
 // LocalImage reports a localhost/ image - the only refs exempt from the section 5.5 digest

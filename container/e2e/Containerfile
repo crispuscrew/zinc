@@ -1,6 +1,5 @@
 # Minimal image for the end-to-end tests: a shell plus busybox nc, with the five
-# entrypoint scripts baked in. The runtime passes an app's Entrypoint as a single-token
-# --entrypoint, so each scenario points at exactly one script.
+# entrypoint scripts baked in. Entrypoint uses the image's /bin/sh -c grammar.
 #
 # The BASE is digest-pinned like every other third-party image. The exemption that applies
 # here covers the image this Containerfile PRODUCES (`localhost/zinc/e2e-app:local`, which

@@ -7,9 +7,11 @@
 # would take longer than the job budget. Run them locally before a release.
 
 .PHONY: e2e clean
-## e2e: build what's missing (binaries, guest image) and run the end-to-end scenarios
+GO ?= go
+TEST_ARGS ?=
+## e2e: rebuild binaries (unless explicitly supplied), verify the image, and run scenarios
 e2e:
-	GOWORK=off go test -tags e2e -count=1 -timeout 900s -v .
+	GOWORK=off $(GO) test -tags e2e -count=1 -timeout 900s -v $(TEST_ARGS) .
 
 ## clean: remove the downloaded guest image and any leftover state
 clean:

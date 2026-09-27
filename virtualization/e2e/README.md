@@ -1,43 +1,52 @@
 # VM end-to-end tests
 
-Drives the real `zc` and `zvr` binaries against real qemu and asserts the things unit tests
-cannot prove: that a guest actually boots, that its first-boot identity reaches it, that a
-base image which no longer matches its pin refuses to run, and that a graceful stop is
-actually graceful.
+## Offline lifecycle smoke test
 
 ```sh
-make -C virtualization/e2e e2e
+ZINC_E2E_ZVR=/absolute/fresh/zvr make -C virtualization/e2e e2e \
+    TEST_ARGS='-run TestVMOfflineLifecycle'
 ```
 
-Black-box: everything goes through `os/exec`, nothing is imported from the tools under test.
-It takes about 30 seconds, most of which is rebuilding the three binaries.
+Uses a private 128 MiB VM and a newly created blank qcow2 base. It requires QEMU,
+qemu-img and accessible KVM. Explicit `ZINC_E2E_ACCEL=tcg` instead exercises the
+blank-disk scenario using raw test-only accelerator/CPU flags. It downloads no OS,
+creates no NIC or host port, and requests no audio.
 
-## Not a CI gate
+It proves the real QEMU block node is read-only through QMP, verifies automatic
+restart after an intentional QEMU crash, stops during restart startup, checks
+manual-stop suppression and supervisor cleanup, preserves the base digest, resets
+the private overlay, and refuses a mismatched pin. It also checks dry-run writes
+no guest state. This is a process/block-device test, not guest filesystem semantics.
 
-GitHub's runners have no `/dev/kvm`, and an emulated guest would run far past the job
-budget, so this is a **local pre-release gate** rather than part of the CI matrix. It skips
-cleanly when `qemu-system-x86_64`, `qemu-img`, `xorriso` or `/dev/kvm` is missing.
+Private files are cleaned after a successful stop. If cleanup fails, the test
+retains its temporary directory for inspection instead of deleting live state.
 
-## What it asserts
+## Provisioned network scenario
 
-| Scenario | The guarantee |
-| --- | --- |
-| `authoring` | `zc new --vm` writes a config the shared validation accepts, and `zcr` refuses that app by name and points at `zvr` |
-| `dry_run_changes_nothing` | the printed command is a real accelerated, sandboxed qemu line, and no disk is created |
-| `pin_is_enforced` | a base image altered after authoring stops the launch, and nothing is created |
-| `boots_and_is_reachable` | the guest answers on its forwarded port - kernel, user-mode networking and services all up - the base is untouched while it runs, and the forward binds loopback only |
-| `graceful_stop` | the guest goes away well inside the fallback timeout, so the ACPI power button worked rather than the SIGTERM behind it |
-| `reset_returns_to_the_base` | the overlay is removed, so the next run starts from the authored image |
+The network suite never substitutes slirp for full packet policy. It skips unless
+the operator supplies all of:
 
-The guest is cirros (~21 MB, boots in seconds), cached in `~/.cache/zinc-e2e` and **verified
-against a pinned digest on every run**, cached copy included: a suite that booted whatever
-happened to be at that path would prove nothing about the guest its assertions describe.
+- `ZINC_E2E_STATIC_IMAGE`: a Cirros-compatible, statically addressed guest fixture.
+- `ZINC_E2E_STATIC_DIGEST`: its independently authorized sha256 pin.
+- `ZINC_E2E_NETWORK_APP`: a fresh fixture name with the `zinc-e2e-` prefix.
+- `ZINC_E2E_SSH_PORT`: the explicitly provisioned loopback TCP-to-guest-22 mapping.
+- `ZINC_NETWORK_MANIFEST_DIR`: protected manifests for fresh, exclusive namespaces.
 
-The binaries are rebuilt every run rather than only when missing. A binary left from an
-earlier commit passes or fails for reasons that have nothing to do with the tree under test,
-which is how a stale `zcr` - built before the schema grew VM fields - first surfaced here as
-a YAML decode error rather than the refusal the test was looking for.
+The fixture must match the exact `primary` NIC and Host-to-Self TCP/22 policy
+authored by the suite. The provisioner owns TAPs, static addressing/neighbors,
+forwarding and publication. Namespace setup is never performed by these tests.
+Do not supply a namespace serving another live guest.
 
-Config and data go to a temporary home, so your own apps and disks are never touched.
-`XDG_RUNTIME_DIR` is deliberately left alone: control sockets live there, and a unix socket
-path has 108 bytes to work with, which a temp path under `/tmp` blows straight past.
+Assertions cover separate app/options authoring, runtime type refusal, read-only
+planning, provisioned guest SSH identity, non-loopback exclusion, base integrity,
+graceful stop and reset. Full transport/peer policy coverage belongs to the shared
+network tests and needs independently provisioned fixtures.
+
+By default this scenario rebuilds creator and both runners. During a coordinated
+schema migration set `ZINC_E2E_ZC`, `ZINC_E2E_ZVR` and `ZINC_E2E_ZCR` to freshly
+built canonical binaries. Config/data/runtime locations remain test-private.
+
+Neither scenario changes host audio services. Audio-holder IPC and revocation
+are covered by runner tests; the shared broker has isolated-daemon integration
+tests. Graphics, guest OS read-only boot, Secure Boot and TPM sealing still need
+their own compatible guest fixtures.

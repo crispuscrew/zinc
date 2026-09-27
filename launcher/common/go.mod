@@ -1,8 +1,6 @@
 module github.com/crispuscrew/zinc/launcher/common
 
-go 1.24.2
-
-toolchain go1.24.13
+go 1.26.0
 
 // launcher/common is the UI-agnostic core shared by the Zinc launchers (zlt today, zlg
 // next): the read-side app store, the zcr delegate, and the fuzzy matcher. It depends

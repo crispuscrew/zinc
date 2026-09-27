@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/vmoptions"
 )
 
 // A batch file fails at the byte level, not the logic level: cmd.exe reads it a line at a
@@ -50,8 +50,7 @@ func TestWindowsSetup_ParsesAsABatchFile(t *testing.T) {
 // stray file on a volume another program owns.
 func TestSeedFiles_TheScriptGoesOnlyToAGuestThatNeedsIt(t *testing.T) {
 	compatible := vmCfg()
-	compatible.VirtualizationMeta.Devices = schema.VMDevicesCompatible
-	files, err := seedFiles(compatible)
+	files, err := seedFiles(compatible, vmoptions.DevicesCompatible)
 	if err != nil {
 		t.Fatalf("seedFiles: %v", err)
 	}
@@ -65,8 +64,7 @@ func TestSeedFiles_TheScriptGoesOnlyToAGuestThatNeedsIt(t *testing.T) {
 	}
 
 	virtio := vmCfg()
-	virtio.VirtualizationMeta.Devices = schema.VMDevicesVirtio
-	files, err = seedFiles(virtio)
+	files, err = seedFiles(virtio, vmoptions.DevicesVirtio)
 	if err != nil {
 		t.Fatalf("seedFiles: %v", err)
 	}

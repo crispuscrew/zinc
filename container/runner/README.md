@@ -1,155 +1,93 @@
 # zcr - Zinc Container Runner
 
-`zcr` is the Zinc container runtime. It reads an app file
-(`~/.config/zinc/apps/<name>.yaml`) and runs it as a rootless podman container, applying
-the network lock-down before the app starts. It is the binary `zc` (the creator) shells
-out to; you can also drive it directly.
+`zcr` reads canonical schema v4 app files from `~/.config/zinc/apps` and launches
+rootless Podman containers. `zc` and the launchers delegate to this binary.
 
 ## Commands
 
-```
-zcr run <app> [--exec]      print the launch plan, or launch it (--exec)
-zcr build <app>             (re)build the app's derived image (ImageMeta.Install)
-zcr validate <app>          parse + validate; report problems and warnings
+```text
+zcr run <app[@instance]> [--instance NAME] [--exec] [-v HOST:CONTAINER[:OPTIONS]]...
+zcr build <app>
+zcr validate <app>
 zcr stop|restart|inspect <app>
 zcr logs <app> [-f]
-zcr term <app> [--shell]    open a terminal for a multiterminal app
-zcr ps                      running apps, one per line
+zcr term <app> [--shell]
+zcr ps
 zcr where <app[@instance]> [--json]
-                            where the instance keeps its state, what its container is
-                            called, and its filtered bus socket and proxy
-zcr bus [--json]            the bus attribution table (see below)
-zcr net [app] [--json]      running apps and whether each has a locked netns, or one
-                            app's nftables counters
+zcr bus [--json]
+zcr net [app[@instance]] [--json]
+zcr recheck <app>
 zcr image search <term> | resolve <ref>
 ```
 
-`<app>` is a store name (`~/.config/zinc/apps`) or a path (contains `/` or ends in
-`.yaml`). Without `--exec`, `run` is a dry run: it validates and prints the exact podman
-command(s) and any nft ruleset that would be enforced, so what will happen is visible
-before anything runs.
+An app argument may also be a YAML file path. `run` prints a shell-quoted plan by
+default; `--exec` launches it. Plans use quoted here-documents for build and network
+stdin. A planned PipeWire mount is a placeholder: a real launch must establish its
+restricted socket before starting the app.
 
-## Network lock-down
+## Lifecycle and backend options
 
-An app's `NetworkMeta.NetworkLists` drive a fail-closed firewall applied in the app's own
-network namespace before it starts:
+- Presentation fields live under `LauncherMeta`.
+- `StartConditions.Entrypoint` and `AttachedEntrypoint` use `/bin/sh -c` grammar
+  inside the image. An empty ordinary entrypoint preserves the image default.
+- `StartConditions.Attached` requires `Terminal` and uses a detached holder with
+  interactive sessions. `run` on a live attached app opens another session.
+- Every session receives `EntrypointEnv` overlaid by `AttachedEnv`, with the latter
+  winning duplicate keys. Environment argv is sorted. Inheritance replaces an
+  explicitly supplied env map rather than merging it with the parent's map.
+- Closing the last attached terminal removes the holder unless
+  `StopConditions.Background` keeps it alive.
+- `StartConditions.ReadOnlyRootfs` enables Podman's read-only root filesystem.
+- `StopConditions.Autorestart` uses `on-failure` and never pairs with `--rm`.
+- `CreatorFlags` are direct `podman build` argv and participate in the derived image
+  fingerprint. Flags alone also trigger a derived build, without an empty RUN layer.
+- `RunnerFlags` are direct `podman run` argv immediately before the image. They can
+  override structured containment. Only NUL is rejected; warnings appear during
+  planning and actual launches. Neither flag list is sent to helper containers.
+- `MinimizeFingerprint` removes Podman's `container` env marker and requests
+  `localhost` as hostname at the owning container/pod UTS layer. This is best effort;
+  capability drops, seccomp defaults and no-new-privileges remain in place.
 
-- No lists: the app reaches only its own localhost (isolated).
-- Egress list: default-drop, allow only the listed destination CIDRs/ports.
-- Ingress + Host: publish the app's own ports to the LAN, filtered by source.
-- Sibling link (an egress list naming another app): a private internal bridge between the
-  two apps, gated per-port by interface.
-- Routing through a sibling (`Via` on an egress list naming an app): that list's destinations
-  leave through the sibling instead of this app's own egress - how an app is put behind a VPN
-  container. The sibling must agree with `Forward: true` on its own link ingress list, and
-  bounds what it carries with `ForwardPorts` (empty carries any port; the destinations were
-  already fixed by the client's routes). Gateways chain: a hop can forward onward into
-  another gateway rather than out to the network.
-- `Domains` on an egress list: destinations named rather than numbered, resolved at launch
-  into addresses. An address allowlist taken at that moment, not hostname filtering, and not
-  refreshed while the app runs.
-- `NetworkMeta.DNSServers`: the resolvers the app is handed, and the only ones it may reach.
+Legacy files pass through migration. Nonzero readiness checks/timeouts, swap limits,
+capability lists and tunnel settings that cannot be represented produce migration
+errors. There is no silent discard or compatibility bypass.
 
-The runtime is fail-closed: anything it does not yet support is rejected, not run.
-Not supported in this build yet: host-scoped egress and gateway/multi-homing. (A sibling link
-may now coexist with other networking on one app - that is what routing is built on.)
+## Network policy
 
-### Seeing what it did
+`NetworkMeta.Interfaces` declares Zinc interface IDs. `RulesByPriority` carries
+ordered `From`/`To` peers, endpoint filters, `Domains`, `Protocols` and
+`AllowAllExcept`. The network adapter enforces default-deny policy in an
+owner-provisioned, packet-preserving namespace before the app joins it.
 
-```
-$ zcr net
-ADDRESS        POSTURE   NETNS
-netprobe@work  filtered  netprobe.work-pod
-quiet          isolated  -
+No interfaces means `--network none`. Networked apps require a matching provisioned
+manifest; a schema rule does not create host topology. DNS uses
+`DNS.ResolversByPriority`; domain resolution cannot fall back to host DNS.
+See the shared network adapter for the provisioning contract.
 
-$ zcr net netprobe@work
-CHAIN   VERDICT  RULE                PACKETS  BYTES
-output  drop     undeclared dns udp  1        57
-output  accept   list[0] ip tcp      3        180
-output  drop     default policy      9        652
-```
+`zcr net` reports observed pod attachment and `zcr net <app> --json` reports the
+enforcer's counters. `rule[0]` refers to a canonical rule index. Reciprocal app policy
+can reject traffic at either endpoint.
 
-`filtered` means the app has `NetworkLists`, so a pod netns of its own with the ruleset
-locked in it. `isolated` means it has none, so `--network none`: it reaches only its own
-localhost and has no netns or ruleset at all. The two are never merged - an isolated app is
-not a filtered one whose counters happen to be zero.
+## Desktop access
 
-`list[0]` is the entry's index in `NetworkMeta.NetworkLists`, so a number points at the line
-of config that produced the rule. `default policy` is what the chain refused. Counters live
-in the pod's netns and are created with it, so they read **since this launch** and are gone
-when the pod is - `stop` and `restart` both reset them. `--json` gives either form as a
-machine-readable document.
+`AudioMeta.Playback`, `Microphone` and `Monitor` use `PipeWireDefault`, exact
+`PipeWireDevices` selectors and `ALSADevices`. PipeWire requires a restricted per-app
+socket, with no raw session fallback. ALSA grants must name existing host character
+devices in the correct playback/capture direction; the whole `/dev/snd` is not granted.
 
-## Filtered session bus
+`DBusMeta.Talk` and `Own` grant a filtered session bus. `InternalUserMeta.KeepUserID`
+is required. The proxy stays outside the app pod and exposes its own socket rather
+than the desktop's raw bus. `zcr bus --json` attributes proxy PIDs to apps;
+`zcr where` reports the corresponding per-instance state and socket paths.
 
-An app gets **no D-Bus session bus** unless it asks for one. The host bus is a desktop-wide
-capability - the keyring, the portal, the compositor, every other service the user runs - so
-mounting it into a sandbox would undo most of the sandbox.
-
-`DBusMeta` opens exactly what it names and nothing else:
-
-```yaml
-InternalUserMeta:
-  KeepUserID: true                          # required: the proxy serves the socket as you
-DBusMeta:
-  Talk:                                     # names the app may call
-    - org.freedesktop.portal.Desktop
-  Own:                                      # names the app may claim
-    - org.mpris.MediaPlayer2.notes
-```
-
-`zcr` runs `xdg-dbus-proxy` in the helper image, in a container it owns, which holds the real
-socket and serves the app a filtered one. The proxy is deliberately **not** a member of the
-app's pod: a pod shares the PID namespace, so a proxy inside it would be a process the app
-could signal or ptrace. They share one thing, the socket. The app's socket directory is per
-app, so two apps with different grants cannot reach each other's bus.
-
-A trailing `.*` in `Talk` matches a subtree, including services that appear under it later, so
-prefer an exact name. `Own` takes no wildcard: a process claims one concrete name or none.
-
-Fail-closed here too. An app that asks for a bus when no host bus can be resolved does not
-start, rather than starting with no bus and looking broken for reasons unrelated to its
-config. `DBusMeta` on a VM app is a validation error - a guest cannot take a bind-mounted
-unix socket.
-
-### Attribution: which app is a connection on the host bus
-
-Zinc creates the proxy and names it after the app, so it knows which host-bus connection
-belongs to which `app@instance` without asking the app anything. It publishes that mapping
-rather than having apps claim names for themselves - a name a sandboxed app claims is a
-self-assertion, which is what attribution exists to stop trusting (architecture doc, 5.8):
-
-```
-zcr where <app[@instance]> [--json]   state dir, container name, bus socket, bus proxy
-                                      ("none" / null when the app asked for no bus)
-zcr bus [--json]                      every running proxy: app@instance, host pid, socket
-```
-
-Given something seen on the host bus, ask it for the connection's pid
-(`org.freedesktop.DBus.GetConnectionUnixProcessID`, an `SO_PEERCRED` fact the peer cannot
-assert) and look that pid up in `zcr bus`:
+## Build and layout
 
 ```sh
-zcr bus --json | jq -r --argjson pid 12345 '.[] | select(.pid == $pid) | .address'
+make build
+make check
+make netfilter-image
 ```
 
-`xdg-dbus-proxy` opens one upstream connection per client, so an app with no live bus client
-has no connection on the host bus at all, and an app with several has several - all with the
-proxy's one pid.
-
-## Build
-
-Podman-only, reproducible in a pinned container:
-
-```
-make build            # produces ./bin/zcr
-make check            # gofmt + vet + test, in-container
-make netfilter-image  # build the helper image: the nft lock-down and the D-Bus proxy
-```
-
-## Layout
-
-Hexagonal: `domain` (schema-derived types, pure), `ports` (interfaces), `app`
-(orchestration), `adapters/*` (podman, netenforce, fs, host), `wire` (composition), and
-`main.go` (the CLI). It depends only on the shared `common` library for the app schema
-and validation.
+Builds and checks use the pinned Podman toolchain. `domain` contains pure policy,
+`ports` the interfaces, `app` orchestration, `adapters` the mechanisms, and `wire`
+the composition. CLI commands live in the runner's root package.

@@ -9,7 +9,7 @@ import (
 func writeApp(t *testing.T, dir, name, desc string) {
 	t.Helper()
 	body := "SchemaVersion: 3\nType: ZincContainer\nAppNameID: " + name +
-		"\nDescription: " + desc + "\nImageMeta:\n  Image: localhost/app:local\n"
+		"\nLauncherMeta:\n  Description: " + desc + "\nImageMeta:\n  Image: localhost/app:local\n"
 	if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +56,8 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AppNameID != "firefox" || cfg.Description != "Web browser" {
-		t.Fatalf("Load = %+v, want AppNameID=firefox Description='Web browser'", cfg)
+	if cfg.SchemaVersion != 4 || cfg.AppNameID != "firefox" || cfg.LauncherMeta.Description != "Web browser" {
+		t.Fatalf("Load = %+v, want migrated v4 AppNameID=firefox Description='Web browser'", cfg)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestLoad_RejectsUnsafeNames(t *testing.T) {
 // app listed by the picker (List's charset allows dots) but impossible to load or launch.
 func TestLoad_AllowsDotsInsideAName(t *testing.T) {
 	dir := t.TempDir()
-	body := "SchemaVersion: 3\nType: ZincContainer\nAppNameID: my..app\nDescription: dotted\nImageMeta:\n  Image: localhost/x:local\n"
+	body := "SchemaVersion: 4\nType: ZincContainer\nAppNameID: my..app\nLauncherMeta:\n  Description: dotted\nImageMeta:\n  Image: localhost/x:local\n"
 	if err := os.WriteFile(filepath.Join(dir, "my..app.yaml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestLoad_AllowsDotsInsideAName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(%q) failed for an app the picker lists: %v", "my..app", err)
 	}
-	if cfg.Description != "dotted" {
-		t.Errorf("Description = %q, want %q", cfg.Description, "dotted")
+	if cfg.LauncherMeta.Description != "dotted" {
+		t.Errorf("Description = %q, want %q", cfg.LauncherMeta.Description, "dotted")
 	}
 }

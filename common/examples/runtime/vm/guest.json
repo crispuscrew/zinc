@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "AppNameID": "guest",
+  "Image": "/images/base.qcow2",
+  "BaseDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "DiskSizeGiB": 0,
+  "Display": "None",
+  "Devices": "Virtio",
+  "InstallMedia": [],
+  "ForwardPorts": []
+}

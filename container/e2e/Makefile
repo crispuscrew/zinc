@@ -5,9 +5,10 @@
 # workspace pins the sibling modules; this module is standalone.
 
 .PHONY: e2e clean
+E2E_ARGS ?=
 ## e2e: build what's missing (binaries, images) and run the end-to-end scenarios
 e2e:
-	GOWORK=off go test -tags e2e -count=1 -timeout 900s -v .
+	GOWORK=off go test -tags e2e -count=1 -timeout 900s -v $(E2E_ARGS) .
 
 ## clean: remove the test app image
 clean:
