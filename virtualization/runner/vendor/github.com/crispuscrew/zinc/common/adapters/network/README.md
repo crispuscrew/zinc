@@ -10,6 +10,12 @@ for the manifest and its parent directories. Duplicate and unknown JSON keys
 are errors. Namespace paths are checked against nsfs and pinned inode numbers;
 the running initializer checks both identities again after entering them.
 
+For containers, the adapter probes Podman's current user-namespace identity.
+An exact match uses Podman's current namespace rather than attempting an invalid
+re-entry into it; a different provisioned identity uses the explicit namespace
+path. Probe failure aborts. Both entered namespace inodes remain checked before
+firewall operations, regardless of the selected Podman option.
+
 The `Manifest` Go type is the wire format. `policy` is the exact NetworkMeta
 snapshot (its keys use the schema's Go field names). `topology.mode` is
 `container` or `tap`. All declared interfaces must map exactly once. MACs are
