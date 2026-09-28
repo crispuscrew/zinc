@@ -17,6 +17,7 @@
 | 0.9.1   | Audit fixes    | 22 defects from an audit: shell injection from a wg-quick file into the NET_ADMIN helper, a relaunch that tore down the running app, an additive nft load, an unfiltered tunnel input chain |
 | 0.10.0  | schema v3, and every field enforced | audio per direction (PipeWire security context + permissions), Configs mounted, anonymous volumes, notification filtering, Env, ReadOnlyRootfs, RequireSecurityContext, guest egress control (`zvr net`), signed tags + `SHA256SUMS` |
 | 0.10.1  | Distribution | verified Linux AMD64 release binaries, quick start, Node.js 24 GitHub Actions |
+| 0.11.0  | Schema v4 and consumers | unified app fields, provisioned packet networking, encrypted DNS, directional audio broker, external VM options, Go 1.26 builds |
 | ...     |                |                       |
 
 **0.10.0 is a minor bump, not a patch.** It changes the app-config schema, so every existing
@@ -25,9 +26,15 @@ versioning a change that invalidates what users already have on disk cannot be a
 calling it 0.9.2 would tell people the upgrade is safe to take without reading anything. The
 migration is in the changelog.
 
+**0.11.0 is a breaking pre-1.0 minor release.** Schema v4 changes persisted app
+definitions and runtime prerequisites. Read the [release notes](docs/releases/0.11.0.md)
+and [migration guide](docs/migration.md) before upgrading networked or VM apps.
+
 ## Cutting a release
 
-One command:
+Merge reviewed feature work into `dev`, then cut a fresh `release/0.11.0` branch
+from `dev`. Release changes reach `main` through a reviewed PR with green CI.
+On the final reviewed release commit, create the signed tag:
 
 ```
 make -f release.mk tag VERSION=X.Y.Z # signed, annotated tag

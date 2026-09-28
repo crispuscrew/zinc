@@ -1,9 +1,10 @@
-# Quickstart: current canonical checkout
+# Quickstart: Zinc v0.11.0
 
-This guide uses schema v4 and current source-built tools. Tagged v0.10.1 release
-binaries implement their release's format; they are not a way to validate these
-new examples. See [builds/checks](build-and-checks.md) for the pinned Go 1.26.6
-toolchain, vendor maintenance and Nix consumer builds.
+This guide targets Zinc v0.11.0 and schema v4. Build this checkout as below;
+v0.10.1 binaries implement the earlier format. Upgrading an existing installation
+requires the [v0.11.0 release notes](releases/0.11.0.md). See
+[builds/checks](build-and-checks.md) for the pinned Go 1.26.6 toolchain, vendor
+maintenance and Nix consumer builds.
 
 ## Build and select binaries
 

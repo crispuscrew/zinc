@@ -7,6 +7,15 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-28
+
+### Upgrade notes
+
+- This is a breaking pre-1.0 minor release. Read the [release notes](docs/releases/0.11.0.md)
+  and [migration guide](docs/migration.md). Networked apps require provisioned namespaces/TAPs;
+  brokered PipeWire requires the Zinc WirePlumber policy. Existing VM disk pins and hardware
+  choices need external runtime options. Unsupported legacy settings fail with an error.
+
 ### Changed
 
 - **Canonical schema v4 consumers and examples.** Presentation moves under `LauncherMeta`;
