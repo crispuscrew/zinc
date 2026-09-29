@@ -7,7 +7,7 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-09-28
+## [0.11.0] - 2026-09-29
 
 ### Upgrade notes
 
