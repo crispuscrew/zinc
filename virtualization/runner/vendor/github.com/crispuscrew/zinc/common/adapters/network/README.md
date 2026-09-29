@@ -1,76 +1,52 @@
 # Provisioned packet network manifest, version 1
 
-No adapter creates namespaces, routes, TAPs, bridges, host listeners or host
-firewall rules. A provisioner must create one exclusive enforcement namespace
-per app and a user namespace accessible to the invoking user. It supplies a
-strict JSON file at `$ZINC_NETWORK_MANIFEST_DIR/<AppNameID>.json`, defaulting to
-`$XDG_RUNTIME_DIR/zinc/network/<AppNameID>.json`. Files and parent directories
-must be root/user-owned and protected from other writers; symlinks are refused
-for the manifest and its parent directories. Duplicate and unknown JSON keys
-are errors. Namespace paths are checked against nsfs and pinned inode numbers;
-the running initializer checks both identities again after entering them.
+The owner provisions one exclusive enforcement namespace per app and an accessible
+user namespace. Zinc creates no namespaces, routes, TAPs, bridges, host listeners or
+host firewall rules. See the [provisioning contract](../../../docs/network-provisioning.md).
 
-For containers, the adapter probes Podman's current user-namespace identity.
-An exact match uses Podman's current namespace rather than attempting an invalid
-re-entry into it; a different provisioned identity uses the explicit namespace
-path. Probe failure aborts. Both entered namespace inodes remain checked before
-firewall operations, regardless of the selected Podman option.
+Supply strict [`Manifest`](manifest.go) JSON at `$ZINC_NETWORK_MANIFEST_DIR/<AppNameID>.json`,
+default `$XDG_RUNTIME_DIR/zinc/network/<AppNameID>.json`. Manifest/parents must be
+root/user-owned, protected from other writers and symlink-free; unknown/duplicate keys fail.
 
-The `Manifest` Go type is the wire format. `policy` is the exact NetworkMeta
-snapshot (its keys use the schema's Go field names). `topology.mode` is
-`container` or `tap`. All declared interfaces must map exactly once. MACs are
-canonical unicast addresses; a provisioner assigns generated MACs when the
-schema omits one. Assigned addresses are literal IPv4/IPv6 addresses, not CIDRs.
+Namespace paths must match nsfs/pinned inodes, rechecked after entry and before firewall
+operations. Podman's current user namespace is reused on an exact identity match;
+otherwise the provisioned path is entered. Probe failure aborts either path.
 
-Container devices live in the application namespace. TAP devices live in the
-guest's routing/enforcement namespace; QEMU opens each pre-created TAP there.
-There must be no bridge or alternate path that bypasses the inet forward hook.
-`complete_inventory` attests the manifest enumerates every reachable Zinc app
-and every host address, so Any cannot bypass an omitted peer's endpoint policy.
-The provisioner supplies static addressing/neighbors, enables forwarding for
-TAP topology, and prevents alternate guest MAC/IP identities or outside source
-spoofing. The adapter additionally enforces exact endpoint sources, routes,
-MACs and ARP sender identity. DHCP/RA services are not inferred or started.
+- `policy`: exact `NetworkMeta` snapshot using schema Go field names. Every interface
+  maps once; MACs are canonical unicast (provisioner-assigned if absent), IPs literal, not CIDRs.
+- `topology.mode`: `container` devices live in the app namespace; `tap` devices live in
+  guest routing/enforcement namespaces. No path may bypass the inet forward hook.
+- Provisioners supply static addressing/neighbors, TAP forwarding and anti-spoofing.
+  The adapter checks sources/routes/MACs/ARP identity; no DHCP/RA is inferred.
+- `complete_inventory` includes every reachable Zinc app, its policy and all host
+  addresses. Peer `device` is the path seen from this enforcement namespace.
+  Both endpoint policies apply; identities are exact AppNameID, including runtime instances.
+- Host mappings include public host IPs; external interfaces are packet-preserving uplinks.
+  Internet excludes host/app and special/private/link-local ranges; AnyApp includes Self/peers.
 
-Peer interface `device` means the path to that peer *as seen in this app's
-enforcement namespace*. Each peer includes its authoritative NetworkMeta.
-Every packet to/from a peer must pass both ordered policies. Host mappings
-identify all host addresses (including public ones); external interfaces
-identify packet-preserving uplinks. Internet excludes those addresses, every
-app address, and conservative special/private/link-local ranges. AnyApp includes
-Self and the manifest's registered peers; identity is exact AppNameID (instances
-must be provisioned under their runtime identities).
+DNS grants create no firewall exceptions. `dns_proxy_addresses` name provisioned,
+routable plaintext forwarders, not namespace loopback or encrypted upstreams.
+`dns_config_digest` must match `DNSDigest`; policy must allow the proxy address/port.
 
-DNS upstream transport descriptions do not install firewall exceptions.
-`dns_proxy_addresses` refer only to an already-provisioned plaintext local
-forwarder whose configuration hashes to `dns_config_digest` (DNSDigest).
-`dns_control_socket` names its private Unix status socket; both runners verify
-the live configuration and exact UDP/TCP listener set before preparing a launch.
-Its address must be routable in the provisioned topology, not namespace loopback.
-App policy must allow access to that address/port. Encrypted upstream endpoints
-are never placed directly in resolv.conf. The separately integrated DNS worker
-owns readiness and authenticated upstream transport. Domain lookups require
-an explicitly injected Lookup receiving the owner's configured DNSMeta; no
-host fallback exists. Results are a frozen launch snapshot, not a live DNS
-hostname firewall. A failed/empty lookup aborts even a deny rule.
+Both runners verify live configuration and exact UDP/TCP listeners through private
+`dns_control_socket`. The [DNS worker](../../../docs/dns.md) owns readiness/upstream
+authentication; encrypted upstream endpoints never go directly into `resolv.conf`.
 
-Changing a policy, address or namespace requires reprovisioning and relaunch.
-The manifest is authoritative, not an auto-discovery cache. Peer registration
-must remain valid for the namespace lifetime. Namespace reuse while an old
-process is still running is forbidden. Application network-admin privileges
-must never be granted. KeepUserID requires a matching provisioned user mapping.
+Injected `Lookup func(schema.DNSMeta, string) ([]netip.Addr, error)` receives the policy
+owner's DNS configuration, with no host fallback. Results are frozen launch snapshots;
+failed/empty resolution aborts even deny rules. This is not a live hostname firewall.
 
-VM callers validate runtime port mappings with `CheckForwards`; `publications`
-must match protocol, bind address, both ports, and logical NIC exactly. Raw
-slirp hostfwd arguments are refused, not widened or silently copied onto TAPs.
-VM callers use `netns.Configure` for a runtime-only MAC-bound config and the
-QEMU attachment list, then call `CommandResolved` with their approved Lookup.
-`nsenter`, `nft`, `ip`, and util-linux `setpriv` must be installed in the launch
-environment. BusyBox `setpriv` lacks the required capability-bounding options.
-The VM supervisor retains only the provisioning authority; QEMU is started by
-setpriv with all capability bounding/inheritable/ambient sets dropped.
+VM callers use `CheckForwards`: `publications` must match protocol, bind, both ports
+and NIC exactly; raw slirp hostfwd is refused. `netns.Configure`/`ConfigureResolved`
+return runtime-only MAC binding/attachments; `CommandResolved` takes the approved Lookup.
 
-The adapter changes only Zinc tables inside the dedicated namespace. It loads
-default deny before the full policy; rollback restores default deny rather than
-reopening an old policy. Stateful admissions carry a hash of the resolved policy
-so replacing policy does not automatically trust old conntrack entries.
+VM launch needs `nsenter`, `nft`, `ip` and util-linux `setpriv` (BusyBox is insufficient).
+The supervisor retains provisioning authority; QEMU drops bounding/inheritable/ambient
+capabilities. Apps must never get network-admin; KeepUserID needs matching user mappings.
+
+Policy/address/namespace changes require reprovisioning and relaunch. Keep peer
+registration valid throughout namespace lifetime; never reuse it while old processes run.
+The manifest is authoritative, not discovery data.
+
+Only Zinc tables change. Default-deny precedes full policy and is restored on rollback.
+Stateful admissions hash resolved policy; new policy does not trust old conntrack entries.

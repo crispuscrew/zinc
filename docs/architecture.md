@@ -1,52 +1,37 @@
 # Zinc architecture
 
-**Priority: Stable, then Secure, then Beautiful.** Zinc authors and runs Linux
-desktop applications through rootless Podman or QEMU. This index describes the
-current canonical schema v4 checkout, not the behavior of earlier releases.
-Historical release behavior remains in [CHANGELOG.md](../CHANGELOG.md).
+This index covers the schema v4 checkout. For earlier behavior, use the
+[changelog](../CHANGELOG.md); to start, use the [quickstart](quickstart.md).
 
 ## Design and boundaries
 
-- App intent is YAML; host-local VM hardware choices are separate JSON.
-- Shared validation is pure. Runtime adapters additionally check host resources,
-  provisioned topology, disk pins, broker readiness and backend applicability.
-- The creator and launchers execute runner binaries rather than import runners.
-- Networking is default-deny and needs an owner-provisioned packet-preserving
-  topology whenever an interface is declared. There is no automatic pasta setup.
-- Brokered desktop access is prepared outside the application before launch.
-  PipeWire needs an explicitly deployed Zinc WirePlumber policy.
-- Raw backend argv can override typed guarantees and produces warnings.
-- Plans expose managed intent; they do not replace launch-time preparation or
-  attest that host services, firmware, images and devices are available.
+- App intent is YAML; host-local VM options are JSON. Tools delegate to runners.
+- Pure validation checks intent; adapters check host resources, topology, pins,
+  brokers and backend support. Plans cannot attest availability or replace preparation.
+- Declared NICs require owner-provisioned, packet-preserving, default-deny networking.
+  No automatic pasta/bridge/Via/WireGuard provisioner replaces the historical setup.
+- Desktop brokers prepare outside the app; PipeWire requires deployed Zinc policy.
+- Raw backend argv warns because it can override typed guarantees.
 
 ## Focused reference
 
-| Page | Contents |
+| Task | Reference |
 | --- | --- |
-| [Schema](schema.md) | Canonical fields, inheritance, strict decoding, raw flags |
-| [Migration](migration.md) | Recognized aliases, lossless conversion, refusal cases |
-| [Components](components.md) | Tool boundaries, ports/adapters, repository layout, launchers |
-| [Containers](containers.md) | Lifecycle, dependencies, terminal holders, resource controls |
-| [Images and mounts](images-and-mounts.md) | Pins, derived builds, config bundles, volumes, keys |
-| [Desktop access](desktop-access.md) | Wayland identity, GPU limits, bus attribution, notifications |
-| [Network policy](network-policy.md) | Ordered From/To rules, endpoint filters, peer consent, counters |
-| [Network provisioning](network-provisioning.md) | Manifest trust, namespaces, TAPs, publications, startup ordering |
-| [DNS](dns.md) | Five transports, proxy commands, authenticated readiness, IP snapshots |
-| [Audio](audio.md) | Directional grants, WirePlumber deployment, revocation, ALSA |
-| [Virtualization](virtualization.md) | External options, disks, supervision, host-only limits |
-| [VM hardware](vm-hardware.md) | Display profiles, Windows installation, firmware, TPM, identity |
-| [Build and checks](build-and-checks.md) | Go pins, vendors, CI, Nix compatibility, integration suites |
+| Author or upgrade | [Schema](schema.md), [migration](migration.md), [examples](../common/examples/README.md) |
+| Choose tools / understand layout | [Components](components.md) |
+| Run containers / grant files | [Containers](containers.md), [images and mounts](images-and-mounts.md) |
+| Grant display, bus or sound | [Desktop access](desktop-access.md), [audio](audio.md) |
+| Connect apps | [Policy](network-policy.md), [provisioning](network-provisioning.md), [DNS](dns.md) |
+| Run or install VMs | [Virtualization](virtualization.md), [hardware](vm-hardware.md) |
+| Build, test or package | [Builds and checks](build-and-checks.md) |
 
-Start with the [quickstart](quickstart.md) or the tested
-[canonical examples](../common/examples/README.md). Command details live with
-[zc](../creator/README.md), [zcr](../container/runner/README.md), and
-[zvr](../virtualization/runner/README.md).
+Command references: [zc](../creator/README.md), [zcr](../container/runner/README.md),
+[zvr](../virtualization/runner/README.md). Both runners expose the shared DNS worker
+and authenticate its manifest-bound readiness.
 
 ## Earlier section references
 
-Older code comments use numbered sections from the former monolithic document.
-This map retains those reference meanings without presenting obsolete behavior
-as a current contract.
+Numbered references in older comments map to these current contracts:
 
 | Former section | Current reference |
 | --- | --- |
@@ -63,8 +48,3 @@ as a current contract.
 | 10: guests | [Virtualization](virtualization.md), [VM hardware](vm-hardware.md) |
 | 11-13: host surface, desktop integration, layout | [Components](components.md), [provisioning](network-provisioning.md) |
 | 14-15: tradeoffs/status | Limits on each focused page; [release history](../CHANGELOG.md) |
-
-The old automatic bridge/Via/WireGuard architecture is historical. Its removal
-does not imply a replacement provisioner ships with this checkout. The shared
-DNS worker is available through both runners, with authenticated manifest
-readiness checks; see [DNS integration](dns.md).

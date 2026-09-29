@@ -1,79 +1,53 @@
 # VM hardware and installation
 
-Resources, boot security and display intent are shared app fields; disk pins and
-hardware profiles belong in [external VM options](virtualization.md). QEMU uses
-`-nodefaults` and, except for the Vulkan path, a managed `-sandbox on` baseline.
-Raw argv can override typed choices and must be reviewed as such.
+Resources/boot/display intent live in YAML; pins/profiles in [VM options](virtualization.md).
+QEMU uses `-nodefaults`, `-sandbox on` except Vulkan. Raw argv can override typed choices.
 
 ## Profiles and display
 
-`ResourcesMeta.MaxRamMiB` must be positive and `MaxCPUCores` a positive integer
-for VMs. `Devices: Virtio` uses paravirtual devices; `Compatible` supplies AHCI
-storage, an e1000e NIC when networking is declared, and USB input for guests
-without virtio drivers. An absent NIC remains absent under either profile.
+`ResourcesMeta.MaxRamMiB` must be positive; `MaxCPUCores` a positive integer.
+`Devices: Virtio` uses paravirtual hardware; `Compatible` supplies AHCI, USB input
+and e1000e only when networking is declared. Neither invents a NIC.
 
-Runtime `Display` choices:
+| Runtime `Display` | Hardware |
+| --- | --- |
+| `None` | Headless, serial supported |
+| `Window` | Unaccelerated virtio GPU, GTK |
+| `Accelerated` | virtio-gpu-gl, accelerated local GTK |
+| `Compatible` | Firmware-friendly unaccelerated VGA/bochs |
+| Empty | None for Terminal; else Compatible for `DisableGpuAccess`; else Accelerated |
 
-- `None`: headless display, with serial console support.
-- `Window`: unaccelerated virtio GPU and GTK window.
-- `Accelerated`: virtio-gpu-gl and local accelerated GTK window.
-- `Compatible`: firmware-friendly unaccelerated VGA/bochs display.
+GPU denial/Vulkan contradictions error. Acceleration requires compatible guest drivers.
+`DisplayMeta.Vulkan` selects Venus/blob on compatible accelerated hardware and **disables
+QEMU seccomp** for its renderer helper, with a validation warning. `hostmem` is address
+space, not VRAM quota; Zinc enforces no GPU memory cap.
 
-Empty Display is automatic: None for Terminal, Compatible for
-`DisableGpuAccess`, otherwise Accelerated. Contradictory GPU denial/Vulkan
-selections are rejected. Guest acceleration requires suitable guest drivers;
-a local window does not mean every guest OS supports accelerated 3D.
-
-`DisplayMeta.Vulkan` enables the Venus/blob path on compatible accelerated
-hardware. The QEMU `hostmem` window is address space, not a VRAM cap. Zinc has
-no GPU memory quota. Vulkan currently disables QEMU's seccomp sandbox because
-the renderer needs a helper process; shared validation emits a warning.
-
-Compatible UEFI display dimensions use validated framebuffer/EDID geometry.
-BIOS/plain VGA cannot represent all the same requested modes. A guest without
-a display driver generally keeps its boot mode; resizing the host window need
-not change guest resolution. Guest-specific ceilings remain possible even when
-the emulated mode is valid. Earlier development observed sheared high-resolution
-Windows output without a display driver; that is not a universal guest limit
-or a promise that every driver supports the accepted geometry.
+Compatible UEFI uses validated framebuffer/EDID geometry; BIOS/plain VGA cannot express
+all modes. Driverless guests usually retain boot resolution despite window resizing.
+Valid emulated geometry still faces guest/driver ceilings; observed driverless Windows
+high-resolution shearing is neither a universal limit nor a driver-support guarantee.
 
 ## Firmware, Secure Boot and TPM
 
-`StartConditions.LoaderBIOS: false` selects UEFI. Secure Boot requires UEFI,
-matching trusted firmware/variable stores and SMM support; a firmware that boots
-is not by itself evidence that it enforces signatures.
+`StartConditions.LoaderBIOS: false` selects UEFI. Secure Boot needs UEFI, trusted
+matching firmware/variable stores and SMM; boot success does not prove signature enforcement.
+TPM needs swtpm/control socket and compatible firmware. Modern supported OVMF is preferred;
+incompatible variable-store shapes are refused, never silently substituted. Legacy
+firmware may enumerate TPM without required support; check the guest's requirements.
 
-TPM uses swtpm and its control socket. Firmware generations differ: the runner
-prefers supported modern OVMF layouts and refuses incompatible variable-store
-shapes rather than silently switching an existing machine. Legacy firmware may
-enumerate a TPM device without the expected firmware support. Validate the
-guest's actual requirements against the chosen firmware build.
-
-Machine UUIDs remain stable for app identity. Provisioned/explicit MACs are
-preserved, and missing MACs are assigned through the network contract. Changing
-identity can affect guest enrollment and activation. `MinimizeFingerprint`
-requests neutral SMBIOS branding and locally administered generated MACs where
-applicable; it does not hide virtualization reliably.
+UUIDs stay stable per app; explicit/provisioned MACs persist, omitted MACs use the
+network contract. Identity changes can affect enrollment/activation. `MinimizeFingerprint`
+requests neutral SMBIOS and locally administered generated MACs, not reliable concealment.
 
 ## Installing a Windows-class guest
 
-Windows Setup often needs the Compatible device profile or an explicit driver
-disc to see storage. Secure Boot and TPM requirements are OS/version-specific;
-select the required boot fields and trusted OVMF rather than treating a profile
-as a complete Windows preset.
-
-Compatible provisioning media can include `zinc-setup.cmd` to stage virtio-win
-drivers. Installing drivers still requires a user/admin action inside the guest;
-there is no guest agent to do it silently. Cloud-init media and guest setup
-media are distinct use cases, and disabling cloud-init does not imply that all
-other setup media disappear.
-
-`zvr install` creates the base disk before an app can pin it. It can use an
-existing app's hardware defaults with `--app`; `--resume` is required to write
-an existing target. After installation, review the completed disk digest and
-place the authorized pin in VM options before normal launch.
-
-Installed NVRAM is not authenticated by the disk hash. Secure Boot refuses
-untrusted adoption; TPM-sealed state is not automatically cloned. A disk alone
-is not a full machine backup. Keep firmware variables and TPM identity in mind
-when planning resets, adoption or migration.
+- Setup may need Compatible devices or a driver disc for storage. Secure Boot/TPM
+  depend on OS/version: choose boot fields/trusted OVMF; no profile is a complete preset.
+- Compatible media may stage virtio-win via `zinc-setup.cmd`; installation needs guest
+  user/admin action, not a guest agent. Disabling cloud-init does not remove other setup media.
+- `zvr install` creates a base; `--app` selects app hardware defaults, `--resume` is
+  required to write an existing target. Review the completed digest and authorize it
+  in VM options before launch.
+- Disk hashes do not authenticate installed NVRAM. Secure Boot refuses untrusted adoption;
+  TPM-sealed state is not automatically cloned. A disk is not a full machine backup:
+  resets/adoption/migration must account for firmware variables and TPM identity.

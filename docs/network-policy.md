@@ -1,15 +1,13 @@
 # Ordered packet policy
 
-`NetworkMeta.Interfaces` declares logical Zinc IDs with optional `MacAddress`.
-IDs are not kernel interface names. No interfaces means no managed NIC for either
-runtime. Declared interfaces require [provisioning](network-provisioning.md),
-even when the rule list is empty; an empty list permits no new routed flows.
+`NetworkMeta.Interfaces` declares logical IDs (not kernel names), optional `MacAddress`.
+Empty means no managed NIC; declared NICs require [provisioning](network-provisioning.md)
+even with no rules. Empty rules admit no new routed flows.
 
 ## From and To describe endpoints
 
-Each `RulesByPriority` entry contains `From`, `To`, optional `Domains`, optional
-`Protocols`, and `AllowAllExcept`. Each endpoint has `Type`, optional
-`AppNameID`/`Interface`, and `Filter` with `IPv4CIDR`, `IPv6CIDR` and `Ports`.
+`RulesByPriority`: `From`, `To`, optional `Domains`/`Protocols`, `AllowAllExcept`.
+Endpoints: `Type`, optional `AppNameID`/`Interface`, `Filter` (`IPv4CIDR`, `IPv6CIDR`, `Ports`).
 
 | Peer Type | Scope |
 | --- | --- |
@@ -20,78 +18,42 @@ Each `RulesByPriority` entry contains `From`, `To`, optional `Domains`, optional
 | `Internet` | Public external addresses, excluding host/apps and conservative special/private/link-local ranges |
 | `Any` | Any endpoint, still subject to both registered app policies |
 
-`AppNameID` is valid only for `App`. `Interface` selects a logical ID for `Self`
-or `App`, and a host interface name for `Host`. Other peer types cannot use it.
-CIDRs narrow the chosen scope; adding a private CIDR to `Internet` does not grant
-private access. `From.Filter.Ports` matches source ports; `To.Filter.Ports`
-matches destination ports. Address families remain separate.
-
-```yaml
-NetworkMeta:
-  Interfaces:
-    - ID: primary
-  RulesByPriority:
-    - From: {Type: Self, Interface: primary}
-      To:
-        Type: App
-        AppNameID: network-server
-        Interface: service
-        Filter: {Ports: [8080]}
-      Protocols: [TCP]
-```
-
-This fragment needs the server's reciprocal inbound grant and provisioned
-connectivity. It creates neither a DNS alias nor a bridge. Complete matching
-examples are [here](../common/examples/README.md).
+- `AppNameID`: only `App`. `Interface`: logical ID for `Self`/`App`, host name for
+  `Host`, forbidden otherwise. CIDRs only narrow scope; private CIDRs cannot widen `Internet`.
+- `From.Filter.Ports` matches source ports; `To.Filter.Ports` destination ports.
+  Address families stay separate.
+- Use the [paired network examples](../common/examples/README.md): reciprocal inbound
+  grants and provisioned connectivity are required; rules create no DNS alias or bridge.
 
 ## Evaluation and protocols
 
-- Rules are ordered, first match wins, and the default is **deny**.
-- `AllowAllExcept: false` allows a matching packet; `true` denies that match.
-  Despite the field name, it never changes the default to allow. To allow other
-  traffic, author a later explicit allow rule.
-- Both app endpoints must consent. An allow in one app, including an `Any`
-  rule, cannot bypass a registered peer's policy.
-- Stateful replies to admitted flows do not need a reverse rule. Connection
-  tracking is bound to a resolved-policy hash, so a new policy does not simply
-  trust old admissions.
-- Supported protocols are `TCP`, `UDP`, `ICMP`, `ICMPv6`, `SCTP`, `GRE`, `ESP`,
-  `AH`. Empty `Protocols` selects all supported protocols.
-- Ports require explicit `TCP`, `UDP` or `SCTP`; they cannot be applied to
-  non-port protocols. ICMP family mismatches are rejected.
+- First match wins; default **deny**. `AllowAllExcept: false` allows, `true` denies
+  only that match; allowing other traffic requires a later explicit allow rule.
+- Both registered app endpoints must consent, even with `Any`.
+- Stateful replies need no reverse rule. Conntrack binds to the resolved-policy hash;
+  replacement policies do not automatically trust old admissions.
+- Protocols: `TCP`, `UDP`, `ICMP`, `ICMPv6`, `SCTP`, `GRE`, `ESP`, `AH`; empty selects all.
+  Ports require explicit TCP/UDP/SCTP, never non-port protocols. ICMP family mismatches error.
 
-The shared renderer in `common/domain/nftrules` consumes validated, resolved
-topology. Containers enforce at input/output hooks; TAP guests are filtered at
-the forwarding path. Provisioning must prevent alternate paths and identities.
+`common/domain/nftrules` renders validated/resolved topology at container input/output
+or TAP forward hooks. Provisioning must prevent alternate paths/identities.
 
 ## Domains are IP snapshots
 
-`Domains` resolves destination addresses using the policy owner's explicit
-`DNS.ResolversByPriority`, including when resolving a peer's rules. Resolved
-addresses further constrain the destination match, alongside its endpoint
-scope and filters. Missing, failed or empty results abort launch, including for
-deny rules; there is no implicit host DNS fallback.
+`Domains` further narrows destination scope/filters using each policy owner's explicit
+`DNS.ResolversByPriority`, including peer rules. Missing/failed/empty results abort
+even deny rules; no host DNS fallback.
 
-The frozen addresses are **not hostname enforcement**. Connections by literal IP
-are allowed when they match; another hostname on the same CDN/shared address is
-indistinguishable. No TLS SNI or HTTP Host inspection occurs. Results are not
-refreshed during the run. Rotating names may stop working; an old IP remains
-allowed until relaunch even if reassigned to another owner. Do not describe a
-stale snapshot as necessarily safe or as a live domain firewall.
-
-Resolver selection does not authorize packets to a DNS server. The application
-needs an explicit rule permitting its provisioned local proxy, and the proxy
-needs its own provisioned upstream path. See [DNS](dns.md).
+**Not hostname enforcement:** literal IPs and other names sharing an allowed IP match.
+No TLS SNI/HTTP Host inspection or live refresh occurs. Rotating names may break;
+reassigned old IPs stay allowed until relaunch, so stale snapshots are not necessarily safe.
+The app must explicitly allow its [local DNS proxy](dns.md); the proxy needs a
+provisioned upstream path. Resolver selection grants no packet permission.
 
 ## Observability and escape hatches
 
-`zcr net` reports observed running attachment; `zcr net APP --json` and
-`zvr net APP` expose namespace counters. Rule labels use canonical `rule[N]`
-indexes and identify policy owners. The renderer counts policy decisions and
-default drops; these are not application payload accounting or lifetime totals.
-Replacing namespace tables resets counters. Observed attachment alone does not
-attest every effective backend option.
-
-Raw `RunnerFlags` can override structured containment and are warned. A VM with
-no typed NICs can explicitly add raw networking; that is not an isolated run.
-Provisioned VM launches additionally check the actual NIC/backend arguments.
+`zcr net` observes running attachment; `zcr net APP --json`/`zvr net APP` report
+namespace decisions/default drops by owner and canonical `rule[N]`. Counters reset
+on table replacement; they are not payload accounting, lifetime totals or backend attestation.
+Raw `RunnerFlags` warn and may override containment/add VM networking without typed
+NICs; that run is not isolated. Provisioned VMs also check actual NIC/backend arguments.

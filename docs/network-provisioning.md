@@ -1,94 +1,58 @@
 # Mandatory packet-preserving provisioning
 
-Networked containers and VMs require an owner-provisioned topology before
-launch. Zinc does **not** automatically create rootless pasta networking,
-namespaces, bridges, TAPs, routes, host listeners or host firewall rules.
-Empty `NetworkMeta.Interfaces` is the offline path.
-
-The full contract and wire type are in
-[common/adapters/network](../common/adapters/network/README.md) and
-[manifest.go](../common/adapters/network/manifest.go). There is no universal
-host-setup command or bundled provisioner promised by these docs.
+Declared NICs require owner-provisioned topology; empty `NetworkMeta.Interfaces`
+is offline. Zinc creates no pasta/namespaces/bridges/TAPs/routes/host listeners/firewall.
+No universal setup command or bundled provisioner exists. Follow the authoritative
+[contract](../common/adapters/network/README.md) and [wire type](../common/adapters/network/manifest.go).
 
 ## Manifest and trust
 
-Supply version 1 JSON at `$ZINC_NETWORK_MANIFEST_DIR/<AppNameID>.json`, default
-`$XDG_RUNTIME_DIR/zinc/network/<AppNameID>.json`.
-
-- Manifest and parent directories must be root/user-owned and protected from
-  other writers. Symlinks, duplicate JSON keys and unknown keys are refused.
-- `policy` is the exact authoritative `NetworkMeta` snapshot, using Go field
-  names as JSON keys. Logical interfaces must map exactly once.
-- `network_namespace`, `user_namespace` and their pinned inodes identify the
-  dedicated namespace pair. They are checked against nsfs and rechecked inside
-  the initializer. The invoking user must be able to enter the user namespace.
-- `packet_preserving`, `exclusive`, `static_neighbors`, `complete_inventory`
-  attest requirements the provisioner must actually hold for the namespace's
-  entire lifetime. A boolean is not a substitute for correct topology.
-- Addresses are exact literal unicast IPs, not CIDRs. MACs are canonical,
-  nonzero, unicast addresses; the provisioner assigns one if YAML omits it.
-- `KeepUserID` requires matching provisioned user mappings.
-
-The inventory includes every reachable app, its authoritative policy, all host
-addresses and packet-preserving external interfaces. Peer `device` names mean
-the path seen from this app's enforcement namespace, not a global host name.
-Instances must be provisioned under their runtime identities.
+Supply v1 JSON: `$ZINC_NETWORK_MANIFEST_DIR/<AppNameID>.json`, default
+`$XDG_RUNTIME_DIR/zinc/network/<AppNameID>.json`. Required contract checks:
+- Root/user-owned manifest/ancestors, protected from other writers; no symlinks,
+  duplicate or unknown keys. `policy` exactly snapshots `NetworkMeta` using Go field names.
+- Each logical NIC maps once. `network_namespace`/`user_namespace` pin dedicated
+  nsfs inodes, rechecked inside initialization; the invoking user must enter the user namespace.
+- `packet_preserving`, `exclusive`, `static_neighbors`, `complete_inventory` must
+  hold for the entire namespace lifetime; booleans cannot establish correct topology.
+- Literal unicast IPs, not CIDRs; canonical nonzero unicast MACs, assigned if omitted.
+  `KeepUserID` needs matching user mappings; instances use their runtime identities.
+- Inventory every reachable app/policy, host address and packet-preserving uplink.
+  Peer `device` is the path seen from this enforcement namespace, not a global name.
 
 ## Container and TAP paths
 
-`topology.mode: container` places application devices in its network namespace.
-The container joins the approved namespace after default-deny and full policy
-installation. The app must never have network-admin capability.
+`topology.mode: container` places devices in the app namespace; join follows policy
+installation. Never grant the app network-admin. Build the initializer/D-Bus helper
+with `make -C container/runner netfilter-image`: `--pull never`, dropped capabilities,
+only namespaced `NET_ADMIN` restored for initialization; initializer exits before launch.
 
-Container initialization uses the local helper built by
-`make -C container/runner netfilter-image`, with `--pull never`, dropped
-capabilities and only namespaced `NET_ADMIN` restored. It exits before the app
-starts. The same image carries the separate D-Bus proxy; neither use creates
-the required host topology.
+`topology.mode: tap`: pre-create TAPs in the routing/enforcement namespace; QEMU uses
+`script=no,downscript=no`. Provision forwarding/static addresses/neighbors matching the
+guest; no inferred DHCP/RA. Every packet must cross inet forward, never a bypass bridge.
+Prevent guest MAC/IP changes and outside spoofing; adapter checks sources/routes/MACs/ARP.
+SCTP/GRE/ESP/AH need packet-preserving attachment too; slirp/socket forwarding is insufficient.
 
-`topology.mode: tap` provides pre-created TAPs in the guest's routing/enforcement
-namespace. QEMU attaches with `script=no,downscript=no`. The provisioner enables
-forwarding and supplies static addressing/neighbors; guest/network configuration
-must agree. Zinc starts no inferred DHCP or router-advertisement service.
-
-Every guest packet must traverse the inet forward hook. A bridge or alternate
-path that bypasses it is invalid. Provisioning must prevent guest MAC/IP changes
-and outside source spoofing; the adapter also checks endpoint sources, routes,
-MACs and ARP sender identity. Packet-preserving attachment is required for SCTP,
-GRE, ESP and AH as well as TCP/UDP; slirp/socket forwarding is not equivalent.
-
-The VM launch environment needs `nsenter`, `nft`, `ip` and util-linux `setpriv`.
-BusyBox's version lacks the required capability-bounding options. QEMU starts
-with capability bounding, inheritable and ambient sets dropped; the supervisor
-retains only its provisioning authority.
+VM prerequisites: `nsenter`, `nft`, `ip`, util-linux `setpriv` (BusyBox lacks required
+options). QEMU drops bounding/inheritable/ambient capabilities; supervisor retains only
+provisioning authority.
 
 ## Publications and DNS
 
-VM `ForwardPorts` live in external VM-options JSON. The manifest's
-`publications` must match protocol, bind IP, host port, guest port and logical
-NIC exactly. A wildcard bind does not satisfy a loopback request. These are
-checks of existing publications, not instructions to open a listener.
-Raw slirp `hostfwd` arguments are refused in a provisioned topology.
+VM-options `ForwardPorts` must match existing `publications`: protocol, bind IP,
+host/guest ports, logical NIC. Wildcard cannot satisfy loopback; no listener is created.
+Provisioned topology refuses raw slirp `hostfwd`.
 
-Configured DNS requires routable, non-loopback `dns_proxy_addresses` and
-`dns_config_digest` equal to `DNSDigest(NetworkMeta.DNS)`. These manifest
-addresses are bare IPs used for plaintext DNS on port 53. Encrypted upstream
-endpoints cannot be placed in `resolv.conf`. The app must allow the proxy in
-its rules; the manifest creates no exception.
-
-`dns_control_socket` binds the worker's private authenticated readiness socket.
-Both runners verify its live configuration digest and exact UDP/TCP listener set
-before preparing the network launch. See [DNS integration](dns.md).
+DNS needs routable non-loopback bare `dns_proxy_addresses` (plaintext port 53),
+`dns_config_digest = DNSDigest(NetworkMeta.DNS)` and private `dns_control_socket`.
+Both runners [authenticate live digest/listeners](dns.md#manifest-binding-and-authenticated-readiness)
+before network preparation. App rules must allow the proxy; encrypted upstreams
+cannot go in `resolv.conf`, and manifests grant no exception.
 
 ## Startup, failure and changes
 
-The adapter validates binding, resolves domain snapshots, installs default-deny
-before full rules, then permits the runtime to join. It changes only Zinc tables
-inside the dedicated namespace. Rollback restores default-deny rather than
-reopening a previous policy.
-
-Changing addresses, namespaces, policy or publications requires reprovisioning
-and relaunch. A manifest is authoritative, not an auto-discovery cache. Do not
-reuse a namespace while an old process remains, and keep peer registration
-valid for its lifetime. `DependsOn` supplies runtime ordering, not topology,
-DNS-worker readiness or application service health.
+Order: validate binding, resolve domains, install default-deny, install full policy, join.
+Only Zinc tables in the dedicated namespace change; rollback restores default-deny.
+Address/namespace/policy/publication changes require reprovision/relaunch; manifests
+are authoritative. Never reuse a live namespace; retain peer registration for its lifetime.
+`DependsOn` provides ordering, not topology, DNS-worker readiness or service health.

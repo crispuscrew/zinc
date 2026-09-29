@@ -1,84 +1,56 @@
 # Container runtime
 
-`zcr` uses rootless Podman. Namespaces and explicit mounts are the main container
-boundary; containers still share the host kernel. The managed baseline includes
-`--cap-drop all`, `no-new-privileges`, and `--pull never`. Raw backend flags can
-override that baseline and are warned.
-
-Shared validation runs before launch; host-dependent checks additionally verify
-mount sources, broker resources and [network provisioning](network-provisioning.md).
-A successful schema check is not evidence that an image or service exists.
+`zcr` uses rootless Podman: namespaces/explicit mounts, shared host kernel,
+`--cap-drop all`, `no-new-privileges`, `--pull never`. Raw flags warn and can override this.
+Validation cannot prove image/service availability; launch also checks mounts,
+brokers and [network provisioning](network-provisioning.md).
 
 ## Lifecycle
 
-`zcr run APP` prints a plan; `--exec` launches. A nonempty
-`StartConditions.Entrypoint` is `/bin/sh -c` inside the image. Empty ordinary
-entrypoints preserve the image default. `EntrypointEnv` is a literal string map,
-not host-shell expansion; reserved broker/runtime environment keys are refused.
+`zcr run APP` plans; `--exec` launches. Nonempty `StartConditions.Entrypoint` uses
+`/bin/sh -c` inside the image; empty preserves its default. `EntrypointEnv` is
+literal, without host-shell expansion; reserved broker/runtime keys are refused.
+`Terminal` needs an installed `ZINC_TERMINAL` or fallback `TERMINAL`, opens an
+interactive TTY, and fails if unavailable. Foreground, detached and terminal paths differ.
 
-`Terminal` opens a configured host terminal with an interactive TTY. Set
-`ZINC_TERMINAL`, falling back to `TERMINAL`; a missing terminal command fails
-with an actionable error. Ordinary foreground commands, detached Background
-apps and terminal sessions follow different Podman lifecycle paths.
-
-- `StopConditions.KeepAlive` retains the container instead of selecting `--rm`;
-  it does not make an exited process continue executing.
-- `StopConditions.Background` selects detached execution, or keeps an Attached
-  holder alive after its last terminal closes.
-- `StopConditions.Autorestart` uses Podman's `on-failure` and does not pair with
-  `--rm`. A clean exit or manual stop is not an automatic failure restart.
-- `StartConditions.ReadOnlyRootfs` uses `--read-only`. Backend-managed writable
-  temporary locations and explicitly granted writable mounts remain separate.
+| Setting | Effect |
+| --- | --- |
+| `StopConditions.KeepAlive` | Retain container, omit `--rm`; cannot keep an exited process executing |
+| `StopConditions.Background` | Detach, or retain Attached holder after last terminal closes |
+| `StopConditions.Autorestart` | `on-failure`, never `--rm`; no restart on clean exit/manual stop |
+| `StartConditions.ReadOnlyRootfs` | `--read-only`; backend temporary storage and writable mounts remain separate |
 
 ## Attached sessions
 
-`StartConditions.Attached` requires `Terminal` and an explicit `Entrypoint` or
-`AttachedEntrypoint`. A detached holder under `--init` keeps one shared container
-available; every terminal executes the selected command with `podman exec -it`.
-`run` on a live attached app opens another session. `zcr term APP --shell` opens
-a shell rather than the configured attached command.
-
-`AttachedEntrypoint` overrides `Entrypoint` for sessions. Session environment is
-`EntrypointEnv` overlaid by `AttachedEnv`, with the latter winning duplicate
-names. This runtime overlay differs from inheritance, where each explicitly
-authored environment map replaces its entire parent map.
-
-Filesystem locks serialize holder creation and liveness markers under runtime
-state. Each terminal waiter owns a lock, released by process death; the last
-waiter removes the holder unless Background retains it. There is no resident
-central daemon. The holder clears the image entrypoint so it does not
-accidentally execute the app instead of holding sessions.
+- `StartConditions.Attached` requires `Terminal` and explicit `Entrypoint` or
+  `AttachedEntrypoint`. A detached `--init` holder clears the image entrypoint.
+- Terminals use `podman exec -it`; another `run` opens another session.
+  `zcr term APP --shell` substitutes a shell for the attached command.
+- `AttachedEntrypoint` overrides `Entrypoint`; `AttachedEnv` overlays `EntrypointEnv`,
+  winning duplicates. [Inheritance](schema.md#inheritance-is-a-yaml-operation) replaces whole maps.
+- Runtime filesystem locks serialize holder creation/liveness. Each waiter owns a
+  death-released lock; the last removes the holder unless Background retains it.
+  No central daemon is required.
 
 ## Dependencies and resources
 
-`DependsOn` starts missing container dependencies depth-first and leaves already
-running ones alone. Cycles fail. It is runtime ordering, not an HTTP, database,
-tunnel or DNS readiness check. The canonical schema has no `ReadyCheck` or
-`ReadyTimeoutSec`; nonzero legacy probes cannot migrate losslessly.
+`DependsOn` starts missing dependencies depth-first, preserves running ones and
+rejects cycles. It checks ordering, not HTTP/database/tunnel/DNS readiness.
+No `ReadyCheck`/`ReadyTimeoutSec`; nonzero legacy probes cannot migrate losslessly.
 
-`MaxCPUCores` supports fractional CPU quota; `MaxRamMiB` and `PIDsLimit` bound
-memory and processes. Zero means no explicit limit in that field. There is no
-canonical swap limit or VRAM limit. `UseNonRootUser` selects an existing image
-account; it does not create one. `KeepUserID` requests host UID mapping and is
-required for a filtered D-Bus grant.
-
-`MinimizeFingerprint` removes Podman's `container` environment marker and asks
-for hostname `localhost` at the owning container/pod UTS layer. This is best
-effort, not a claim that software cannot detect containment.
+`MaxCPUCores` allows fractions; `MaxRamMiB`/`PIDsLimit` bound memory/processes.
+Zero means no explicit limit; no swap/VRAM field exists. `UseNonRootUser` selects
+an existing image account; `KeepUserID` maps host UID and is required for filtered D-Bus.
+`MinimizeFingerprint` removes the `container` env marker and requests `localhost`
+at the container/pod UTS owner; containment remains detectable.
 
 ## Preparation and inspection
 
-Orchestration loads/resolves intent, validates, starts dependencies, builds a
-derived image if needed, prepares network and desktop brokers, then launches.
-Broker sockets must exist before bind mounts. Failures unwind owned resources;
-network rollback stays default-deny.
+Order: resolve/validate, dependencies, derived build, network/desktop brokers, launch.
+Sockets precede mounts; failure unwinds owned resources and restores default-deny networking.
+Plans quote managed argv/stdin, use placeholder audio sockets and may query configured DNS.
+Real brokers must be ready at execution.
 
-Plans print shell-quoted managed arguments and quoted stdin content. Planned
-audio sockets are placeholders: a real broker must be ready before execution.
-Network domain rules may perform configured DNS lookups during planning.
-
-`ps`, `inspect`, `logs`, `where`, `bus` and `net` report different aspects of the
-running app. `where` exposes per-instance paths; `bus` reports proxy attribution;
-`net` reads observed attachment and counters. None is a blanket attestation
-against raw flag overrides. Full command syntax is in the
-[runner README](../container/runner/README.md).
+[Commands](../container/runner/README.md#commands): `ps`, `inspect`, `logs`, `where`
+(instance paths), `bus` (proxy attribution), `net` (attachment/counters).
+Inspection cannot attest protection against raw overrides.

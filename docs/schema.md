@@ -1,44 +1,26 @@
 # Canonical app schema
 
-The declarations in [schema.go](../common/domain/schema/schema.go) define schema
-version **4**. App files live at `$XDG_CONFIG_HOME/zinc/apps/<AppNameID>.yaml`
-(default `~/.config`). `ZincContainer` and `ZincVirtualization` share this model;
-sharing a field does not imply that both backends can implement it.
-
-Stores migrate recognized legacy input before strict YAML decoding. New examples
-must decode with `KnownFields(true)` without migration. A valid YAML document is
-not necessarily a valid app: shared validation checks values, and launch adds
-host-dependent checks. Unsupported intent is an error, not a silent no-op.
+Schema **4**: [field declarations](../common/domain/schema/schema.go).
+Files: `$XDG_CONFIG_HOME/zinc/apps/<AppNameID>.yaml`; XDG default: `~/.config`.
+`ZincContainer` and `ZincVirtualization` share fields, not universal backend support.
+Stores [migrate](migration.md) before strict decoding; new examples must pass
+`KnownFields(true)` without migration. Value and host checks follow; unsupported intent errors.
 
 ## Field map
 
-| Field/group | Meaning |
+| Fields | Semantics |
 | --- | --- |
-| `SchemaVersion`, `Type`, `AppNameID`, `Inherits` | Version, runtime, identity, optional parent app |
-| `LauncherMeta.Icon`, `.Description`, `.Group` | Picker presentation only |
-| `StartConditions.DependsOn` | Start dependencies before this app; not service readiness |
-| `StartConditions.Entrypoint`, `.EntrypointEnv` | Container command and environment |
-| `StartConditions.Terminal`, `.Attached` | Host terminal; optional shared container sessions |
-| `StartConditions.AttachedEntrypoint`, `.AttachedEnv` | Attached command/environment overrides |
-| `StartConditions.ReadOnlyRootfs` | Container rootfs or VM root block device read-only |
-| `StartConditions.LoaderBIOS`, `.SecureBoot`, `.TPM` | VM boot choices |
-| `StopConditions.KeepAlive`, `.Background`, `.Autorestart` | Runtime-specific retention/restart behavior |
-| `MinimizeFingerprint` | Best-effort container markers or VM branding, not anonymity |
-| `ResourcesMeta.MaxCPUCores`, `.MaxRamMiB`, `.PIDsLimit` | Container quotas; VM sizing, with no guest PID limit |
-| `InternalUserMeta` | `UseNonRootUser`, `NonRootUserName`, `KeepUserID` |
-| `ImageMeta.Image`, `.Install`, `.SourceTag` | Image/base path, installation steps, source provenance |
-| `ImageMeta.CloudInit`, `.PublicSSHKeyPath` | VM first-boot provisioning and public key |
-| `DisplayMeta` | GPU denial, dimensions, security-context choices, Vulkan |
-| `NetworkMeta.Interfaces`, `.RulesByPriority`, `.DNS` | [Packet policy](network-policy.md) and explicit resolvers |
-| `AudioMeta.Playback`, `.Microphone`, `.Monitor` | [Directional device mappings](audio.md) |
-| `DBusMeta`, `NotificationMeta` | [Filtered bus and notification policy](desktop-access.md) |
-| `Configs`, `Volumes`, `Keys`, `HostTheme` | [Explicit filesystem grants](images-and-mounts.md) |
-| `CreatorFlags`, `RunnerFlags` | Ordered raw backend argv |
+| `SchemaVersion`, `Type`, `AppNameID`, `Inherits` | Version, runtime, identity, optional parent |
+| `LauncherMeta` | `Icon`, `Description`, `Group`: presentation only |
+| `StartConditions`, `StopConditions`, `ResourcesMeta`, `InternalUserMeta`, `MinimizeFingerprint` | [Container lifecycle/limits](containers.md); [VM semantics and unsupported fields](virtualization.md) |
+| `ImageMeta`, `Configs`, `Volumes`, `Keys`, `HostTheme` | [Images/files](images-and-mounts.md); [VM provisioning](virtualization.md#disks-and-firmware-state) |
+| `DisplayMeta`, `DBusMeta`, `NotificationMeta` | [Desktop grants](desktop-access.md); [VM boot/display hardware](vm-hardware.md) |
+| `NetworkMeta`, `AudioMeta` | [Packet policy](network-policy.md), [DNS](dns.md), [directional audio](audio.md) |
+| `CreatorFlags`, `RunnerFlags` | Ordered raw argv; limits below |
 
-App IDs start alphanumeric and contain lowercase `[a-z0-9._-]` (maximum 96
-characters). Resource zero values mean no explicit container limit; VMs require
-positive RAM and positive whole CPU counts. There is no canonical swap-limit,
-capability-list, readiness-probe, tunnel or `VirtualizationMeta` field.
+App IDs start alphanumeric, use lowercase `[a-z0-9._-]`, maximum 96 characters.
+Container resource zero means no explicit limit; VMs need positive RAM/whole CPUs.
+No canonical swap limit, capability list, readiness probe, tunnel or `VirtualizationMeta`.
 
 ## Minimal offline container
 
@@ -46,8 +28,6 @@ capability-list, readiness-probe, tunnel or `VirtualizationMeta` field.
 SchemaVersion: 4
 Type: ZincContainer
 AppNameID: shell
-LauncherMeta:
-  Description: Offline terminal
 ImageMeta:
   Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 StartConditions:
@@ -55,43 +35,25 @@ StartConditions:
   Terminal: true
 DisplayMeta:
   DisableGpuAccess: true
-NetworkMeta:
-  Interfaces: []
 ```
 
-The [example directory](../common/examples/README.md) contains complete checked
-fixtures for attached sessions, network peers, DNS, audio and external VM options.
+More checked [examples](../common/examples/README.md): sessions, peers, DNS, audio, VM options.
 
 ## Inheritance is a YAML operation
 
-`Inherits` names another app in the store. Resolution happens on every read, so
-changing a parent changes its children at the next launch. Audit the result with
-`zc validate <app> --resolved`.
-
-- Omitted child keys inherit; explicit `false`, zero and empty values override.
-- Nested mappings normally merge field by field. Lists replace, never append.
-- `EntrypointEnv` and `AttachedEnv` each replace their whole inherited map.
-- Each audio direction replaces its entire inherited mapping. For example,
-  `AudioMeta: {Microphone: {}}` revokes that direction's inherited grants.
-- Missing parents, cycles and chains deeper than eight fail resolution.
-- Parent IDs are checked before filesystem access. YAML aliases are resolved in
-  their original document before merging.
-
-These rules depend on knowing which keys were authored; a decoded struct cannot
-distinguish omission from a zero value. Stores keep raw and resolved reads
-separate. The creator refuses form saves of inherited apps rather than flatten
-their sparse YAML; edit the file instead.
+`Inherits` resolves a store parent on every read; parent edits affect the next launch.
+Audit with `zc validate <app> --resolved`:
+- Omitted keys inherit; explicit false/zero/empty overrides. Mappings merge; lists replace.
+- `EntrypointEnv`, `AttachedEnv` and each audio direction replace their whole mapping.
+  `AudioMeta: {Microphone: {}}` revokes inherited microphone grants.
+- Missing parents, cycles or depth >8 fail. IDs are checked before filesystem access;
+  aliases resolve in their original document before merging.
+- Stores separate raw/resolved reads to retain omission. Edit sparse YAML directly;
+  creator form saves refuse inherited apps rather than flatten them.
 
 ## Raw argv is an explicit escape hatch
 
-Each `CreatorFlags` or `RunnerFlags` element is one argument, preserving order
-and whitespace; there is no shell splitting. Nonempty lists produce warnings.
-They can override typed isolation, networking, devices, disks and lifecycle
-controls. Do not infer effective protection from structured fields alone when
-raw flags are present. Backend applicability and mandatory topology checks can
-still reject a launch.
-
-Container entrypoint strings are different: they use `/bin/sh -c` inside the
-image. VM guest entrypoints and environment injection are unavailable without
-a guest agent and are rejected. See [migration](migration.md) before converting
-old files, and [VM limits](virtualization.md) before reusing container intent.
+Each element is one argument: order/whitespace preserved, no shell splitting.
+Nonempty lists warn: isolation, networking, devices, disks and lifecycle can be
+overridden; typed fields alone cannot prove protection. Backend/topology checks still apply.
+Container entrypoints instead use `/bin/sh -c`; VM guest commands/environments are rejected.

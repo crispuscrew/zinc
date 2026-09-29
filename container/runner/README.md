@@ -1,7 +1,7 @@
 # zcr - Zinc Container Runner
 
-`zcr` reads canonical schema v4 app files from `~/.config/zinc/apps` and launches
-rootless Podman containers. `zc` and the launchers delegate to this binary.
+`zcr` launches rootless Podman containers from schema v4 app files in
+`$XDG_CONFIG_HOME/zinc/apps` (default `~/.config`). `zc` and launchers delegate here.
 
 ## Commands
 
@@ -20,74 +20,49 @@ zcr recheck <app>
 zcr image search <term> | resolve <ref>
 ```
 
-An app argument may also be a YAML file path. `run` prints a shell-quoted plan by
-default; `--exec` launches it. Plans use quoted here-documents for build and network
-stdin. A planned PipeWire mount is a placeholder: a real launch must establish its
-restricted socket before starting the app.
+App arguments also accept YAML paths. `run` prints a shell-quoted plan with quoted
+build/network stdin; `--exec` launches. Planned PipeWire mounts are placeholders:
+launch must prepare the restricted socket first.
 
 ## Lifecycle and backend options
 
-- Presentation fields live under `LauncherMeta`.
-- `StartConditions.Entrypoint` and `AttachedEntrypoint` use `/bin/sh -c` grammar
-  inside the image. An empty ordinary entrypoint preserves the image default.
-- `StartConditions.Attached` requires `Terminal` and uses a detached holder with
-  interactive sessions. `run` on a live attached app opens another session.
-- Every session receives `EntrypointEnv` overlaid by `AttachedEnv`, with the latter
-  winning duplicate keys. Environment argv is sorted. Inheritance replaces an
-  explicitly supplied env map rather than merging it with the parent's map.
-- Closing the last attached terminal removes the holder unless
-  `StopConditions.Background` keeps it alive.
-- `StartConditions.ReadOnlyRootfs` enables Podman's read-only root filesystem.
-- `StopConditions.Autorestart` uses `on-failure` and never pairs with `--rm`.
-- `CreatorFlags` are direct `podman build` argv and participate in the derived image
-  fingerprint. Flags alone also trigger a derived build, without an empty RUN layer.
-- `RunnerFlags` are direct `podman run` argv immediately before the image. They can
-  override structured containment. Only NUL is rejected; warnings appear during
-  planning and actual launches. Neither flag list is sent to helper containers.
-- `MinimizeFingerprint` removes Podman's `container` env marker and requests
-  `localhost` as hostname at the owning container/pod UTS layer. This is best effort;
-  capability drops, seccomp defaults and no-new-privileges remain in place.
+- Entrypoints use `/bin/sh -c`; an empty ordinary entrypoint keeps the image default.
+- `Attached` requires `Terminal`. Reopening shares a holder; the last terminal removes
+  it unless `Background` is set. `AttachedEnv` overlays `EntrypointEnv`; inheritance
+  replaces whole env maps. See [lifecycle details](../../docs/containers.md).
+- `ReadOnlyRootfs` enables `--read-only`; `Autorestart` uses `on-failure`, never `--rm`.
+- `CreatorFlags` are `podman build` argv, fingerprinted and sufficient to trigger a build.
+  `RunnerFlags` precede the image in `podman run`. Only NUL is rejected; both warn,
+  can override containment, and are never passed to helpers.
+- `MinimizeFingerprint` removes the `container` marker and requests hostname `localhost`;
+  it is best effort and retains capability drops, seccomp and no-new-privileges.
 
-Legacy files pass through migration. Nonzero readiness checks/timeouts, swap limits,
-capability lists and tunnel settings that cannot be represented produce migration
-errors. There is no silent discard or compatibility bypass.
+[Migration](../../docs/migration.md) rejects unrepresentable nonzero readiness,
+swap, capability and tunnel settings rather than discarding them.
 
 ## Network policy
 
-`NetworkMeta.Interfaces` declares Zinc interface IDs. `RulesByPriority` carries
-ordered `From`/`To` peers, endpoint filters, `Domains`, `Protocols` and
-`AllowAllExcept`. The network adapter enforces default-deny policy in an
-owner-provisioned, packet-preserving namespace before the app joins it.
+Empty `NetworkMeta.Interfaces` means `--network none`. Otherwise a matching
+[owner-provisioned manifest](../../common/adapters/network/README.md) is mandatory:
+rules create no topology. Ordered policy is default-deny; DNS has no host fallback.
 
-No interfaces means `--network none`. Networked apps require a matching provisioned
-manifest; a schema rule does not create host topology. DNS uses
-`DNS.ResolversByPriority`; domain resolution cannot fall back to host DNS.
-See the shared network adapter for the provisioning contract.
-
-`zcr net` reports observed pod attachment and `zcr net <app> --json` reports the
-enforcer's counters. `rule[0]` refers to a canonical rule index. Reciprocal app policy
-can reject traffic at either endpoint.
+`zcr net` reports observed attachment; `zcr net <app> --json` returns counters.
+`rule[0]` is a canonical rule index; reciprocal policy may reject at either endpoint.
 
 ## Desktop access
 
-`AudioMeta.Playback`, `Microphone` and `Monitor` use `PipeWireDefault`, exact
-`PipeWireDevices` selectors and `ALSADevices`. PipeWire requires a restricted per-app
-socket, with no raw session fallback. ALSA grants must name existing host character
-devices in the correct playback/capture direction; the whole `/dev/snd` is not granted.
-
-`DBusMeta.Talk` and `Own` grant a filtered session bus. `InternalUserMeta.KeepUserID`
-is required. The proxy stays outside the app pod and exposes its own socket rather
-than the desktop's raw bus. `zcr bus --json` attributes proxy PIDs to apps;
-`zcr where` reports the corresponding per-instance state and socket paths.
+- [Audio](../../docs/audio.md): directional default/named PipeWire grants require
+  owner-deployed WirePlumber policy and a private socket, never a raw-session fallback.
+  ALSA paths must be real, direction-correct character devices, not all of `/dev/snd`.
+- [D-Bus](../../docs/desktop-access.md): `Talk`/`Own` require `KeepUserID`. The filtered
+  proxy stays outside the pod; `bus --json` attributes PIDs and `where` reports instance paths.
 
 ## Build and layout
 
 ```sh
-make build
-make check
-make netfilter-image
+make build            # pinned Podman build
+make check            # formatting, vet, tests
+make netfilter-image  # local network/D-Bus helper
 ```
 
-Builds and checks use the pinned Podman toolchain. `domain` contains pure policy,
-`ports` the interfaces, `app` orchestration, `adapters` the mechanisms, and `wire`
-the composition. CLI commands live in the runner's root package.
+See [architecture](../../docs/architecture.md) for the package layout.

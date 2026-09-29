@@ -1,37 +1,29 @@
 # Quickstart: Zinc v0.11.0
 
-This guide targets Zinc v0.11.0 and schema v4. Build this checkout as below;
-v0.10.1 binaries implement the earlier format. Upgrading an existing installation
-requires the [v0.11.0 release notes](releases/0.11.0.md). See
-[builds/checks](build-and-checks.md) for the pinned Go 1.26.6 toolchain, vendor
-maintenance and Nix consumer builds.
+This checkout prepares v0.11.0 (schema v4); it is not a published release.
+v0.10.1 binaries use the earlier format. Upgrading? Read the
+[upgrade requirements](releases/0.11.0.md#upgrade-requirements) first.
 
 ## Build and select binaries
 
-With rootless Podman available and module vendors synchronized:
+Use rootless Podman and synchronized module vendors. From the repository root:
 
 ```sh
 make -C creator build
 make -C container/runner build
 make -C launcher/tui build
-```
-
-From the repository root, select those builds in this shell:
-
-```sh
 export PATH="$PWD/creator/bin:$PWD/container/runner/bin:$PWD/launcher/tui/bin:$PATH"
 zc version
 zcr version
 ```
 
-Optional tools are `make -C virtualization/runner build` and
-`make -C launcher/gui build`. Installing binaries alone does not provision
-networking, configure QEMU/KVM, or deploy the audio policy.
+Optional: `make -C virtualization/runner build`, `make -C launcher/gui build`.
+[Build details](build-and-checks.md) cover pinned Go 1.26.6, vendors and Nix.
 
 ## Start an offline shell
 
-`zc init` preserves existing definitions unless explicitly forced. Zinc launches
-with `--pull never`, so fetch the exact approved base before the first run:
+`zc init` preserves existing definitions unless forced. Fetch the approved base
+first: launches use `--pull never`.
 
 ```sh
 podman info
@@ -43,26 +35,20 @@ zc run example-shell           # plan; no application process starts
 zc run example-shell --exec
 ```
 
-The shell declares no NIC or audio grant and denies GPU access. While it is
-open, `zcr ps` shows it. Close it normally or use `zc stop example-shell`.
-`zlt` opens the picker over the same app store.
+The shell has no NIC/audio and denies GPU access. Inspect with `zcr ps`; close
+normally or run `zc stop example-shell`. `zlt` picks from the same app store.
 
 ## Add capabilities explicitly
 
-- Copy/adapt [canonical examples](../common/examples/README.md), then run
-  `zc validate APP --resolved` before inspecting its launch plan.
-- Adding `NetworkMeta.Interfaces` requires a matching
-  [packet-preserving manifest](network-provisioning.md). Rules do not create
-  links, routes, DNS aliases or host publications. No automatic pasta path exists.
-- Configured DNS needs a provisioned local proxy and an explicit rule permitting
-  it. Both runners provide [the DNS proxy command](dns.md) and verify its live
-  configuration before launch; the provisioner supplies its addresses and socket.
-- PipeWire audio needs an explicitly deployed
-  [Zinc WirePlumber policy](../integration/wireplumber/README.md). ALSA-only
-  grants need exact existing devices. Native PipeWire and PulseAudio are not
-  interchangeable client protocols.
-- VM launch needs a reviewed base pin in external options, suitable firmware,
-  QEMU/KVM and guest-compatible hardware. Read [VM limits](virtualization.md),
-  especially the absence of a guest agent and graphical Background support.
+Adapt [canonical examples](../common/examples/README.md), then
+`zc validate APP --resolved` and inspect the plan. Binaries alone supply no host setup:
 
-The [architecture index](architecture.md) links each contract and its limits.
+| Capability | Prerequisite |
+| --- | --- |
+| `NetworkMeta.Interfaces` | [Packet-preserving manifest](network-provisioning.md); rules create no links, routes, DNS aliases or publications; no automatic pasta |
+| DNS | [Provisioned proxy](dns.md), addresses/control socket and explicit allow rule; runners verify live configuration |
+| PipeWire | Explicit [WirePlumber deployment](../integration/wireplumber/README.md); native PipeWire is not PulseAudio |
+| ALSA | Exact existing devices; see [audio](audio.md) |
+| VM | Reviewed external base pin, QEMU/KVM, suitable firmware/hardware; [no guest agent or graphical Background](virtualization.md) |
+
+More contracts: [architecture index](architecture.md).

@@ -1,39 +1,34 @@
 # Canonical schema v4 examples
 
-These are authoring examples, not a provisioner or a ready-made host setup.
+Authoring fixtures require adaptation and host provisioning before launch.
 `make -C common test` strictly decodes every YAML example without migration and
-validates it. The broken fixture must decode, then report its specified errors.
-JSON examples are checked against DNS and VM-options types as well.
+validates it; the broken fixture must report its specified errors. JSON is checked
+against DNS/VM-options types. These checks do not prove host or guest readiness.
 
-| Example | Intent and prerequisites |
-| --- | --- |
-| `apps/firefox.yaml` | Offline browser; creates its image user; requires Wayland security context and deployed Zinc WirePlumber policy for native PipeWire playback. |
-| `apps/hollywood.yaml` | Offline terminal with a derived Debian image and a created non-root user. |
-| `apps/attached-shell.yaml` | Multiple terminals on one read-only container with writable, size-limited scratch space. Stop explicitly when done. |
-| `apps/network-client.yaml`, `apps/network-server.yaml` | Reciprocal TCP grants; both need provisioned manifests and exact peer identities. Dependency ordering does not test HTTP readiness. |
-| `apps/domain-web.yaml` | Explicit local DNS-proxy access and a destination IP snapshot from `example.com`; replace documentation addresses and provision the proxy. |
-| `apps/guest.yaml`, `runtime/vm/guest.json` | Offline VM; replace the image path in both files and the all-zero placeholder pin with an independently approved disk digest. |
-| `apps/firefox-broken.yaml` | Deliberate validation failures; never copy as a launch template. |
-| `dns/transports.json` | Strict DNSMeta JSON demonstrating all five transports; documentation endpoints only. TCP/UDP entries explicitly permit plaintext fallback. |
+- `apps/firefox.yaml`: offline browser; creates an image user. Requires Wayland security
+  context and deployed WirePlumber policy for native PipeWire. Match image UID 1000 to
+  your UID for `KeepUserID` and private-socket access.
+- `apps/hollywood.yaml`: offline Debian terminal with a created non-root user.
+- `apps/attached-shell.yaml`: shared read-only container with bounded writable scratch;
+  stop explicitly when done.
+- `apps/network-{client,server}.yaml`: reciprocal TCP; provision both manifests and exact
+  peer identities. Dependency ordering does not establish HTTP readiness.
+- `apps/domain-web.yaml`: explicit proxy and `example.com` IP snapshot; replace documentation
+  addresses and provision the proxy. No host DNS fallback.
+- `apps/guest.yaml` + `runtime/vm/guest.json`: offline VM; replace both image paths and the
+  zero pin with an independently approved digest. Validation cannot check disk existence/pin
+  or guest firmware, serial-console and read-only boot support.
+- `apps/firefox-broken.yaml`: deliberate failures, never a launch template.
+- `dns/transports.json`: five transports, documentation endpoints; TCP/UDP allow plaintext fallback.
 
-Copy app YAML to `$XDG_CONFIG_HOME/zinc/apps/` and VM options to
-`$XDG_CONFIG_HOME/zinc/runtime/vm/` only after adapting and reviewing them.
-Default `XDG_CONFIG_HOME` is `~/.config`. Third-party container bases must already
-be pulled by their exact digest; `Install` builds may need package-repository
-access. Installed packages are not made reproducible merely by pinning the base.
+After review, copy YAML to `$XDG_CONFIG_HOME/zinc/apps/` and VM options to
+`$XDG_CONFIG_HOME/zinc/runtime/vm/` (default `~/.config`). Pull container bases by exact
+digest first; `Install` may need repository access. Base pinning does not pin installed packages.
 
-Network rules never create links, routes, listeners, DNS aliases or services.
-Declared interfaces require mandatory packet-preserving provisioning; there is
-no automatic rootless pasta fallback. Empty interfaces mean no managed NIC.
-See [network provisioning](../../docs/network-provisioning.md).
+Declared interfaces require [packet-preserving provisioning](../../docs/network-provisioning.md):
+rules create no links/routes/listeners/DNS/services; there is no pasta fallback.
+Empty interfaces mean no managed NIC. See [VM requirements](../../docs/virtualization.md).
 
-PipeWire grants need the host owner's opt-in
-[policy deployment](../../integration/wireplumber/README.md). PulseAudio-only
-clients need a separately restricted frontend; the raw host Pulse socket is not
-provided. Named PipeWire and ALSA device selectors are host-specific.
-The Firefox image account uses UID 1000 with KeepUserID; adapt that account UID
-to the launching user's UID so the private broker socket remains accessible.
-
-VM validation cannot establish that a disk exists, its pin matches, or the guest
-supports its firmware, serial console and read-only choices. See
-[VM architecture](../../docs/virtualization.md) before launching.
+PipeWire needs owner-approved [policy deployment](../../integration/wireplumber/README.md).
+Named PipeWire/ALSA selectors are host-specific; PulseAudio-only clients need a separate
+restricted frontend, never the raw host Pulse socket.
