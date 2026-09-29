@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/common/domain/schema/validate"
 	"github.com/crispuscrew/zinc/container/runner/domain/derived"
 )
 
@@ -19,18 +20,22 @@ type Builder struct{}
 // with an empty context (the trailing "-"). The install layer only needs the base
 // image and network, never host files, so the context is deliberately empty. Pure.
 func ImageBuildArgs(cfg schema.AppConfig) []string {
-	return []string{
+	args := []string{
 		"build",
 		"-t", derived.DerivedImageRef(cfg.AppNameID),
 		"--label", derived.BuildLabel + "=" + derived.BuildFingerprint(cfg),
-		"-", // Containerfile on stdin, no build context
 	}
+	args = append(args, cfg.CreatorFlags...)
+	return append(args, "-")
 }
 
 // Build builds the derived image unconditionally (the explicit-rebuild path). The
 // Containerfile is fed on stdin; output is surfaced on failure so a broken install
 // line is debuggable.
 func (Builder) Build(cfg schema.AppConfig) error {
+	if err := validate.Validate(cfg); err != nil {
+		return err
+	}
 	proc := exec.Command("podman", ImageBuildArgs(cfg)...)
 	proc.Stdin = strings.NewReader(derived.DerivedContainerfile(cfg))
 	if out, err := proc.CombinedOutput(); err != nil {

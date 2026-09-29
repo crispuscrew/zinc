@@ -12,7 +12,7 @@ CONTAINER_TOOL ?= podman
 REPO_REL := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 
 # Pinned Go toolchain image - KEEP IN SYNC with the repo-root Containerfile's GO_IMAGE.
-GO_IMAGE       ?= docker.io/library/golang:1.24-alpine@sha256:757779acac4af1b349a20f357c7296097b4a0b89da4ad0e370b339060077282a
+GO_IMAGE       ?= docker.io/library/golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83
 
 # Containerized go for checks/tests against THIS module: mount the module dir and
 # use its vendored deps. Recursive (=) so $$PWD expands in the recipe shell.

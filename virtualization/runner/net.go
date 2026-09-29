@@ -12,13 +12,12 @@ import (
 
 // countersNote is said in every readout because the number invites exactly one wrong reading and
 // nothing else in the output prevents it.
-const countersNote = "counters live in the guest's namespace and are created with it: these are since this launch, not lifetime totals"
+const countersNote = "counters describe the installed TAP packet policy since this launch; endpoint returns require both policies before acceptance"
 
-// The two postures a running guest can be in. Unlike a container's, a guest with no lists is the
-// WEAKER of the two: it keeps qemu's user-mode NAT and reaches whatever the host can.
+// A guest without Interfaces has no NIC. A networked guest uses provisioned TAPs.
 const (
 	postureFiltered   = "filtered"
-	postureUnfiltered = "unfiltered"
+	postureUnfiltered = "isolated"
 )
 
 type netReport struct {
@@ -62,8 +61,8 @@ func printNetReport(report netReport) error {
 	fmt.Printf("app:     %s\n", report.App)
 	fmt.Printf("posture: %s\n", report.Posture)
 	if report.Posture != postureFiltered {
-		fmt.Println("this guest declares no NetworkLists, so it runs with qemu's user-mode networking")
-		fmt.Println("and no namespace of its own: unrestricted outbound, and no ruleset to count.")
+		fmt.Println("this guest has no provisioned network namespace; new launches with no Interfaces have no NIC")
+		fmt.Println("and no ruleset to count; this does not attest the NICs of a legacy running guest.")
 		return nil
 	}
 	fmt.Printf("note:    %s\n", report.Note)

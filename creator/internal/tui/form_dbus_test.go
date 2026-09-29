@@ -2,7 +2,6 @@ package tui
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
@@ -78,9 +77,9 @@ func TestForm_TrailingCommaIsNotAName(t *testing.T) {
 	}
 }
 
-// Switching a bus-granted container app to a VM must clear the grants, like every other
-// container-only field, or the save would fail on a setting the author never chose here.
-func TestForm_SwitchingToVMClearsBusGrants(t *testing.T) {
+// Switching type preserves authored grants so validation can report unsupported
+// settings instead of silently discarding them.
+func TestForm_SwitchingToVMPreservesBusGrantsForExplicitValidation(t *testing.T) {
 	existing := schema.AppConfig{
 		SchemaVersion:    schema.SchemaVersion,
 		Type:             schema.ZincContainer,
@@ -94,26 +93,21 @@ func TestForm_SwitchingToVMClearsBusGrants(t *testing.T) {
 	frm.draft.Type = schema.ZincVirtualization
 	frm.buildFields()
 	frm.image.SetValue("/var/lib/zinc/images/fedora.qcow2")
-	frm.baseDigest.SetValue("sha256:" + strings.Repeat("b", 64))
 	frm.memory.SetValue("4096")
 	frm.vcpus.SetValue("2")
-	frm.draft.VirtualizationMeta.Display = schema.VMDisplayNone
 
 	cfg := frm.toConfig()
-	if !cfg.DBusMeta.IsZero() {
-		t.Errorf("bus grants survived the switch to a VM: %+v", cfg.DBusMeta)
-	}
-	if err := validate.Validate(cfg); err != nil {
-		t.Fatalf("converting a bus-granted container app to a VM should validate, got: %v", err)
+	if cfg.DBusMeta.IsZero() {
+		t.Fatal("changing type must not silently discard authored data")
 	}
 }
 
-// A VM form must not offer the rows at all.
-func TestForm_VMOffersNoBusRows(t *testing.T) {
+// Shared fields remain visible for either backend.
+func TestForm_VMShowsSharedBusRows(t *testing.T) {
 	frm := newForm(schema.AppConfig{Type: schema.ZincVirtualization}, true)
 	for _, unwanted := range []string{"dbus.talk", "dbus.own"} {
-		if hasLabel(frm, unwanted) {
-			t.Errorf("VM form offers %q, which a guest cannot honour", unwanted)
+		if !hasLabel(frm, unwanted) {
+			t.Errorf("shared field %q must remain visible; runtime applicability is checked explicitly", unwanted)
 		}
 	}
 }

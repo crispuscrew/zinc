@@ -1,72 +1,90 @@
-# zc - Zinc Container Creator
+# zc - Zinc app creator
 
-`zc` authors Zinc app files and manages them. It writes app definitions to
-`~/.config/zinc/apps/<name>.yaml` and knows nothing about podman: to actually run what it
-authors, it shells out to the `zcr` binary (the Zinc container runtime). The two meet
-only at the on-disk YAML format and at that process boundary.
+`zc` writes `$XDG_CONFIG_HOME/zinc/apps/<name>.yaml` (default `~/.config`).
+Authoring needs no runtime; execution delegates to `zcr` or `zvr`.
 
-`zcr` must be on your `$PATH` for the run/manage commands. Authoring (new, edit, list,
-validate) works without it.
+## Authoring
 
-## Commands
-
-Authoring (local, no runtime needed):
-
-```
-zc tui                             keyboard-first manager (create/edit/run/stop/logs)
-zc new <name> --image <img> [--desc d] [--icon i] [--tunnel wg.conf]
-              [--dbus-talk a.b.C,...] [--dbus-own a.b.C,...]
+```sh
+zc tui
+zc new shell --image localhost/shell:local --entrypoint /bin/sh --terminal \
+  --attached --env 'MODE=primary value' --attached-env 'MODE=attached value'
+zc new shell --help
+zc init
 zc list
-zc validate <name|app.yaml> [--resolved]       --resolved prints what an inheriting app merges to
-zc delete <name>
-zc keys list|show|set <s>|edit|validate|path   TUI keybind schemes
-zc compose export <name> [-o f]                describe an app as a Compose-spec file
-zc compose import <compose.yaml> [--service s] [--dry-run]
+zc validate shell --resolved
+zc delete shell
 ```
 
-`--dbus-talk` / `--dbus-own` grant a filtered D-Bus session bus: names the app may call, and
-names it may claim. Without them the app gets **no session bus at all**, which is the default
-worth keeping - the host bus reaches the keyring, the portal and every other service the user
-runs. Naming either also writes `InternalUserMeta.KeepUserID: true`, which a filtered bus
-requires (the proxy serves the socket as you), and says so on stdout rather than doing it
-quietly. Both are container-only; the TUI has the same two rows, `dbus.talk` and `dbus.own`.
+New definitions refuse existing YAML/VM-options destinations. `zc init` preserves
+existing examples unless `--force` is supplied.
 
-Both compose directions are lossy and print exactly how: exporting cannot carry the egress
-lock-down, and importing invents no network access.
+- Presentation: `--desc`, `--icon`, `--group` write `LauncherMeta`.
+- Lifecycle: `--terminal`, `--attached`, `--attached-entrypoint`,
+  `--read-only-rootfs`, `--keep-alive`, `--background`, `--autorestart`.
+  Autorestart lives in `StopConditions`; see [runtime semantics](../docs/containers.md).
+- Repeat `--env`/`--attached-env` for literal `NAME=VALUE` entries in separate maps;
+  no shell expansion, duplicate names rejected.
 
-Runtime (forwarded verbatim to `zcr`):
+Raw flags are ordered argv, never shell-expanded/split; `--creator-flags` and
+`--runner-flags` accept YAML/JSON arrays. They warn because they can override containment:
 
-```
-zc run <name|app.yaml> [--exec]    build the launch plan; print it, or launch
-zc build <name|app.yaml>           (re)build the app's derived image
-zc stop|restart|inspect <name>
-zc logs <name> [-f]
-zc term <name> [--shell]           open a terminal for a multiterminal app
-zc image search <term>|resolve <ref>
+```sh
+zc new demo --image localhost/demo:local \
+  --runner-flag=--label --runner-flag='purpose=two words'
 ```
 
-A bare `<name>` resolves against the store (`~/.config/zinc/apps`); an argument that
-looks like a path (contains `/` or ends in `.yaml`) is read directly.
+- Audio: `playback`, `microphone`, `monitor` each have `--<direction>-default`
+  (`PipeWireDefault: true`), repeatable `--<direction>-pipewire` exact names and
+  `--<direction>-alsa` paths. PipeWire needs [WirePlumber deployment](../docs/audio.md).
+- Network: `--network` takes `NetworkMeta`; alternatively repeat `--interface ID[=MAC]`,
+  `--network-rule` and `--dns-resolver` mappings. Authored priority is preserved.
+  Empty interfaces mean no NIC; [ordered, default-deny rules](../docs/network-policy.md)
+  require [provisioning](../docs/network-provisioning.md), with no host DNS fallback.
+- `--volumes`, `--configs`, `--keys`, `--notifications` take canonical YAML/JSON.
+  `--dbus-talk`/`--dbus-own` take comma-separated names and imply `KeepUserID`.
+  [Shared validation](../docs/schema.md) checks backend support; changing type keeps fields.
 
-## Build
+## VM options
 
-Podman-only, reproducible in a pinned container:
-
+```sh
+zc new guest --vm --image /images/base.qcow2 --base-digest 'sha256:<64-hex>' \
+  --memory 4096 --vcpus 2 --disk 40 --display Accelerated \
+  --firmware UEFI --ci-user guest --ci-ssh-key /keys/id.pub
 ```
-make build      # produces ./bin/zc
-make check      # gofmt + vet + test, in-container
+
+Replace the pin placeholder with an independently authorized digest. Creation writes
+YAML plus `$XDG_CONFIG_HOME/zinc/runtime/vm/<name>.json`, checking image identity in both.
+See [field ownership and disk state](../docs/virtualization.md#app-intent-and-external-vm-options).
+
+- Empty display/profile stays automatic. `--mac random` stores a locally administered
+  MAC once, granting no traffic. `--forward HOST:GUEST` adds loopback TCP intent and a
+  Host -> Self rule/NIC, not outbound access; edit multi-NIC forwards in the options form/file.
+- Deleting YAML keeps VM options/disks. VM rename is refused to protect runtime identity.
+
+## Editing and conversion
+
+The TUI edits scalars, env/argv/audio lists and VM media/forward JSON arrays;
+advanced YAML edits network/mounts. Stale forms detect other writers; inherited apps
+require sparse YAML editing because forms cannot preserve omitted fields.
+
+```sh
+zc compose export app -o compose.yaml
+zc compose import compose.yaml --dry-run
 ```
 
-Put both `zc` and `zcr` on your `$PATH` to author and run apps.
+Conversion reports losses: unsupported capabilities/readiness/tunnels, port translation
+and bindings, ordered enforcement, raw/attached/audio settings. Imports never infer
+raw privilege flags; representable ports retain TCP/UDP/SCTP and host/sibling/any-peer distinctions.
 
-## Layout
+## Runtime and checks
 
-- `main.go` - the CLI: authoring is handled locally; runtime commands are forwarded to `zcr`.
-- `internal/store` - the YAML app store (`~/.config/zinc/apps`).
-- `internal/runner` - the `zcr` delegate (finds `zcr` on `$PATH` and drives it).
-- `internal/backend` - the one facade the CLI and TUI use (store for authoring, `zcr` for running).
-- `internal/tui` - the keyboard-first terminal UI.
-- `internal/keys` - the TUI keybind schemes (`~/.config/zinc/zc`).
+`zc run app` plans; `--exec` launches. `term` opens an Attached container session or
+reports the VM console. VM `build`/`logs`/`restart` report limitations; TUI warnings persist.
 
-It depends only on the shared `common` library (schema + validation); it never imports
-the runner.
+```sh
+make check  # pinned Podman: formatting, vet, unit/process-boundary tests
+make build  # bin/zc
+```
+
+Builds use `vendor/`; refresh first-party copies after shared API changes.

@@ -1,23 +1,15 @@
-// Package runner shells out to the `zcr` binary - Zinc's container runtime - so the
-// launcher (zlt) can run the apps it lists without importing the runner. This is the
-// same split zc uses: zlt picks an app file, zcr reads that same file and runs it;
-// they meet only at the on-disk format and this process boundary.
-//
-// zcr is expected on $PATH (installed alongside zlt). If it is missing, launching fails
-// with an actionable message, while listing/filtering still works - those need only the
-// shared library, not the runtime.
+// Package runner delegates app actions to zcr or zvr according to the resolved config.
+// The launchers share app files with the runtimes, without importing their backends.
 package runner
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
-	"os/exec"
+	"regexp"
 	"strings"
-)
 
-// Binary is the runtime binary the launcher delegates to; it is resolved from $PATH.
-const Binary = "zcr"
+	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/launcher/common/store"
+)
 
 // safeName guards the app argument at the exec boundary, independent of how zcr parses
 // its arguments: a name that is empty or begins with '-' is rejected, so a filename- or
@@ -36,77 +28,86 @@ func safeName(name string) error {
 	// arbitrary config that never went through the store - instead of the app the user picked.
 	// A real path still reaches zcr's path form, because it carries a separator.
 	if !strings.Contains(name, "/") && strings.HasSuffix(name, ".yaml") {
-		return fmt.Errorf("app name %q cannot end with '.yaml' (zcr would read it as a file path; use ./%s for that)", name, name)
+		return fmt.Errorf("app name %q cannot end with '.yaml' (the runtime would read it as a file path; use ./%s for that)", name, name)
 	}
 	return nil
 }
 
-// find locates the zcr binary, returning an actionable error if it is not installed.
-func find() (string, error) {
-	path, err := exec.LookPath(Binary)
-	if err != nil {
-		return "", fmt.Errorf("%s not found on $PATH: install the Zinc runtime to launch apps (the picker still works without it)", Binary)
+// Match zcr's instance grammar without importing its backend. Dots belong only
+// to the app key; the runtime uses a dot to separate the app from its instance.
+var instanceAddressRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*@[a-z0-9][a-z0-9_-]*$`)
+
+func appDefinition(name string) (string, bool, error) {
+	if err := safeName(name); err != nil {
+		return "", false, err
 	}
-	return path, nil
+	// A slash selects the runtime's file form, even when that path contains @.
+	if strings.Contains(name, "/") {
+		return name, false, nil
+	}
+	base, _, instanced := strings.Cut(name, "@")
+	if !instanced {
+		return name, false, nil
+	}
+	if !instanceAddressRE.MatchString(name) {
+		return "", false, fmt.Errorf("invalid app instance %q: want app@instance; instance must be lowercase letters, digits, '_' or '-', starting with a letter or digit", name)
+	}
+	return base, true, nil
 }
 
-// capture runs `zcr <args...>` and returns its stdout, folding stderr into the error so
-// a caller can surface what went wrong.
-func capture(args ...string) (string, error) {
-	path, err := find()
+// appBinary reads the resolved Type, retaining the caller's key/path as the action identity.
+func appBinary(name string) (string, error) {
+	definition, instanced, err := appDefinition(name)
 	if err != nil {
 		return "", err
 	}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(path, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return "", fmt.Errorf("%s", msg)
-		}
-		if msg := strings.TrimSpace(stdout.String()); msg != "" {
-			return "", fmt.Errorf("%s", msg)
-		}
-		return "", fmt.Errorf("%s %s: %w", Binary, strings.Join(args, " "), err)
-	}
-	return stdout.String(), nil
-}
-
-// Launch starts the app detached: `zcr run <name> --exec` (zcr validates, builds the
-// derived image if needed, auto-starts dependencies, locks down the network, then
-// detaches). zcr returns once the app is spawned.
-func Launch(name string) error {
-	if err := safeName(name); err != nil {
-		return err
-	}
-	_, err := capture("run", name, "--exec")
-	return err
-}
-
-// Stop tears the app's pod down: `zcr stop <name>`.
-func Stop(name string) error {
-	if err := safeName(name); err != nil {
-		return err
-	}
-	_, err := capture("stop", name)
-	return err
-}
-
-// Running returns the set of apps podman reports as up: `zcr ps`, one name per line. It
-// is best-effort context for the picker (a running indicator), so a caller may ignore
-// the error when zcr is absent.
-func Running() (map[string]bool, error) {
-	out, err := capture("ps")
+	appStore, err := store.Default()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	running := map[string]bool{}
-	scan := bufio.NewScanner(strings.NewReader(out))
-	for scan.Scan() {
-		if name := strings.TrimSpace(scan.Text()); name != "" {
-			running[name] = true
+	var config schema.AppConfig
+	if strings.Contains(name, "/") {
+		config, err = appStore.LoadFileResolved(name)
+	} else {
+		config, err = appStore.LoadResolved(definition)
+	}
+	if err != nil {
+		return "", err
+	}
+	switch config.Type {
+	case schema.ZincContainer:
+		return Binary, nil
+	case schema.ZincVirtualization:
+		if instanced {
+			return "", fmt.Errorf("app %q: VM instances are unsupported", name)
 		}
+		return VMBinary, nil
+	default:
+		return "", fmt.Errorf("app %q: unsupported Type %q; want %s or %s", name, config.Type, schema.ZincContainer, schema.ZincVirtualization)
 	}
-	return running, scan.Err()
+}
+
+// Launch starts the app detached. Only zcr needs --exec; zvr detaches by default.
+// Backend arguments (including RunnerFlags) remain the selected runtime's responsibility.
+func Launch(name string) error {
+	binary, err := appBinary(name)
+	if err != nil {
+		return err
+	}
+	args := []string{"run", name}
+	if binary == Binary {
+		args = append(args, "--exec")
+	}
+	_, err = capture(binary, args...)
+	return err
+}
+
+// Stop delegates teardown to the runtime selected by the resolved app Type.
+func Stop(name string) error {
+	binary, err := appBinary(name)
+	if err != nil {
+		return err
+	}
+	_, err = capture(binary, "stop", name)
+	return err
 }

@@ -7,21 +7,32 @@ import (
 	"testing"
 )
 
-const mainFakeZcr = `#!/bin/sh
+const fakeRuntimeScript = `#!/bin/sh
 case "$1" in
-  run) if [ "$2" = "bad" ]; then echo "bad: nope" 1>&2; exit 1; fi; exit 0 ;;
+  run) printf '%s\n' "${0##*/}" "$@" >> "$LAUNCH_CALLS"
+    if [ "$2" = "bad" ]; then echo "bad: nope" 1>&2; exit 1; fi ;;
   ps) exit 0 ;;
   *) exit 2 ;;
 esac
 `
 
-func fakeZcr(t *testing.T) {
+func fakeRuntimes(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "zcr"), []byte(mainFakeZcr), 0o755); err != nil {
-		t.Fatal(err)
+	for _, binary := range []string{"zcr", "zvr"} {
+		if err := os.WriteFile(filepath.Join(dir, binary), []byte(fakeRuntimeScript), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", dir)
+	writeConfigs(t, map[string]string{
+		"firefox": "Type: ZincContainer\nAppNameID: firefox\n",
+		"guest":   "Type: ZincVirtualization\nAppNameID: guest\n",
+		"bad":     "Type: ZincContainer\nAppNameID: bad\n",
+	})
+	calls := filepath.Join(dir, "calls")
+	t.Setenv("LAUNCH_CALLS", calls)
+	return calls
 }
 
 func TestRun_Version(t *testing.T) {
@@ -44,14 +55,23 @@ func TestRun_TooManyArgs(t *testing.T) {
 }
 
 func TestRun_DirectLaunch(t *testing.T) {
-	fakeZcr(t)
-	if err := run([]string{"firefox"}); err != nil {
-		t.Fatalf("zlt firefox: %v", err)
+	calls := fakeRuntimes(t)
+	for _, name := range []string{"firefox", "guest"} {
+		if err := run([]string{name}); err != nil {
+			t.Fatalf("zlt %s: %v", name, err)
+		}
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "zcr\nrun\nfirefox\n--exec\nzvr\nrun\nguest\n"; string(data) != want {
+		t.Fatalf("calls = %q, want %q", data, want)
 	}
 }
 
 func TestRun_DirectLaunchSurfacesError(t *testing.T) {
-	fakeZcr(t)
+	fakeRuntimes(t)
 	err := run([]string{"bad"})
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("want the zcr error surfaced, got %v", err)
@@ -67,7 +87,7 @@ func TestLoadApps_ListsUndecodableByName(t *testing.T) {
 	if err := os.MkdirAll(appsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	good := "SchemaVersion: 3\nType: ZincContainer\nAppNameID: good\nDescription: fine\nImageMeta:\n  Image: localhost/x:local\n"
+	good := "SchemaVersion: 4\nType: ZincContainer\nAppNameID: good\nLauncherMeta:\n  Description: fine\nImageMeta:\n  Image: localhost/x:local\n"
 	if err := os.WriteFile(filepath.Join(appsDir, "good.yaml"), []byte(good), 0o600); err != nil {
 		t.Fatal(err)
 	}

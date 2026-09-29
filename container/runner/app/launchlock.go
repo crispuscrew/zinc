@@ -1,13 +1,8 @@
 package app
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
-
-	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
 // A launch is serialised per app, because the check that refuses a second launch of a running
@@ -53,62 +48,4 @@ func (lock *launchLock) close() {
 		return
 	}
 	lock.file.Close() // releases the flock
-}
-
-// superviseCommand is the hidden subcommand that tears an app down after it exits on its own.
-const superviseCommand = "__supervise"
-
-// superviseAfter spawns the detached supervisor for this app.
-//
-// It is given the ADDRESS rather than the runtime name, because the runtime name of an instanced
-// app ("notes.work") is not something the store can resolve - only "notes@work" is. A failure to
-// spawn is reported and not fatal: the app is already running by this point, and refusing a
-// launch that succeeded because its janitor did not start would be the worse answer.
-func (svc Service) superviseAfter(cfg schema.AppConfig) {
-	exe, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "zcr: %s: no supervisor, so nothing will tear this app down when it exits: %v\n", cfg.AppNameID, err)
-		return
-	}
-	addr := svc.address(cfg.AppNameID)
-	proc := exec.Command(exe, superviseCommand, addr.String())
-	proc.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	proc.Stdout, proc.Stderr = nil, nil
-	if err := proc.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "zcr: %s: no supervisor, so nothing will tear this app down when it exits: %v\n", cfg.AppNameID, err)
-		return
-	}
-	go proc.Wait() // reap if the caller (a long-lived TUI) outlives this
-}
-
-// Supervise waits until the app's container is gone and then tears down everything the launch
-// created around it: the pod and its netns, the egress bridge, the D-Bus proxy and its socket
-// directory, and any published host port.
-//
-// It exists because none of that happens today when an app exits on its own. The reaping
-// goroutine that was meant to cover it cannot run in the shipped product - every front-end
-// launches through a short-lived `zcr` that exits moments after forking the app - and a clean
-// exit was never covered by it at all. The leak is not only untidy: `podman pod create` has no
-// --replace, so the pod left behind makes the NEXT launch of a filtered app fail.
-//
-// Running the teardown twice is safe and expected: `zcr stop` may get there first, and every
-// step is written to succeed on something already gone (`rm -f`, `--ignore`, a network remove
-// that returns 0 for a network that is not there).
-func (svc Service) Supervise(cfg schema.AppConfig, wait func(name string) error) error {
-	if err := wait(cfg.AppNameID); err != nil {
-		return fmt.Errorf("supervise %s: %w", cfg.AppNameID, err)
-	}
-	// Under the launch lock, and only if the app has not come back. Between the app going away
-	// and this waking up, a person can start it again - and its objects have the same names, so
-	// tearing down now would remove the new launch's pod and proxy. That is the very failure the
-	// lock was added for, arriving from the other direction.
-	lock := lockLaunch(cfg.AppNameID)
-	defer lock.close()
-	if svc.runtime.IsRunning(cfg.AppNameID) {
-		return nil // it is running again, and that launch owns what is there now
-	}
-	if err := svc.Stop(cfg); err != nil {
-		return fmt.Errorf("supervise %s: tear down after the app exited: %w", cfg.AppNameID, err)
-	}
-	return nil
 }

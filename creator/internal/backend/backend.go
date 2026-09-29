@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/creator/internal/runner"
 	"github.com/crispuscrew/zinc/creator/internal/store"
 )
@@ -31,22 +32,25 @@ func New(sto *store.Store) Service {
 }
 
 // Launch starts the app detached, via zcr.
-func (Service) Launch(name string) error { return runner.Launch(name) }
+func (svc Service) Launch(name string) error { _, err := svc.Action("run", name, false); return err }
 
 // Stop tears the app's pod down, via zcr.
-func (Service) Stop(name string) error { return runner.Stop(name) }
+func (svc Service) Stop(name string) error { _, err := svc.Action("stop", name, false); return err }
 
 // Plan returns the app's launch plan (dry run) as text, via zcr.
-func (Service) Plan(name string) (string, error) { return runner.Plan(name) }
+func (svc Service) Plan(name string) (string, error) { return svc.Action("plan", name, false) }
 
 // Build (re)builds the app's derived image, via zcr, returning its output.
-func (Service) Build(name string) (string, error) { return runner.Build(name) }
+func (svc Service) Build(name string) (string, error) { return svc.Action("build", name, false) }
 
-// OpenTerminal opens one more terminal for a multiterminal app, via zcr.
-func (Service) OpenTerminal(name string, shell bool) error { return runner.OpenTerminal(name, shell) }
+// OpenTerminal opens an Attached container session or reports the VM console.
+func (svc Service) OpenTerminal(name string, shell bool) error {
+	_, err := svc.Action("term", name, shell)
+	return err
+}
 
 // Logs returns a snapshot of the app's logs, via zcr.
-func (Service) Logs(name string) (string, error) { return runner.Logs(name) }
+func (svc Service) Logs(name string) (string, error) { return svc.Action("logs", name, false) }
 
 // Resolve pins an image reference to its digest form, via zcr.
 func (Service) Resolve(ref string) (string, error) { return runner.Resolve(ref) }
@@ -55,7 +59,7 @@ func (Service) Resolve(ref string) (string, error) { return runner.Resolve(ref) 
 func (Service) Search(term string) ([]Result, error) { return runner.Search(term) }
 
 // Running returns the set of apps podman reports as up, via zcr.
-func (Service) Running() (map[string]bool, error) { return runner.Running() }
+func (Service) Running() (map[string]bool, error) { return runner.RunningAll() }
 
 // Rename moves an app definition on disk: load the old, re-key its AppNameID, save the
 // new (which re-validates the name), then drop the old file. It refuses to overwrite an
@@ -81,7 +85,10 @@ func (svc Service) Rename(from, to string) error {
 		return err
 	}
 	cfg.AppNameID = to
-	if err := svc.Save(cfg); err != nil { // validates the new name before anything is removed
+	if cfg.Type == schema.ZincVirtualization {
+		return fmt.Errorf("rename %s: VM runtime identity includes disk, firmware and options; author a new VM definition explicitly", from)
+	}
+	if err := svc.Create(cfg, nil); err != nil { // never replace a racing creator's target
 		return err
 	}
 	return svc.Delete(from)

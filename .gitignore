@@ -3,6 +3,8 @@ bin/
 *.test
 *.out
 coverage.*
+# Local Go tool telemetry is generated data, not source.
+**/.config/go/telemetry/
 # stray binaries from `go build ./...` in a module dir (named after the dir); the real
 # builds go to bin/ via the container
 /launcher/gui/gui
@@ -19,5 +21,5 @@ coverage.*
 # OS
 .DS_Store
 
-# Release checksums are generated on the release branch (make -f release.mk checksums),
-# where the tag covers them. On dev they would churn on every build.
+# Local release candidates; published assets and checksums are built by CI from the tag.
+/release-assets/

@@ -1,8 +1,6 @@
 module github.com/crispuscrew/zinc/creator
 
-go 1.24.2
-
-toolchain go1.24.13
+go 1.26.0
 
 // The creator (zc) authors app files; it depends only on the shared library (schema +
 // validate). It does NOT import the runner - it shells out to the `zcr` binary to run
@@ -41,6 +39,6 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.3.8 // indirect
 )

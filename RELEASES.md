@@ -1,52 +1,44 @@
 # Zinc - Release Plan
 
+**0.11.0 is prepared locally, not published.** [Changelog](CHANGELOG.md) records release
+details; local candidates and a dated entry do not establish publication.
 
-| Version | Focus          | Includes              |
-|---------|----------------|-----------------------|
-| 0.1.0   | Containers     | `zc` mvp + `zcr` mvp  |
-| 0.2.0   | Launcher       | `zlt` mvp             |
-| 0.3.0   | Launcher       | `zlg` mvp             |
-| 0.4.0   | Virtualization | `zvr` mvp (`zc` authors VM apps too) |
-| 0.5.0   | Guest GPU      | Vulkan through venus + confirmed virgl |
-| 0.6.0   | Windows guests | UEFI + Secure Boot + TPM, `zvr install`, per-app machine identity, fixed screen size, guest driver script |
-| 0.7.0   | Containment    | resources + user enforced, sibling routing (`Via`/`Forward`/`ForwardPorts`), readiness gating, config inheritance, domain allowlists, compose interop, runner-built WireGuard tunnels |
-| 0.8.0   | Session bus    | per-instance filtered D-Bus (`DBusMeta`) authored from CLI and TUI, Apache 2.0 licence, CI runner/runtime pinning |
-| 0.8.1   | Packaging      | Nix flake + home-manager module, instance addressing and `zcr where` |
-| 0.8.2   | Instances      | `zcr run --instance`, `{state}` mount templating, `zcr recheck` pin staleness, `zc init` |
-| 0.9.0   | Attestable sandbox | real `wp_security_context_v1` per instance, bus attribution (`zcr bus`), nftables counters and posture (`zcr net`) |
-| 0.9.1   | Audit fixes    | 22 defects from an audit: shell injection from a wg-quick file into the NET_ADMIN helper, a relaunch that tore down the running app, an additive nft load, an unfiltered tunnel input chain |
-| 0.10.0  | schema v3, and every field enforced | audio per direction (PipeWire security context + permissions), Configs mounted, anonymous volumes, notification filtering, Env, ReadOnlyRootfs, RequireSecurityContext, guest egress control (`zvr net`), signed tags + `SHA256SUMS` |
-| 0.10.1  | Distribution | verified Linux AMD64 release binaries, quick start, Node.js 24 GitHub Actions |
-| ...     |                |                       |
+| Version | Milestone |
+| --- | --- |
+| 0.1.0 | Containers: `zc` + `zcr` MVP |
+| 0.2.0 | Terminal launcher: `zlt` MVP |
+| 0.3.0 | Graphical launcher: `zlg` MVP |
+| 0.4.0 | Virtualization: `zvr` MVP, VM authoring in `zc` |
+| 0.5.0 | Guest GPU: Venus Vulkan + verified virgl OpenGL |
+| 0.6.0 | Windows guests: UEFI/Secure Boot/TPM, install, identity, display/drivers |
+| 0.7.0 | Containment: resources/users, routing/WireGuard, readiness, inheritance, domains, Compose |
+| 0.8.0 | Filtered D-Bus, Apache 2.0, pinned CI runtime |
+| 0.8.1 | Nix/home-manager, instance addressing, `zcr where` |
+| 0.8.2 | Instance launches/state mounts, pin recheck, `zc init` |
+| 0.9.0 | Wayland security contexts, bus attribution, network counters/posture |
+| 0.9.1 | 22 audit fixes, including injection, relaunch and firewall defects |
+| 0.10.0 | Schema v3: audio, configs/volumes, notifications, env/rootfs/display controls, VM egress, signed tags/checksums |
+| 0.10.1 | Verified Linux AMD64 binaries, quickstart, Node.js 24 Actions |
+| 0.11.0 | Prepared locally: schema v4, provisioned networking, encrypted DNS, audio broker, external VM options, Go 1.26 |
 
-**0.10.0 is a minor bump, not a patch.** It changes the app-config schema, so every existing
-config needs editing: the version line, and the audio and Configs blocks. Under semantic
-versioning a change that invalidates what users already have on disk cannot be a patch, and
-calling it 0.9.2 would tell people the upgrade is safe to take without reading anything. The
-migration is in the changelog.
+Schema-breaking pre-1.0 changes require a minor bump: 0.10.0 introduced v3;
+**0.11.0 is a breaking pre-1.0 minor release**, changing definitions and runtime prerequisites.
+Read its [release notes](docs/releases/0.11.0.md) and [migration guide](docs/migration.md).
 
 ## Cutting a release
 
-One command:
+Merge feature PRs into `dev`, cut a fresh `release/0.11.0` from `dev`, then PR to `main`.
+Protected-branch PRs require review and green CI; create a signed, annotated tag on the final reviewed commit:
 
+```sh
+make -f release.mk tag VERSION=X.Y.Z
 ```
-make -f release.mk tag VERSION=X.Y.Z # signed, annotated tag
-```
 
-The tag is signed, and this refuses rather than falling back to an unsigned one: a release that
-silently was not signed is worse than one that failed to be, because only the first is invisible.
-It needs `git config user.signingkey` (with `gpg.format=ssh` for an SSH key).
+Requires `git config user.signingkey` (`gpg.format=ssh` for SSH); no unsigned fallback.
+Pushing the tag triggers pinned builds, version verification and CI-generated `SHA256SUMS`;
+CI gates publication on `make repro` for every tool. Linux AMD64 releases stay draft until
+all assets are attached and verified. Local candidate checksums are not publication evidence.
+Keep `flake.nix`, the `.github/workflows/ci.yml` version assertion, this table and
+`docs/quickstart.md` synchronized; finalize `CHANGELOG.md` notes under the dated release heading.
 
-Pushing the tag builds every tool in its pinned container, verifies the reported version, and
-publishes Linux AMD64 binaries plus `SHA256SUMS`. A new release stays draft until every asset is
-attached. The checksum is deliberately not made by whoever cuts the tag: a checksum written on the
-machine that also built the binaries proves only that the machine agrees with itself. CI also runs
-`make repro` for every module, so anyone can rebuild and compare the published bytes.
-
-Version numbers live in four places that move together: `flake.nix`, the assertion in
-`.github/workflows/ci.yml`, the table above, and `docs/quickstart.md`. Finalizing a release also
-moves its notes from `Unreleased` to a dated heading in `CHANGELOG.md`.
-
-**ZDE** (the Zinc Desktop Environment, `zde-niri` / `zde-hypr`) is a separate project
-layered on Zinc: it lives in its own repository with its own release plan. Only the Zinc
-core and its tools (containers, launchers, virtualization) are released from here.
+ZDE (`zde-niri` / `zde-hypr`) has a separate repository/release plan; this repo releases Zinc core/tools.

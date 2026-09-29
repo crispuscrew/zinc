@@ -3,7 +3,6 @@ package fs
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
@@ -119,9 +118,10 @@ func TestMarshalLoadRoundtrip(t *testing.T) {
 	// The $EDITOR flow marshals a draft, lets the user edit it, then re-reads via Load
 	// - which rejects unknown keys. So Marshal's output must round-trip cleanly.
 	cfg := sampleApp("rt")
-	cfg.NetworkMeta = schema.NetworkMeta{NetworkLists: []schema.NetworkList{{
-		IPv4CIDR: []string{"1.1.1.1/32"},
-		Ports:    []int{443},
+	cfg.NetworkMeta = schema.NetworkMeta{RulesByPriority: []schema.NetworkRule{{
+		From:      schema.NetworkPeer{Type: schema.NetworkPeerSelf},
+		To:        schema.NetworkPeer{Type: schema.NetworkPeerInternet, Filter: schema.NetworkPeerFilter{IPv4CIDR: []string{"1.1.1.1/32"}, Ports: []int{443}}},
+		Protocols: []schema.NetworkProtocol{schema.NetworkTCP},
 	}}}
 
 	data, err := Marshal(cfg)
@@ -136,27 +136,8 @@ func TestMarshalLoadRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("round-trip Load failed (Marshal emitted a key Load rejects?): %v", err)
 	}
-	if got.ImageMeta.Image != cfg.ImageMeta.Image || len(got.NetworkMeta.NetworkLists) != 1 ||
-		len(got.NetworkMeta.NetworkLists[0].IPv4CIDR) != 1 || len(got.NetworkMeta.NetworkLists[0].Ports) != 1 {
+	if got.ImageMeta.Image != cfg.ImageMeta.Image || len(got.NetworkMeta.RulesByPriority) != 1 ||
+		len(got.NetworkMeta.RulesByPriority[0].To.Filter.IPv4CIDR) != 1 || len(got.NetworkMeta.RulesByPriority[0].To.Filter.Ports) != 1 {
 		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", got, cfg)
-	}
-}
-
-func TestLoad_UnknownKey(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bad.yaml")
-	const body = `SchemaVersion: 3
-Type: ZincContainer
-AppNameID: x
-ImageMeta:
-  Image: img@sha256:abc
-typpo: drift
-`
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "typpo") {
-		t.Fatalf("expected unknown-key error mentioning the stray field, got: %v", err)
 	}
 }

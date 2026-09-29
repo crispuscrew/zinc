@@ -33,12 +33,12 @@
       # runtime dependency, not a build one, so the binary still builds and simply has
       # nothing to run.
       systems = [ "x86_64-linux" "aarch64-linux" ];
-      forAllSystems = fn: nixpkgs.lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
+      forAllSystems = build: nixpkgs.lib.genAttrs systems (system: build nixpkgs.legacyPackages.${system});
 
       # Kept in step with RELEASES.md by hand. It reaches the binary as main.version, the same
       # symbol the Makefile stamps from `git describe`, so `zc version` answers the same way
       # whichever path built it.
-      version = "0.10.1";
+      version = "0.11.0";
 
       tools = {
         zc = {
@@ -63,7 +63,8 @@
         };
       };
 
-      mkTool = pkgs: name: tool: pkgs.buildGoModule {
+      # quic-go v0.63 requires Go 1.26; select it explicitly even when consumers override nixpkgs.
+      mkTool = pkgs: name: tool: pkgs.buildGo126Module {
         pname = "zinc-${name}";
         inherit version;
         src = self;
@@ -117,6 +118,11 @@
       packages = forAllSystems (pkgs:
         let built = nixpkgs.lib.mapAttrs (name: tool: mkTool pkgs name tool) tools;
         in built // {
+          runtime-integration = import ./nix/runtime-integration.nix {
+            inherit pkgs version;
+            src = self;
+          };
+
           # Everything, for `nix profile install` and for the home-manager module's default.
           default = pkgs.symlinkJoin {
             name = "zinc-${version}";
@@ -128,52 +134,7 @@
       # `nix build` builds each tool; this is what CI runs.
       checks = forAllSystems (pkgs: nixpkgs.lib.mapAttrs (name: tool: mkTool pkgs name tool) tools);
 
-      # home-manager module. ZDE installs Zinc in its layer 1, so this is the shape it
-      # arrives in: enable it, get the tools on PATH.
-      #
-      # `tools` defaults to the container-side three rather than all five, because that is
-      # what a desktop needs to define and run apps. zvr is opt-in since a VM runner without
-      # qemu on the machine is a binary that cannot work, and zlg is opt-in because a desktop
-      # shipping its own launcher does not want a second one on PATH.
-      homeModules.zinc = { config, lib, pkgs, ... }:
-        let cfg = config.programs.zinc;
-        in {
-          options.programs.zinc = {
-            enable = lib.mkEnableOption "the Zinc sandboxing tools";
-
-            tools = lib.mkOption {
-              type = lib.types.listOf (lib.types.enum (builtins.attrNames tools));
-              default = [ "zc" "zcr" "zlt" ];
-              example = [ "zc" "zcr" "zvr" "zlt" "zlg" ];
-              description = ''
-                Which Zinc tools to put on PATH. zc authors app files, zcr runs container
-                apps, zvr runs VM apps, zlt and zlg are the terminal and Wayland launchers.
-
-                zc shells out to whichever runner owns an app, so installing zc without zcr
-                gives you authoring and no way to run what you authored.
-              '';
-            };
-
-            packages = lib.mkOption {
-              type = lib.types.attrsOf lib.types.package;
-              default = self.packages.${pkgs.stdenv.hostPlatform.system};
-              defaultText = lib.literalExpression "zinc.packages.\${system}";
-              description = "The package set the selected tools are taken from. Override to build Zinc from a different source.";
-            };
-          };
-
-          config = lib.mkIf cfg.enable {
-            home.packages = map (name: cfg.packages.${name}) cfg.tools;
-
-            # Deliberately NOT done here: installing podman or qemu. Both are system-level on
-            # NixOS (virtualisation.podman, and the kvm group for qemu), a home-manager module
-            # cannot enable them, and pulling copies into the user profile would produce a
-            # second podman that does not share the system's storage or its rootless setup.
-            # The tools report a missing runtime clearly when it is absent.
-            warnings = lib.optional (!(builtins.elem "zc" cfg.tools) && cfg.tools != [ ])
-              "programs.zinc: no zc, so there is nothing to author the apps the installed runners run.";
-          };
-        };
+      homeModules.zinc = import ./nix/home.nix { inherit self tools; };
 
       # The old name, kept because home-manager modules were `homeManagerModules` before they
       # were `homeModules` and a consumer may pin either.

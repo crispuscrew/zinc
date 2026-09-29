@@ -1,0 +1,25 @@
+# Both app policies and packet-preserving topology must be provisioned first.
+SchemaVersion: 4
+Type: ZincContainer
+AppNameID: network-client
+LauncherMeta:
+  Description: Explicit TCP access to one sibling
+ImageMeta:
+  Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+StartConditions:
+  DependsOn: [network-server]
+  Entrypoint: /bin/sh
+  Terminal: true
+DisplayMeta:
+  DisableGpuAccess: true
+NetworkMeta:
+  Interfaces:
+    - ID: primary
+  RulesByPriority:
+    - From: {Type: Self, Interface: primary}
+      To:
+        Type: App
+        AppNameID: network-server
+        Interface: service
+        Filter: {Ports: [8080]}
+      Protocols: [TCP]

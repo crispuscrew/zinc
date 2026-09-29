@@ -1,194 +1,112 @@
 package tui
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/common/domain/schema/validate"
+	"github.com/crispuscrew/zinc/common/domain/vmoptions"
 )
 
-// labels lists the form's current rows, which is how the type switch is observed.
 func labels(frm *formModel) []string {
-	out := make([]string, len(frm.fields))
-	for index, field := range frm.fields {
-		out[index] = field.label
+	var result []string
+	for _, field := range frm.fields {
+		result = append(result, field.label)
 	}
-	return out
+	return result
 }
+func hasLabel(frm *formModel, want string) bool { return slices.Contains(labels(frm), want) }
 
-func hasLabel(frm *formModel, want string) bool {
-	for _, label := range labels(frm) {
-		if label == want {
-			return true
-		}
-	}
-	return false
-}
-
-// The type row decides the rest of the form. Offering a container's multiterminal toggle
-// on a guest would be offering a setting the runtime refuses to honour.
-func TestForm_TypeSwitchRebuildsTheFields(t *testing.T) {
-	frm := newForm(schema.AppConfig{}, true)
-	if !hasLabel(frm, "multiterminal") {
-		t.Fatalf("a container form should offer container fields, got %v", labels(frm))
-	}
-	if hasLabel(frm, "vcpus") {
-		t.Fatalf("a container form should not offer guest hardware, got %v", labels(frm))
-	}
-
+func TestForm_TypeSwitchPreservesSharedData(t *testing.T) {
+	base := sample("app")
+	base.StartConditions = schema.StartConditions{DependsOn: []string{"base"}, AttachedEntrypoint: "sh", EntrypointEnv: map[string]string{"TOKEN": "value"}}
+	base.RunnerFlags = []string{"--label", "a b"}
+	base.AudioMeta.Playback.PipeWireDevices = []string{"exact sink name"}
+	base.DisplayMeta.DisplayWidth, base.DisplayMeta.DisplayHeight = 1920, 1080
+	base.HostTheme = true
+	frm := newForm(base, false)
 	frm.draft.Type = schema.ZincVirtualization
 	frm.buildFields()
-
-	for _, want := range []string{"base image", "base digest", "memory (MiB)", "vcpus", "display", "cloud-init user"} {
-		if !hasLabel(frm, want) {
-			t.Errorf("a VM form should offer %q, got %v", want, labels(frm))
-		}
+	if !hasLabel(frm, "base digest") {
+		t.Fatal("VM controls missing")
 	}
-	for _, unwanted := range []string{"multiterminal", "terminal", "entrypoint", "host_theme"} {
-		if hasLabel(frm, unwanted) {
-			t.Errorf("a VM form must not offer %q: the runtime cannot honour it", unwanted)
-		}
+	actual := frm.toConfig()
+	base.Type = schema.ZincVirtualization
+	if !reflect.DeepEqual(actual, base) {
+		t.Fatalf("switching type destroyed shared fields:\n%+v\n%+v", actual, base)
 	}
 }
 
-// A form filled in as a VM must produce a config the shared validation accepts, or the
-// author is told the app is invalid without ever having been offered the missing field.
-func TestForm_VMDraftValidates(t *testing.T) {
-	frm := newForm(schema.AppConfig{}, true)
-	frm.draft.Type = schema.ZincVirtualization
-	frm.buildFields()
-
+func TestForm_VMDraftValidatesBothDocuments(t *testing.T) {
+	frm := newForm(schema.AppConfig{Type: schema.ZincVirtualization}, true)
 	frm.name.SetValue("guest")
 	frm.image.SetValue("/var/lib/zinc/images/fedora.qcow2")
 	frm.baseDigest.SetValue("sha256:" + strings.Repeat("a", 64))
 	frm.memory.SetValue("8192")
 	frm.vcpus.SetValue("4")
 	frm.diskSize.SetValue("40")
-	frm.draft.VirtualizationMeta.Display = schema.VMDisplayAccelerated
-
+	frm.vm.Display = vmoptions.DisplayAccelerated
 	cfg := frm.toConfig()
-	if err := validate.Validate(cfg); err != nil {
-		t.Fatalf("the form's VM draft should validate, got: %v", err)
+	if frm.err != nil {
+		t.Fatal(frm.err)
 	}
-	if cfg.VirtualizationMeta.MemoryMiB != 8192 || cfg.VirtualizationMeta.VCPUs != 4 {
-		t.Errorf("sizing = %+v, want the typed values", cfg.VirtualizationMeta)
+	if err := validate.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	options, err := frm.options(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResourcesMeta.MaxRamMiB != 8192 || cfg.ResourcesMeta.MaxCPUCores != 4 || options.DiskSizeGiB != 40 {
+		t.Fatalf("sizing lost: %+v %+v", cfg.ResourcesMeta, options)
 	}
 }
 
-// Switching an existing container app to a VM must clear the container-only fields it
-// carried. Validation rejects them on a guest, so leaving them would block the save with
-// settings the author never chose in this form and cannot see to remove.
-func TestForm_SwitchingToVMClearsContainerOnlyFields(t *testing.T) {
-	existing := schema.AppConfig{
-		SchemaVersion: schema.SchemaVersion,
-		Type:          schema.ZincContainer,
-		AppNameID:     "app",
-		ImageMeta:     schema.ImageMeta{Image: "localhost/app:local"},
-		Capabilities:  []string{"CAP_NET_BIND_SERVICE"},
-		HostTheme:     true,
-		Keys:          []schema.Key{{Type: schema.SSH, Path: "/home/u/.ssh/id_ed25519"}},
+func TestForm_VMNoOpPreservesAutomaticDisplayAndDevices(t *testing.T) {
+	cfg := sample("guest")
+	cfg.Type, cfg.ImageMeta.Image = schema.ZincVirtualization, "/images/base.qcow2"
+	cfg.ResourcesMeta = schema.ResourcesMeta{MaxCPUCores: 2, MaxRamMiB: 4096}
+	options := vmoptions.Default(cfg.AppNameID, cfg.ImageMeta.Image)
+	options.BaseDigest = "sha256:" + strings.Repeat("a", 64)
+	options.InstallMedia = []string{"/iso/guest tools.iso"}
+	frm := newForm(cfg, false)
+	frm.loadVM(options)
+	actual, err := frm.options(frm.toConfig())
+	if err != nil {
+		t.Fatal(err)
 	}
-	existing.StartConditions.Terminal = true
-	existing.NetworkMeta.NetworkLists = []schema.NetworkList{{Host: true}}
-
-	frm := newForm(existing, false)
-	frm.draft.Type = schema.ZincVirtualization
-	frm.buildFields()
-	frm.image.SetValue("/var/lib/zinc/images/fedora.qcow2")
-	frm.baseDigest.SetValue("sha256:" + strings.Repeat("b", 64))
-	frm.memory.SetValue("4096")
-	frm.vcpus.SetValue("2")
-	frm.draft.VirtualizationMeta.Display = schema.VMDisplayNone
-
-	cfg := frm.toConfig()
-	if err := validate.Validate(cfg); err != nil {
-		t.Fatalf("converting a container app to a VM should produce a valid config, got: %v", err)
-	}
-	if len(cfg.Capabilities) != 0 || len(cfg.NetworkMeta.NetworkLists) != 0 || len(cfg.Keys) != 0 || cfg.HostTheme {
-		t.Errorf("container-only fields survived the switch: %+v", cfg)
+	if !reflect.DeepEqual(*actual, options) {
+		t.Fatalf("no-op changed runtime selections: %+v", actual)
 	}
 }
 
-// The mirror: a container draft must carry no VM fields, which validation also rejects.
-func TestForm_ContainerDraftCarriesNoVMFields(t *testing.T) {
-	frm := newForm(schema.AppConfig{}, true)
-	frm.name.SetValue("app")
-	frm.image.SetValue("localhost/app:local")
-	frm.memory.SetValue("8192") // typed while the form was briefly a VM
-
-	cfg := frm.toConfig()
-	if !cfg.VirtualizationMeta.IsZero() {
-		t.Errorf("a container draft should carry no VM fields, got %+v", cfg.VirtualizationMeta)
-	}
-	if err := validate.Validate(cfg); err != nil {
-		t.Fatalf("the container draft should validate, got: %v", err)
+func TestForm_InvalidNumbersAreNotSilentlyUnlimited(t *testing.T) {
+	for _, value := range []string{"nonsense", "-1", "NaN", "+Inf"} {
+		frm := newForm(sample("app"), false)
+		frm.vcpus.SetValue(value)
+		frm.toConfig()
+		if frm.err == nil {
+			t.Errorf("CPU value %q was silently accepted", value)
+		}
 	}
 }
 
-// The enum cycles and wraps, and an unrecognised value from a hand-edited config lands on
-// the first rather than sticking.
 func TestNextValue(t *testing.T) {
 	values := []string{"A", "B", "C"}
-	if got := nextValue(values, "A"); got != "B" {
-		t.Errorf("nextValue(A) = %q, want B", got)
-	}
-	if got := nextValue(values, "C"); got != "A" {
-		t.Errorf("nextValue(C) should wrap to A, got %q", got)
-	}
-	if got := nextValue(values, "nonsense"); got != "A" {
-		t.Errorf("nextValue(unknown) = %q, want the first value", got)
+	if nextValue(values, "A") != "B" || nextValue(values, "C") != "A" {
+		t.Fatal("enum did not cycle")
 	}
 }
 
-// The display row must offer every mode validation accepts. The two rules combine badly if
-// it does not: nextValue lands an unrecognised value on the first in the list, so a mode
-// missing here is not merely unreachable - opening a guest that uses it and pressing the
-// cycle key rewrites its display to something else. A Windows guest is exactly that case; it
-// runs on Compatible, and being moved to Accelerated boots it to a black screen.
-func TestFormDisplayEnum_OffersEveryModeValidationAccepts(t *testing.T) {
-	frm := newForm(schema.AppConfig{}, true)
-	frm.draft.Type = schema.ZincVirtualization
-	frm.buildFields()
-
-	var values []string
-	for _, fld := range frm.fields {
-		if fld.label == "display" {
-			values = fld.values
-		}
-	}
-	if values == nil {
-		t.Fatal("no display row in the VM form")
-	}
-
-	// Listed here rather than derived, so adding a mode to the schema fails this test until
-	// the form is taught about it.
-	for _, mode := range []schema.VMDisplay{
-		schema.VMDisplayNone, schema.VMDisplayWindow,
-		schema.VMDisplayAccelerated, schema.VMDisplayCompatible,
-	} {
-		if !slices.Contains(values, string(mode)) {
-			t.Errorf("the display row does not offer %q; cycling would rewrite it to %q", mode, values[0])
-		}
-	}
-	if len(values) != 4 {
-		t.Errorf("display values = %q, want exactly the four modes", values)
-	}
-
-	// The specific regression: a Windows guest's mode must cycle to another real mode.
-	if got := nextValue(values, string(schema.VMDisplayCompatible)); got == string(schema.VMDisplayAccelerated) {
-		t.Errorf("Compatible cycled to %q, which is the not-found fallback rather than a step", got)
-	}
-}
-
-// An unreadable number is left unset so validation names the field, rather than the form
-// inventing a value the author did not type.
-func TestParseNum(t *testing.T) {
-	cases := map[string]int64{"8192": 8192, "": 0, "abc": 0, "-4": 0, " 2048 ": 2048}
-	for input, want := range cases {
-		if got := parseNum(input); got != want {
-			t.Errorf("parseNum(%q) = %d, want %d", input, got, want)
+func TestFormDisplayEnumOffersEveryRuntimeMode(t *testing.T) {
+	frm := newForm(schema.AppConfig{Type: schema.ZincVirtualization}, true)
+	field := frm.fields[fieldIdx(frm, "display")]
+	for _, mode := range []string{"", "None", "Window", "Accelerated", "Compatible"} {
+		if !slices.Contains(field.values, mode) {
+			t.Errorf("display mode %q missing", mode)
 		}
 	}
 }

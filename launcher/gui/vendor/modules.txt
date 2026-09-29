@@ -1,9 +1,9 @@
 # github.com/crispuscrew/zinc/common v0.0.0 => ../../common
-## explicit; go 1.24.2
+## explicit; go 1.26.0
 github.com/crispuscrew/zinc/common/domain/schema
 github.com/crispuscrew/zinc/common/domain/schema/inherit
 # github.com/crispuscrew/zinc/launcher/common v0.0.0 => ../common
-## explicit; go 1.24.2
+## explicit; go 1.26.0
 github.com/crispuscrew/zinc/launcher/common/runner
 github.com/crispuscrew/zinc/launcher/common/store
 # github.com/crispuscrew/zinc/menu v0.0.0 => ../../menu
@@ -38,8 +38,8 @@ golang.org/x/image/vector
 golang.org/x/image/vp8
 golang.org/x/image/vp8l
 golang.org/x/image/webp
-# golang.org/x/sys v0.27.0
-## explicit; go 1.18
+# golang.org/x/sys v0.47.0
+## explicit; go 1.25.0
 golang.org/x/sys/unix
 # golang.org/x/text v0.16.0
 ## explicit; go 1.18

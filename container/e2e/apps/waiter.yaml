@@ -1,7 +1,8 @@
-SchemaVersion: 3
+SchemaVersion: 4
 Type: ZincContainer
 AppNameID: waiter
-Description: readiness scenario - must not start until slowdep says it is ready
+LauncherMeta:
+  Description: dependency scenario - automatically start slowdep before this app
 ImageMeta:
   Image: localhost/zinc/e2e-app:local
 StartConditions:

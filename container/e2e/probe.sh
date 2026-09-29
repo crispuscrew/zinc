@@ -1,9 +1,9 @@
 #!/bin/sh
 # The consumer: over the private sibling link, probe the producer's published port (5432,
 # should answer) and an unpublished one (9999, the producer's firewall drops it). The
-# producer is reachable by its app name, which podman resolves as a network alias. Print
-# one line the harness asserts on, then stay alive so its logs can be read.
-probe() { echo PING | nc -w3 producer "$1" 2>/dev/null; }
+# provisioner assigns the producer the fixture's explicit address; no implicit host DNS.
+: "${PRODUCER_ADDRESS:?set the provisioned producer address}"
+probe() { echo PING | nc -w3 "$PRODUCER_ADDRESS" "$1" 2>/dev/null; }
 
 reply=""
 for _ in 1 2 3 4 5; do

@@ -1,0 +1,23 @@
+# Requires your own disk and matching runtime/vm/guest.json pin; not boot media.
+SchemaVersion: 4
+Type: ZincVirtualization
+AppNameID: guest
+LauncherMeta:
+  Description: Offline serial VM with external hardware options
+  Group: VM
+ImageMeta:
+  Image: /images/base.qcow2
+  CloudInit: false
+ResourcesMeta:
+  MaxCPUCores: 2
+  MaxRamMiB: 2048
+StartConditions:
+  Terminal: true
+  LoaderBIOS: true
+StopConditions:
+  KeepAlive: true
+  Autorestart: false
+DisplayMeta:
+  DisableGpuAccess: true
+NetworkMeta:
+  Interfaces: []

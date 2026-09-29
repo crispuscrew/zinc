@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
+	"github.com/crispuscrew/zinc/creator/internal/advisory"
 	"github.com/crispuscrew/zinc/creator/internal/backend"
 	"github.com/crispuscrew/zinc/creator/internal/runner"
 )
@@ -31,7 +33,13 @@ func delegate(svc backend.Service, cmd string, argv []string) error {
 		return runner.Passthrough(append([]string{cmd}, argv...)...)
 	}
 	if cfg.Type != schema.ZincVirtualization {
+		if (cmd == "run" || cmd == "build" || cmd == "term") && len(cfg.CreatorFlags)+len(cfg.RunnerFlags) > 0 {
+			fmt.Fprintln(os.Stderr, "warning: "+advisory.RawFlags)
+		}
 		return runner.Passthrough(append([]string{cmd}, argv...)...)
+	}
+	if (cmd == "run" || cmd == "term") && len(cfg.CreatorFlags)+len(cfg.RunnerFlags) > 0 {
+		fmt.Fprintln(os.Stderr, "warning: "+advisory.RawFlags)
 	}
 	return delegateVM(cmd, name, argv)
 }

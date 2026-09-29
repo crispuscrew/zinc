@@ -1,33 +1,26 @@
 # zlt - Zinc launcher (TUI)
 
-`zlt` (zinc-launcher-tui) is a fast, keyboard-first fuzzy picker over the apps you
-defined with `zc`. It lists everything in `~/.config/zinc/apps`, filters as you type,
-and launches the chosen app by shelling out to the `zcr` binary - so, like `zc`, it
-depends only on the shared schema library and never imports the runtime.
+`zlt` fuzzy-picks apps from `$XDG_CONFIG_HOME/zinc/apps` (default `~/.config`).
+It delegates launch to `zcr` for containers or `zvr` for VMs.
 
 ## Use
 
 ```sh
 zlt            # open the picker
-zlt <app>      # launch a defined app directly (for a desktop hotkey or a script)
+zlt <app>      # launch directly from a hotkey or script
 zlt --version
 ```
 
-In the picker: **type** to fuzzy-filter, **up/down** (or **ctrl+p/ctrl+n**) to move,
-**ctrl+u** to clear the filter, **enter** to launch the selected app (then it quits,
-dmenu-style), **esc**/**ctrl+c** to cancel. A `●` marks apps that are already running
-(best-effort, from `zcr ps`).
+Type to filter; Up/Down or Ctrl+P/Ctrl+N move, Ctrl+U clears, Enter launches and
+quits, Esc/Ctrl+C cancel. A dot marks running apps (best effort, from both runners).
 
-Launching runs `zcr run <app> --exec`, so `zcr` does the real work: validation,
-dependency auto-start, the derived-image build, and the fail-closed network lock-down.
-`zcr` must be on your `$PATH` to launch (the picker still lists apps without it).
+Launch runs `zcr run <app> --exec` or `zvr run <app>`; the selected binary must be
+on `PATH`. Listing works without runners. See [runtime prerequisites](../../docs/quickstart.md).
 
 ## Build
 
-Podman-only, reproducible, like the other tools:
-
 ```sh
-make check     # gofmt + vet + test in the pinned container
-make build     # reproducible build -> ./bin/zlt
-make vendor    # refresh vendored deps (the only networked step)
+make check   # formatting, vet, tests in pinned Podman tooling
+make build   # bin/zlt
+make vendor  # networked dependency refresh
 ```

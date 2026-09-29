@@ -1,83 +1,59 @@
 # zlg - zinc-launcher-gui
 
-`zlg` is the graphical sibling of [`zlt`](../tui/README.md): the same quick picker over the
-defined apps (`~/.config/zinc/apps`), as a floating Wayland overlay. Type to filter, move with
-the arrows (or `ctrl+p`/`ctrl+n`), and press enter to launch the selected app; a dot marks
-apps already running. `zlg <app>` launches one app directly, for a desktop hotkey.
+`zlg` picks apps from `$XDG_CONFIG_HOME/zinc/apps` (default `~/.config`) in a floating
+Wayland overlay. It needs a compositor supporting `wlr-layer-shell`, such as niri,
+Hyprland or sway. For a terminal picker, use [`zlt`](../tui/README.md).
 
 ```sh
-zlg            # open the picker window: type to filter, enter launches, esc quits
-zlg firefox    # launch a defined app directly (bind this to a hotkey)
+zlg            # open the picker
+zlg firefox    # launch directly, e.g. from a hotkey
 zlg --version
+make -C launcher/gui demo  # from repo root; uses throwaway config
 ```
 
-![The zlg launcher overlay, listing the demo apps grouped by section](../../docs/media/zlg-launcher.png)
+Type to filter; arrows or `ctrl+p`/`ctrl+n` move, Enter launches, Esc quits.
+A dot marks running apps (best effort). Launch requires `zcr` for containers or
+`zvr` for VMs on `PATH`; see [demo prerequisites](../demo/README.md).
 
-To try it without installing anything or touching your real config:
-
-```sh
-make -C launcher/gui demo    # builds zlg, opens it over the bundled demo apps
-```
-
-Like `zc` and `zlt`, `zlg` **never imports the runtime**: it lists what `zc` authored and
-shells out to the `zcr` binary to run the chosen app, so dependency auto-start, the network
-lock-down, and derived-image builds all stay `zcr`'s job.
+![The zlg launcher overlay](../../docs/media/zlg-launcher.png)
 
 ## Appearance and behaviour
 
-`zlg` has no config file; the few knobs it has are environment variables, so they can be set
-per-invocation or in the hotkey binding that launches it:
+Environment variables are the only appearance settings:
 
-| Variable | Effect |
-| --- | --- |
-| `ZLG_OPACITY` | Background translucency. Takes a percentage (`20`) or a fraction (`0.2`) - `1` and `100` both mean fully opaque. Unset is opaque. An unusable value is reported on stderr and ignored. |
-| `ZLG_FONT` | Path to a `.ttf`/`.otf` to render with. Unset auto-detects an installed monospace Nerd Font and falls back to the bundled Go Mono. |
-| `ZLG_NO_ANIM` | Set to anything to disable the entrance fade-in. |
-| `ZLG_DEBUG` | Set to anything to trace the Wayland handshake to stderr. |
+- `ZLG_OPACITY`: percentage (`20`) or fraction (`0.2`); `1`, `100` and unset are opaque.
+  Invalid values are reported on stderr and ignored. The compositor must blend layer surfaces.
+- `ZLG_FONT`: `.ttf`/`.otf` path; default is an installed monospace Nerd Font, then Go Mono.
+- `ZLG_NO_ANIM`: any value disables entrance fade-in.
+- `ZLG_DEBUG`: any value traces the Wayland handshake to stderr.
 
 ```sh
-ZLG_OPACITY=85 zlg          # a lightly translucent overlay
-ZLG_DEBUG=1 zlg             # diagnose a compositor that will not show the surface
+ZLG_OPACITY=85 zlg
+ZLG_DEBUG=1 zlg
 ```
-
-Translucency needs a compositor that blends layer-shell surfaces; `zlg` always writes an
-alpha channel, so if the window still looks opaque the compositor is discarding it.
 
 ## A thin consumer of the `menu` module
 
-The picker window itself is not in `zlg` anymore: the overlay core (a pure-Go Wayland
-`wlr-layer-shell` surface, a software renderer, a keymap, a theme resolver, and the
-fuzzy-filter picker view-model) was extracted into the standalone [`menu`](../../menu)
-module, and `zlg` is now a thin consumer of it. `zlg` loads the defined apps, marks the ones
-`zcr` reports running, and hands `menu.Run` an activate callback that launches the chosen app
-through `zcr`; the window, rendering, input, and theming all live in `menu`. The old
-`internal/picker`, `internal/keymap`, `internal/render`, and `internal/ui` packages moved
-there.
+[`menu`](../../menu/README.md) owns the window, input and rendering;
+[`launcher/common`](../common) shares app loading, matching and runtime delegation with `zlt`.
 
 ## Pure Go, static, reproducible
 
-Because it builds on `menu`, `zlg` renders without cgo: `menu` speaks the Wayland wire
-protocol directly (via [go-wayland](https://github.com/rajveermalviya/go-wayland)) and
-software-renders into a shared-memory buffer with a bundled bitmap font. So, unlike a GUI
-toolkit that pulls in libwayland / EGL / GTK, `zlg` stays a **static, `CGO_ENABLED=0`,
-runs-anywhere, byte-reproducible** binary built from the same minimal image as the other Zinc
-tools. The read/launch/match logic is still shared with `zlt` through the
-[`launcher/common`](../common) library.
+The static `CGO_ENABLED=0` build uses pure-Go Wayland and software rendering.
+Use `make repro` to check byte reproducibility in your checkout.
 
 ## Build
 
 ```sh
-make build        # reproducible static build -> ./bin/zlg
-make check        # gofmt + vet + test in the pinned container
-make repro        # prove the build is byte-identical
+make build  # bin/zlg, pinned Podman tooling
+make check  # formatting, vet, tests
+make repro  # compare two builds
 ```
 
-## Known limits (0.3)
+<a id="known-limits-03"></a>
 
-- The keymap is US-QWERTY; full keyboard-layout (xkb) support is future work (the keymap
-  lives in `menu`).
-- It lists and launches; managing an app (stop, logs, edit) stays in `zc`.
-- A launch cannot be **cancelled**. `zcr run` no longer blocks the overlay (it runs off the
-  event loop, with a `launching <app>...` banner while it works), and Esc dismisses the window
-  immediately, but the launch itself carries on to completion in the background - so an app
-  whose derived image has to be rebuilt still takes minutes, it just does it out of your way.
+## Known limits
+
+- US-QWERTY keymap only; app management stays in `zc` and the runners.
+- Launch runs off the event loop but cannot be cancelled. Esc closes the window;
+  the process waits for the launch to finish, including slow image builds.
