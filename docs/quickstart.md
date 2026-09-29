@@ -1,6 +1,6 @@
 # Quickstart: Zinc v0.11.0
 
-This checkout prepares v0.11.0 (schema v4); it is not a published release.
+This guide targets v0.11.0 (schema v4).
 v0.10.1 binaries use the earlier format. Upgrading? Read the
 [upgrade requirements](releases/0.11.0.md#upgrade-requirements) first.
 

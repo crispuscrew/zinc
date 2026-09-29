@@ -1,7 +1,7 @@
 # Zinc - Release Plan
 
-**0.11.0 is prepared locally, not published.** [Changelog](CHANGELOG.md) records release
-details; local candidates and a dated entry do not establish publication.
+**0.11.0** is the schema v4 release. [Changelog](CHANGELOG.md) records its details;
+[GitHub Releases](https://github.com/crispuscrew/zinc/releases) records publication and assets.
 
 | Version | Milestone |
 | --- | --- |
@@ -19,7 +19,7 @@ details; local candidates and a dated entry do not establish publication.
 | 0.9.1 | 22 audit fixes, including injection, relaunch and firewall defects |
 | 0.10.0 | Schema v3: audio, configs/volumes, notifications, env/rootfs/display controls, VM egress, signed tags/checksums |
 | 0.10.1 | Verified Linux AMD64 binaries, quickstart, Node.js 24 Actions |
-| 0.11.0 | Prepared locally: schema v4, provisioned networking, encrypted DNS, audio broker, external VM options, Go 1.26 |
+| 0.11.0 | Schema v4, provisioned networking, encrypted DNS, audio broker, external VM options, Go 1.26 |
 
 Schema-breaking pre-1.0 changes require a minor bump: 0.10.0 introduced v3;
 **0.11.0 is a breaking pre-1.0 minor release**, changing definitions and runtime prerequisites.

@@ -3,10 +3,10 @@
 Current contracts: [architecture](docs/architecture.md).
 Milestones and publication policy: [release plan](RELEASES.md); history: [Changelog](CHANGELOG.md).
 
-## Current milestone - 0.11.0 prepared locally
+## Current milestone - 0.11.0
 
-**0.11.0 is prepared locally, not published.** Schema v4 consumers, examples, refreshed
-vendors and canonical formatting are aligned. Both runners expose DNS workers with
+**0.11.0** aligns schema v4 consumers, examples, vendors and canonical formatting.
+Both runners expose DNS workers with
 authenticated readiness; networking and WirePlumber still require explicit host deployment.
 See [release notes and verification scope](docs/releases/0.11.0.md) and [migration](docs/migration.md).
 Publication follows reviewed `dev -> release/0.11.0 -> main` PRs, green CI and a signed tag.
