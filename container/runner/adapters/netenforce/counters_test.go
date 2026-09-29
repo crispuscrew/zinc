@@ -1,44 +1,68 @@
 package netenforce
 
 import (
-	"slices"
+	"errors"
+	"strings"
 	"testing"
 
+	provision "github.com/crispuscrew/zinc/common/adapters/network"
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/container/runner/domain/options"
 )
 
-// The readout takes the same route as the lock-down: same helper image, same pod, same one
-// capability, and a fixed argv. Reading nftables is not a lesser privilege than writing it.
-func TestCounters_TakesTheSamePathAsTheLockDown(t *testing.T) {
-	cmd, filtered := (Enforcer{}).Counters(pastaApp(), options.HostOptions{})
-	if !filtered {
-		t.Fatal("a filtered app has a ruleset to read")
+func TestCountersUsesPinnedNamespaceWithoutChangingFirewall(t *testing.T) {
+	cfg, manifest := configured()
+	command, active := adapter(manifest).Counters(cfg, options.HostOptions{})
+	joined := strings.Join(command.Args, " ")
+	if !active || !strings.Contains(joined, "net:[123]") || !strings.Contains(joined, "nft -j list table inet zinc") || strings.Contains(joined, "nft -f") {
+		t.Fatal("counter path differs from enforcement")
 	}
-	assertContainsSeq(t, cmd.Args, "--pod", PodName("browser"))
-	assertContainsSeq(t, cmd.Args, "--cap-add", "NET_ADMIN")
-	assertContainsSeq(t, cmd.Args, "--cap-drop", "all")
-	assertContainsSeq(t, cmd.Args, "--pull", "never")
-	assertContainsSeq(t, cmd.Args, "--user", "0")
-	if tail := cmd.Args[len(cmd.Args)-4:]; !slices.Equal(tail, []string{"nft", "-j", "list", "ruleset"}) {
-		t.Fatalf("the read step should end with `nft -j list ruleset`, got %v", tail)
+	if flagValue(command.Args, "--network") != "ns:/proc/321/ns/net" {
+		t.Fatal("counters did not join the observed app process namespace")
 	}
-	if cmd.Stdin != "" {
-		t.Errorf("nothing is piped into a read, got stdin %q", cmd.Stdin)
-	}
-
-	override, _ := (Enforcer{}).Counters(pastaApp(), options.HostOptions{NetfilterImage: "my/nft:local"})
-	if !slices.Contains(override.Args, "my/nft:local") {
-		t.Errorf("the read step should use the override image, got %v", override.Args)
+	cfg.NetworkMeta.Interfaces = nil
+	if _, active := adapter(manifest).Counters(cfg, options.HostOptions{}); active {
+		t.Fatal("isolated app has counters")
 	}
 }
 
-// An app with no NetworkLists has no netns of its own, so there is no ruleset and no counter.
-// That is an answer, not a failure: the caller says so rather than running a command that
-// would fail with podman's "no such pod" and read as something being broken.
-func TestCounters_UnfilteredAppHasNothingToAsk(t *testing.T) {
-	cmd, filtered := (Enforcer{}).Counters(schema.AppConfig{AppNameID: "solo"}, options.HostOptions{})
-	if filtered {
-		t.Fatalf("an unfiltered app has no ruleset to read, got %v", cmd.Args)
+func TestCountersRefuseMissingProcess(test *testing.T) {
+	for _, failure := range []error{nil, errors.New("inspect denied")} {
+		cfg, manifest := configured()
+		enforcer := adapter(manifest)
+		enforcer.ProcessID = func(string) (int, error) { return 0, failure }
+		command, active := enforcer.Counters(cfg, options.HostOptions{})
+		if !active || flagValue(command.Args, "--network") != "none" ||
+			!strings.Contains(command.Args[len(command.Args)-1], "exit 1") {
+			test.Fatal("missing process produced misleading counters")
+		}
+	}
+}
+
+func TestCountersFreezeObservedProcess(test *testing.T) {
+	cfg, manifest := configured()
+	enforcer := adapter(manifest)
+	calls := 0
+	enforcer.ProcessID = func(name string) (int, error) {
+		if name != cfg.AppNameID {
+			test.Fatalf("inspected wrong app: %s", name)
+		}
+		calls++
+		return 321 + calls, nil
+	}
+	command, active := enforcer.Counters(cfg, options.HostOptions{})
+	if !active || calls != 1 || flagValue(command.Args, "--network") != "ns:/proc/322/ns/net" {
+		test.Fatalf("process snapshot not fixed in command: %+v", command)
+	}
+}
+
+func TestMissingManifestCounterIsErrorNotIsolation(t *testing.T) {
+	cfg, _ := configured()
+	enforcer := Enforcer{Load: func(schema.AppConfig) (provision.Manifest, error) {
+		return provision.Manifest{}, errors.New("manifest missing")
+	}}
+	command, active := enforcer.Counters(cfg, options.HostOptions{})
+	if !active || !strings.Contains(strings.Join(command.Args, " "), "exit 1") {
+		t.Fatal("failed inspection claimed isolation")
 	}
 }

@@ -21,7 +21,7 @@ var reservedEnv = map[string]string{
 	"DBUS_SESSION_BUS_ADDRESS": "the runner sets this to the filtered bus socket (DBusMeta)",
 }
 
-func checkEnv(env map[string]string, add addFunc) {
+func checkEnv(field string, env map[string]string, add addFunc) {
 	names := make([]string, 0, len(env))
 	for name := range env {
 		names = append(names, name)
@@ -30,14 +30,12 @@ func checkEnv(env map[string]string, add addFunc) {
 	for _, name := range names {
 		switch {
 		case !envNameRE.MatchString(name):
-			add("Env[%q]: not a usable variable name - letters, digits and underscore, not starting with a digit", name)
+			add("%s[%q]: not a usable variable name - letters, digits and underscore, not starting with a digit", field, name)
 		case reservedEnv[name] != "":
-			add("Env[%q]: cannot be set here - %s, and overriding it points the app at something that is not there", name, reservedEnv[name])
+			add("%s[%q]: cannot be set here - %s, and overriding it points the app at something that is not there", field, name, reservedEnv[name])
 		}
 		if hasControl(env[name]) {
-			// hasControl covers the case that matters: the value becomes one -e argument, so a newline
-			// would split it.
-			add("Env[%q]: the value must be a single line with no control characters", name)
+			add("%s[%q]: the value must be a single line with no control characters", field, name)
 		}
 	}
 }

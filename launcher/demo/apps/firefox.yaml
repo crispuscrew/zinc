@@ -1,11 +1,12 @@
-# Zinc demo app (schema v3). See launcher/demo/README.md. Try the picker with:
+# Zinc demo app (schema v4). See launcher/demo/README.md. Try the picker with:
 #   make -C launcher/gui demo      (GUI)   or   make -C launcher/tui demo   (TUI)
-SchemaVersion: 3
+SchemaVersion: 4
 Type: ZincContainer
 AppNameID: firefox
-Icon: firefox
-Description: Web browser
-Group: Web
+LauncherMeta:
+  Icon: firefox
+  Description: Offline web browser
+  Group: Web
 ImageMeta:
   Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
   Install:

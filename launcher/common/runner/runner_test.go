@@ -2,101 +2,84 @@ package runner
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// fakeScript stands in for the zcr binary: `ps` prints two running apps, `run bad`
-// fails with a stderr message, everything else succeeds.
-const fakeScript = `#!/bin/sh
-case "$1" in
-  ps) printf 'firefox\nsyncthing\n' ;;
-  run) if [ "$2" = "bad" ]; then echo "bad: no such app" 1>&2; exit 1; fi; exit 0 ;;
-  stop) exit 0 ;;
-  *) echo "unknown: $*" 1>&2; exit 2 ;;
-esac
-`
-
-// fakeZcr installs a fake zcr on $PATH for the duration of the test.
-func fakeZcr(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "zcr"), []byte(fakeScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-func TestLaunch_OK(t *testing.T) {
-	fakeZcr(t)
-	if err := Launch("firefox"); err != nil {
-		t.Fatalf("Launch(firefox): %v", err)
-	}
-}
-
-func TestLaunch_SurfacesError(t *testing.T) {
-	fakeZcr(t)
-	err := Launch("bad")
-	if err == nil || !strings.Contains(err.Error(), "no such app") {
-		t.Fatalf("Launch(bad): want the zcr error surfaced, got %v", err)
+func TestActionsUseResolvedTypeAndStoreKey(t *testing.T) {
+	for _, testCase := range []struct {
+		appType string
+		binary  string
+		runArgs string
+	}{
+		{"ZincContainer", "zcr", "run\nchild\n--exec\n"},
+		{"ZincVirtualization", "zvr", "run\nchild\n"},
+	} {
+		t.Run(testCase.appType, func(t *testing.T) {
+			calls := fakeRuntimes(t, map[string]string{"zcr": fakeScript, "zvr": fakeScript})
+			writeConfigs(t, map[string]string{
+				"base":  "SchemaVersion: 4\nType: " + testCase.appType + "\nAppNameID: base\nRunnerFlags: ['--raw-backend-flag']\n",
+				"child": "Inherits: base\nAppNameID: child\nLauncherMeta:\n  Description: another-app\n  Group: category\n  Icon: icon-name\n",
+			})
+			if err := Launch("child"); err != nil {
+				t.Fatal(err)
+			}
+			if err := Stop("child"); err != nil {
+				t.Fatal(err)
+			}
+			want := testCase.binary + "\n" + testCase.runArgs + testCase.binary + "\nstop\nchild\n"
+			assertCalls(t, calls, want)
+		})
 	}
 }
 
-func TestStop_OK(t *testing.T) {
-	fakeZcr(t)
-	if err := Stop("firefox"); err != nil {
-		t.Fatalf("Stop(firefox): %v", err)
+func TestActionsRejectInvalidConfigsBeforeExecution(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"invalid-type", "AppNameID: child\nType: Other\n", "unsupported Type"},
+		{"missing-type", "AppNameID: child\n", "unsupported Type"},
+		{"wrong-identity", "Inherits: base\n", "resolves to AppNameID"},
+		{"unknown-field", "AppNameID: child\nBogus: true\n", "field Bogus"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			calls := fakeRuntimes(t, map[string]string{"zcr": fakeScript, "zvr": fakeScript})
+			writeConfigs(t, map[string]string{
+				"base": "SchemaVersion: 4\nType: ZincVirtualization\nAppNameID: base\n", "child": testCase.body,
+			})
+			for _, action := range []func(string) error{Launch, Stop} {
+				if err := action("child"); err == nil || !strings.Contains(err.Error(), testCase.want) {
+					t.Fatalf("want %q, got %v", testCase.want, err)
+				}
+			}
+			if _, err := os.Stat(calls); !os.IsNotExist(err) {
+				t.Fatalf("runtime executed for an invalid config: %v", err)
+			}
+		})
 	}
 }
 
-func TestRunning(t *testing.T) {
-	fakeZcr(t)
-	running, err := Running()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !running["firefox"] || !running["syncthing"] || len(running) != 2 {
-		t.Fatalf("Running = %v, want {firefox, syncthing}", running)
-	}
-}
-
-// A name beginning with '-' is rejected at the exec boundary (before zcr is even
-// resolved), so a filename- or CLI-derived token cannot be parsed by zcr as a flag.
-func TestLaunch_RejectsFlagName(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // no zcr: prove the guard fires first, not "not found"
-	for _, bad := range []string{"--net=host", "-x", ""} {
-		if err := Launch(bad); err == nil || strings.Contains(err.Error(), "not found") {
-			t.Errorf("Launch(%q): want a name-guard error, got %v", bad, err)
-		}
-		if err := Stop(bad); err == nil || strings.Contains(err.Error(), "not found") {
-			t.Errorf("Stop(%q): want a name-guard error, got %v", bad, err)
+func TestActionsRejectUnsafeNamesBeforeLookup(t *testing.T) {
+	fakeRuntimes(t, nil)
+	for _, name := range []string{"--net=host", "-x", "", "notes.yaml", "app.yaml"} {
+		for _, action := range []func(string) error{Launch, Stop} {
+			if err := action(name); err == nil || strings.Contains(err.Error(), "not found") {
+				t.Errorf("action(%q): want name guard error, got %v", name, err)
+			}
 		}
 	}
 }
 
-// A bare store key ending in ".yaml" is rejected: zcr reads such an argument as a filesystem
-// path relative to the caller's cwd, so launching the app "notes.yaml" (the file
-// notes.yaml.yaml) would run whatever ./notes.yaml happens to be instead. An explicit path
-// carries a separator and still reaches zcr's path form.
-func TestLaunch_RejectsYAMLSuffixedStoreKey(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // no zcr: prove the guard fires first, not "not found"
-	for _, bad := range []string{"notes.yaml", "app.yaml"} {
-		if err := Launch(bad); err == nil || strings.Contains(err.Error(), "not found") {
-			t.Errorf("Launch(%q): want a name-guard error, got %v", bad, err)
-		}
-	}
-	// A path form is still allowed through to zcr (which fails here only because zcr is absent).
-	if err := Launch("./notes.yaml"); err == nil || !strings.Contains(err.Error(), "not found on $PATH") {
-		t.Errorf("Launch(\"./notes.yaml\") should reach zcr, got %v", err)
-	}
-}
-
-// With no zcr on $PATH, actions fail with an actionable message.
-func TestLaunch_ZcrNotFound(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // an empty dir: no zcr
-	err := Launch("firefox")
-	if err == nil || !strings.Contains(err.Error(), "not found on $PATH") {
-		t.Fatalf("want a not-found error, got %v", err)
+func TestActionsReportSelectedRuntimeErrors(t *testing.T) {
+	for _, appType := range []string{"ZincContainer", "ZincVirtualization"} {
+		t.Run(appType, func(t *testing.T) {
+			fakeRuntimes(t, map[string]string{"zcr": fakeScript, "zvr": fakeScript})
+			writeConfigs(t, map[string]string{"bad": "SchemaVersion: 4\nAppNameID: bad\nType: " + appType + "\n"})
+			if err := Launch("bad"); err == nil || !strings.Contains(err.Error(), "bad: no such app") {
+				t.Fatalf("want runtime error, got %v", err)
+			}
+		})
 	}
 }

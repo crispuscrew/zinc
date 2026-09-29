@@ -43,3 +43,40 @@ func TestDisplay_RequireRefusedOnAVMApp(t *testing.T) {
 		t.Fatalf("want a refusal on a VM app, got: %v", err)
 	}
 }
+
+func TestSharedDisplayDimensions(test *testing.T) {
+	for _, base := range []func() schema.AppConfig{baseCfg, baseVM} {
+		for _, size := range [][2]int{{1920, 0}, {0, 1080}, {-1, 1080}, {1920, -1}} {
+			cfg := base()
+			cfg.DisplayMeta.DisplayWidth, cfg.DisplayMeta.DisplayHeight = size[0], size[1]
+			requireError(test, cfg, "DisplayMeta.Display")
+		}
+		for _, size := range [][2]int{{0, 0}, {640, 480}, {1920, 1080}, {3840, 2160}} {
+			cfg := base()
+			cfg.DisplayMeta.DisplayWidth, cfg.DisplayMeta.DisplayHeight = size[0], size[1]
+			if err := Validate(cfg); err != nil {
+				test.Fatal(err)
+			}
+		}
+		cfg := base()
+		cfg.DisplayMeta = schema.DisplayMeta{DisableGpuAccess: true, Vulkan: true}
+		requireError(test, cfg, "Vulkan")
+	}
+}
+
+func TestGuestDisplayHardwareLimits(test *testing.T) {
+	for _, size := range [][2]int{{320, 200}, {1921, 1080}, {4096, 2160}} {
+		cfg := baseVM()
+		cfg.DisplayMeta.DisplayWidth, cfg.DisplayMeta.DisplayHeight = size[0], size[1]
+		requireError(test, cfg, "DisplayMeta.Display")
+		cfg = baseCfg()
+		cfg.DisplayMeta.DisplayWidth, cfg.DisplayMeta.DisplayHeight = size[0], size[1]
+		if err := Validate(cfg); err != nil {
+			test.Fatalf("guest hardware limits must not constrain a container display: %v", err)
+		}
+	}
+	cfg := baseVM()
+	cfg.StartConditions.LoaderBIOS = true
+	cfg.DisplayMeta = schema.DisplayMeta{DisplayWidth: 1920, DisplayHeight: 1080}
+	requireError(test, cfg, "fixed guest mode requires UEFI")
+}

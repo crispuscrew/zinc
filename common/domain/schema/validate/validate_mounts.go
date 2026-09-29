@@ -7,8 +7,8 @@ import (
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-// Validates the ':'-delimited podman mount specs - Volumes, Configs, Keys - plus
-// Capabilities. host:container:opts is ':'-split, so ':'/','/whitespace in a path
+// Validates the ':'-delimited podman mount specs - Volumes, Configs, Keys.
+// host:container:opts is ':'-split, so ':'/','/whitespace in a path
 // shifts podman's fields (e.g. claim "ro" but mount "rw"); every path is screened.
 
 // checkVolume: container path, host source (when HostMounted), size-limit sanity.
@@ -110,19 +110,6 @@ func checkKeys(keys []schema.Key, add addFunc) {
 			// the way around it: "Path: /run/user/1000/bus" is absolute, has no '..' and no field-shifting
 			// character, and mounts the unfiltered session bus into the container home while DBusMeta stays empty.
 			checkHostSource("Keys", index, keyEntry.Path, add)
-		}
-	}
-}
-
-// checkCapabilities: ALL is forbidden; each entry must match the capability charset.
-func checkCapabilities(capabilities []string, add addFunc) {
-	for index, capability := range capabilities {
-		bare := strings.TrimPrefix(strings.ToUpper(capability), "CAP_")
-		switch {
-		case bare == "ALL":
-			add("Capabilities[%d] %q: granting ALL capabilities is forbidden (add only the specific caps an app needs)", index, capability)
-		case !capRE.MatchString(capability):
-			add("Capabilities[%d] %q: only an (optional) CAP_ prefix then [A-Z_] allowed (e.g. NET_ADMIN or CAP_NET_ADMIN)", index, capability)
 		}
 	}
 }

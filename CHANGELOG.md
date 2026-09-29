@@ -7,6 +7,58 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-29
+
+### Upgrade notes
+
+- This is a breaking pre-1.0 minor release. Read the [release notes](docs/releases/0.11.0.md)
+  and [migration guide](docs/migration.md). Networked apps require provisioned namespaces/TAPs;
+  brokered PipeWire requires the Zinc WirePlumber policy. Existing VM disk pins and hardware
+  choices need external runtime options. Unsupported legacy settings fail with an error.
+
+### Changed
+
+- **Canonical schema v4 consumers and examples.** Presentation moves under `LauncherMeta`;
+  entrypoint/attached environment and read-only settings live under `StartConditions`, and
+  autorestart under `StopConditions`. Audio uses directional device mappings. Network policy
+  uses ordered From/To peers, endpoint filters and explicit DNS transports.
+- VM RAM/CPU use `ResourcesMeta.MaxRamMiB` and `MaxCPUCores`. Host-local hardware, disk pins,
+  media and forwards live in external versioned VM-options JSON. Migration before strict
+  decoding preserves representable legacy intent and refuses conflicts or nonzero settings
+  without a lossless transformation; it does not silently discard pins or removed controls.
+- Networked apps now require owner-provisioned packet-preserving namespaces/TAPs and matching
+  manifests; automatic rootless pasta/topology creation is no longer the launch path. Domain
+  rules are frozen IP-level snapshots, not hostname enforcement. App policy must permit its
+  local DNS proxy; resolver declarations install no firewall exceptions.
+- Brokered PipeWire requires explicit deployment of the Zinc WirePlumber policy. Structured
+  playback, microphone and monitor selections are additive; no raw host audio fallback is used.
+- Shared VM fields are limited to host-enforceable behavior. There is no guest agent; guest
+  command/environment and filesystem/bus bridges remain unavailable, and graphical Background
+  window-close persistence remains unresolved and rejected. Raw backend flags warn that they
+  can override typed guarantees.
+- Architecture documentation is split into focused pages with a concise index and a map of
+  former section references. Canonical examples have strict YAML/value checks, expected errors
+  for the deliberately broken fixture, and DNS/VM JSON checks.
+- Build/check Go is pinned to 1.26.6-alpine by digest; the host CI e2e harness uses Go 1.26.6.
+  Common and its consumers declare Go 1.26 and vendor the pinned dependencies. Nix consumers
+  select `buildGo126Module` from the existing lock, which provides Go 1.26.5.
+
+### Added
+
+- `zcr`/`zvr dns-proxy --config JSON --listen ... --control-socket PATH`, with authenticated
+  live DNS readiness binding in network manifests. The proxy supports UDP, TCP, TLS, HTTPS,
+  and QUIC using pinned DNS/QUIC libraries. See [DNS integration](docs/dns.md).
+- The Nix `runtime-integration` output packages deployment files without activating services.
+
+### Fixed
+
+- Failed network interface preflight closes stale policy after namespace identity validation.
+- Provisioned rootless containers reuse an inode-verified current Podman user namespace;
+  production counter queries join the app's verified network namespace by PID.
+- Inheritance preserves scalar spelling, including numeric-looking environment and argv values.
+- Launcher instance addresses, creator flags-only builds, file-launched container supervision,
+  and the VM preparation deadline work with the new consumer contracts.
+
 ## [0.10.1] - 2026-08-23
 
 ### Added

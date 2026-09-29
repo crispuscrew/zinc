@@ -1,197 +1,73 @@
 package validate
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-// Device entries become --device arguments, so they get the same screening as every other
-// value that reaches a command line, plus a rule that they actually name a sound device.
-func TestAudio_DeviceNodesAreScreened(t *testing.T) {
-	for _, testCase := range []struct{ device, want string }{
-		{"/etc/shadow", "ALSA device node"},
-		{"/dev/dri/renderD128", "ALSA device node"},
-		{"/dev/snd/../dri/renderD128", "'..'"},
-		{"/dev/snd/controlC0,file=x", "':', ','"},
-		{"/dev/snd/control C0", "':', ','"},
-		{"", "must not be empty"},
-	} {
-		cfg := baseCfg()
-		cfg.AudioMeta.Microphone = schema.AudioDevice{Devices: []string{testCase.device}}
-		err := Validate(cfg)
-		if err == nil || !strings.Contains(err.Error(), testCase.want) {
-			t.Errorf("device %q: want an error mentioning %q, got: %v", testCase.device, testCase.want, err)
+func TestStructuredAudioGrantsAreAdditive(test *testing.T) {
+	for _, base := range []func() schema.AppConfig{baseCfg, baseVM} {
+		cfg := base()
+		cfg.AudioMeta.Playback = schema.AudioDevice{PipeWireDefault: true, PipeWireDevices: []string{"alsa_output.usb-card.stereo"}, ALSADevices: []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0p"}}
+		cfg.AudioMeta.Microphone = schema.AudioDevice{PipeWireDefault: true, PipeWireDevices: []string{"alsa_input.card"}, ALSADevices: []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0c"}}
+		cfg.AudioMeta.Monitor = schema.AudioDevice{PipeWireDefault: true, PipeWireDevices: []string{"alsa_output.usb-card.stereo"}}
+		if err := Validate(cfg); err != nil {
+			test.Fatal(err)
 		}
 	}
 }
 
-func TestAudio_RealDeviceNodesPass(t *testing.T) {
+func TestAudioExactNodesAndDirection(test *testing.T) {
+	for _, node := range []string{"", "/etc/shadow", "/dev/dri/renderD128", "/dev/snd", "/dev/snd/", "/dev/snd/*", "/dev/snd/../dri/renderD128", "/dev/snd//controlC0", "/dev/snd/controlC0,file=x", "/dev/snd/control C0", "/dev/snd/controlC0:/device", "/dev/snd/seq", "/dev/snd/timer", "/dev/snd/hwC0D0", "/dev/snd/not-a-node"} {
+		cfg := baseCfg()
+		cfg.AudioMeta.Microphone.ALSADevices = []string{node}
+		requireError(test, cfg, "ALSADevices")
+	}
 	cfg := baseCfg()
-	cfg.AudioMeta.Playback = schema.AudioDevice{Default: true}
-	cfg.AudioMeta.Microphone = schema.AudioDevice{
-		Devices: []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0c"},
-	}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("a real device pair was rejected: %v", err)
-	}
-}
-
-// A guest cannot be handed a host character device, so pairing a device list with a VM app is
-// refused rather than silently dropped on the way to qemu.
-func TestAudio_DeviceListRefusedOnAVMApp(t *testing.T) {
-	cfg := baseVM()
-	cfg.AudioMeta.Microphone = schema.AudioDevice{Devices: []string{"/dev/snd/controlC0"}}
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "AudioMeta device lists") {
-		t.Fatalf("want a refusal for a device list on a VM app, got: %v", err)
-	}
-	// `default` is the form a guest can actually be given, and stays allowed.
-	cfg.AudioMeta.Microphone = schema.AudioDevice{Default: true}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("default audio should be allowed on a VM app: %v", err)
+	cfg.AudioMeta.Playback.ALSADevices = []string{"/dev/snd/pcmC0D0c"}
+	requireError(test, cfg, "CAPTURE device")
+	cfg.AudioMeta.Playback = schema.AudioDevice{}
+	cfg.AudioMeta.Microphone.ALSADevices = []string{"/dev/snd/pcmC0D0p"}
+	requireError(test, cfg, "PLAYBACK device")
+	for _, selector := range []string{"", " ", "sink\nname", "sink\x00name", "sink.*", "~alsa_output.*", "sink?", "sink[12]", "{node}", " sink"} {
+		cfg = baseCfg()
+		cfg.AudioMeta.Playback.PipeWireDevices = []string{selector}
+		requireError(test, cfg, "exact node.name")
 	}
 }
 
-// The container runtime cannot yet keep "output only": mounting the PipeWire socket grants
-// capture whatever the config says. The warning is the whole reason the two directions are
-// separate fields, so it is worth pinning.
-func TestAudio_PlaybackOnlyNoLongerWarnsAboutCapture(t *testing.T) {
+func TestMonitorALSARequiresResolvedLoopback(test *testing.T) {
+	for _, base := range []func() schema.AppConfig{baseCfg, baseVM} {
+		for _, node := range []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0c"} {
+			cfg := base()
+			cfg.AudioMeta.Monitor.ALSADevices = []string{node}
+			requireError(test, cfg, "loopback")
+		}
+	}
+}
+
+func TestPrivatePlaybackDoesNotImplyHostMonitorExposure(test *testing.T) {
+	for _, playback := range []schema.AudioDevice{{PipeWireDefault: true}, {PipeWireDevices: []string{"alsa_output.card"}}} {
+		cfg := baseCfg()
+		cfg.AudioMeta.Playback = playback
+		cfg.AudioMeta.Microphone.PipeWireDefault = true
+		if warnings := Warnings(cfg); len(warnings) != 0 {
+			test.Fatalf("private playback endpoints isolate the host mix: %v", warnings)
+		}
+		cfg.AudioMeta.Monitor = playback
+		if warnings := Warnings(cfg); len(warnings) != 0 {
+			test.Fatalf("explicit monitor grant: %v", warnings)
+		}
+	}
 	cfg := baseCfg()
-	cfg.AudioMeta.Playback = schema.AudioDevice{Default: true}
-	// Microphone: none is enforced now: the runner hands the app a socket of its own under a
-	// PipeWire security context and then removes its permission on every capture node. Warning
-	// that it is not enforced would send an author to a device list they do not need.
-	joined := strings.Join(Warnings(cfg), "\n")
-	if strings.Contains(joined, "Microphone: none is not yet enforced") {
-		t.Errorf("capture denial is enforced now, so it must not be warned about: %v", Warnings(cfg))
+	cfg.AudioMeta.Playback.ALSADevices = []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0p"}
+	if warnings := Warnings(cfg); len(warnings) != 0 {
+		test.Fatalf("exact ALSA playback nodes: %v", warnings)
 	}
-
-	// Naming exact nodes carries no caveat at all: the kernel enforces it.
-	cfg.AudioMeta.Playback = schema.AudioDevice{Devices: []string{"/dev/snd/controlC1", "/dev/snd/pcmC1D3p"}}
-	if warns := Warnings(cfg); len(warns) != 0 {
-		t.Errorf("a device list should carry no audio caveat, got: %v", warns)
-	}
-
-	// Asking for both is not a broken promise, so it is not warned about.
-	cfg.AudioMeta.Playback = schema.AudioDevice{Default: true}
-	cfg.AudioMeta.Microphone = schema.AudioDevice{Default: true}
-	if joined := strings.Join(Warnings(cfg), "\n"); strings.Contains(joined, "microphone capture") {
-		t.Errorf("granting both directions should not warn, got: %v", Warnings(cfg))
-	}
-}
-
-// A sink's .monitor source is a readable tap on everything played through it, so the socket
-// grants "record what other apps are playing" as well as "record the room". Asking for a
-// microphone is not asking for that, so granting one must not silence the warning.
-func TestAudio_MonitorAccessIsWarnedEvenWithAMicrophoneGrant(t *testing.T) {
-	cfg := baseCfg()
-	cfg.AudioMeta.Playback = schema.AudioDevice{Default: true}
-	cfg.AudioMeta.Microphone = schema.AudioDevice{Default: true}
-	joined := strings.Join(Warnings(cfg), "\n")
-	if !strings.Contains(joined, ".monitor") {
-		t.Errorf("granting a microphone should not hide the monitor-source grant, got: %v", Warnings(cfg))
-	}
-	if strings.Contains(joined, "Microphone: none is not yet enforced") {
-		t.Errorf("an app that asked to listen should not be told its Microphone: none is unenforced: %v", Warnings(cfg))
-	}
-
-	// Declaring Monitor is an honest description of what the socket grants, so it should not
-	// then be warned about. The field earns its place precisely by being sayable.
-	cfg.AudioMeta.Monitor = schema.AudioDevice{Default: true}
-	if joined := strings.Join(Warnings(cfg), "\n"); strings.Contains(joined, ".monitor") {
-		t.Errorf("an app that declared Monitor should not be warned about it: %v", Warnings(cfg))
-	}
-	cfg.AudioMeta.Monitor = schema.AudioDevice{}
-
-	// A device list is the enforceable form and carries neither caveat.
-	cfg.AudioMeta.Playback = schema.AudioDevice{Devices: []string{"/dev/snd/controlC1", "/dev/snd/pcmC1D3p"}}
-	cfg.AudioMeta.Microphone = schema.AudioDevice{Devices: []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0c"}}
-	if joined := strings.Join(Warnings(cfg), "\n"); strings.Contains(joined, ".monitor") {
-		t.Errorf("ALSA nodes carry no other app's stream, so they should not warn: %v", Warnings(cfg))
-	}
-}
-
-// A monitor source lives in PipeWire's graph, not on a card, so no /dev/snd node can grant or
-// deny one. Accepting a list would let a config look like it had narrowed this to one device
-// while doing nothing at all.
-func TestAudio_MonitorRejectsADeviceList(t *testing.T) {
-	cfg := baseCfg()
-	cfg.AudioMeta.Monitor = schema.AudioDevice{Devices: []string{"/dev/snd/controlC0"}}
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "means nothing here") {
-		t.Fatalf("want a refusal for a Monitor device list, got: %v", err)
-	}
-}
-
-// A guest sees an emulated sound card, not the host's PipeWire graph, so there is nothing for
-// it to monitor and the field is refused rather than silently ignored on the way to qemu.
-func TestAudio_MonitorRefusedOnAVMApp(t *testing.T) {
-	cfg := baseVM()
-	cfg.AudioMeta.Monitor = schema.AudioDevice{Default: true}
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "AudioMeta.Monitor") {
-		t.Fatalf("want a refusal for Monitor on a VM app, got: %v", err)
-	}
-}
-
-// Monitor alone still puts the socket in the container: it is a session-graph capability, so
-// it is the socket that delivers it, with or without a playback grant.
-func TestAudio_MonitorAloneIsASessionGrant(t *testing.T) {
-	cfg := baseCfg()
-	cfg.AudioMeta.Monitor = schema.AudioDevice{Default: true}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("Monitor on its own should validate: %v", err)
-	}
-	// Monitor on its own reaches the graph, but with no Playback grant there is no sink this
-	// app plays to and therefore no monitor caveat to state.
-	if warns := Warnings(cfg); len(warns) != 0 {
-		t.Errorf("Monitor alone should carry no caveat, got: %v", warns)
-	}
-}
-
-// The one caveat that survives: a sink's .monitor is a set of ports on the sink an app plays
-// to, so denying it would mean denying playback. That is structural, not unfinished.
-func TestAudio_MonitorNoneWithPlaybackIsWarned(t *testing.T) {
-	cfg := baseCfg()
-	cfg.AudioMeta.Playback = schema.AudioDevice{Default: true}
-	joined := strings.Join(Warnings(cfg), "\n")
-	if !strings.Contains(joined, "Monitor: none cannot be enforced") {
-		t.Errorf("playback with no monitor grant should state the monitor caveat, got: %v", Warnings(cfg))
-	}
-	// Granting it is not a broken promise, so it is not warned about.
-	cfg.AudioMeta.Monitor = schema.AudioDevice{Default: true}
-	if warns := Warnings(cfg); len(warns) != 0 {
-		t.Errorf("an app that declares Monitor: default should not be warned: %v", warns)
-	}
-}
-
-// The field an entry sits in has to mean something. Every named node is passed with --device
-// and the runner unions the two lists, so a capture PCM under Playback would grant a
-// microphone to a config that reads "output only", with no warning because nothing asked for
-// `default`. The list form is supposed to be the ENFORCED one; a label the kernel never sees
-// is not enforcement.
-func TestAudio_DeviceDirectionMustMatchTheField(t *testing.T) {
-	cfg := baseCfg()
-	cfg.AudioMeta.Playback = schema.AudioDevice{Devices: []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0c"}}
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "CAPTURE device") {
-		t.Fatalf("a capture PCM under Playback should be refused, got: %v", err)
-	}
-
-	cfg = baseCfg()
-	cfg.AudioMeta.Microphone = schema.AudioDevice{Devices: []string{"/dev/snd/pcmC1D3p"}}
-	err = Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "PLAYBACK device") {
-		t.Fatalf("a playback PCM under Microphone should be refused, got: %v", err)
-	}
-
-	// The right way round, with the shared control node in both, must pass.
-	cfg = baseCfg()
-	cfg.AudioMeta.Playback = schema.AudioDevice{Devices: []string{"/dev/snd/controlC1", "/dev/snd/pcmC1D3p"}}
-	cfg.AudioMeta.Microphone = schema.AudioDevice{Devices: []string{"/dev/snd/controlC0", "/dev/snd/pcmC0D0c"}}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("correctly directed nodes were rejected: %v", err)
+	cfg.AudioMeta.Playback.PipeWireDevices = []string{"alsa_output.nondefault"}
+	cfg.AudioMeta.Monitor.PipeWireDefault = true
+	if warnings := Warnings(cfg); len(warnings) != 0 {
+		test.Fatalf("playback and monitor selections are independently brokered: %v", warnings)
 	}
 }

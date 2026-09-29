@@ -1,18 +1,10 @@
-// Package tui is zc's keyboard-first terminal UI (docs section 9.1, M2). Model + Update are the
-// functional core, with all I/O in tea.Cmd closures (commands.go), so the decision logic is testable
-// without a terminal.
-//
-// Scope: create / edit / delete / rename / launch / stop / logs. The form edits the scalar fields;
-// list-valued fields stay YAML-editable through the advanced $EDITOR action.
+// Package tui is the creator's keyboard-first app manager.
 package tui
 
 import (
-	"strings"
-
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/crispuscrew/zinc/common/domain/schema"
 	"github.com/crispuscrew/zinc/creator/internal/backend"
 	"github.com/crispuscrew/zinc/creator/internal/keys"
@@ -25,346 +17,105 @@ const (
 	modeForm
 	modeLogs
 	modeConfirmDelete
-	modeRename // prompt for a new name (delete + recreate)
-	modeKeys   // keybind-scheme picker
+	modeRename
+	modeKeys
 )
 
-// appRow carries an app twice on purpose. cfg is the RESOLVED config and drives what the list shows;
-// raw is the file as written and is what the edit form opens, since a form loading the resolved config
-// would write the base's values back into the child.
-//
-// name is the STORE KEY, and every ACTION uses it. The config's own AppNameID is only what the file
-// claims: a row that failed to resolve is still listed so it can be repaired, so a dropped
-// "notes.yaml" claiming `AppNameID: firefox` would otherwise send delete, run and stop at the real
-// firefox.
+// Actions use the store key. Presentation uses resolved values; editing uses the
+// authored document, so inherited fields never become explicit zero overrides.
 type appRow struct {
-	name    string
-	cfg     schema.AppConfig
-	raw     schema.AppConfig
-	running bool
-	loadErr error
+	name     string
+	cfg, raw schema.AppConfig
+	running  bool
+	loadErr  error
 }
 
-// Model is the whole TUI state.
 type Model struct {
-	svc  backend.Service // authors via the store, runs via the zcr shell-outs
-	keys keys.Active     // active keybind scheme (mdl.keys.Scheme drives key resolution)
-
-	mode   mode
-	apps   []appRow
-	cursor int
-
-	form *formModel
-
-	logs      viewport.Model
-	logsName  string
-	logsReady bool
-
-	confirmName string
-
-	rename     textinput.Model // new-name editor (modeRename)
-	renameFrom string          // app being renamed
-
-	keysList   []string // scheme names shown in the picker (modeKeys)
-	keysCursor int
-
+	svc           backend.Service
+	keys          keys.Active
+	mode          mode
+	apps          []appRow
+	cursor        int
+	form          *formModel
+	logs          viewport.Model
+	logsName      string
+	logsReady     bool
+	confirmName   string
+	rename        textinput.Model
+	renameFrom    string
+	keysList      []string
+	keysCursor    int
 	width, height int
 	status        string
 	err           error
 	quitting      bool
 }
 
-// New builds the initial model. svc is the creator backend and active is the resolved
-// keybind scheme - both supplied by the caller (the composition root) so this package
-// stays a thin adapter. A zero keys.Active falls back to the default scheme.
-func New(svc backend.Service, active keys.Active) Model {
-	return Model{svc: svc, keys: active, mode: modeList, logs: viewport.New(80, 20)}
+func New(service backend.Service, active keys.Active) Model {
+	return Model{svc: service, keys: active, mode: modeList, logs: viewport.New(80, 20)}
 }
-
 func (mdl Model) Init() tea.Cmd { return loadApps(mdl.svc) }
 
-func (mdl Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+func (mdl Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	switch message := message.(type) {
 	case tea.WindowSizeMsg:
-		mdl.width, mdl.height = msg.Width, msg.Height
-		mdl.logs.Width = msg.Width
-		mdl.logs.Height = max(msg.Height-4, 3)
+		mdl.width, mdl.height = message.Width, message.Height
+		mdl.logs.Width, mdl.logs.Height = message.Width, max(message.Height-4, 3)
 		mdl.logsReady = true
-		return mdl, nil
-
-	case appsMsg:
-		mdl.apps = msg.rows
-		if mdl.cursor >= len(mdl.apps) {
-			mdl.cursor = max(len(mdl.apps)-1, 0)
+		if mdl.form != nil {
+			mdl.form.height = message.Height
 		}
-		return mdl, nil
-
+	case appsMsg:
+		mdl.apps = message.rows
+		mdl.cursor = min(mdl.cursor, max(len(mdl.apps)-1, 0))
 	case statusMsg:
-		mdl.status, mdl.err = msg.text, nil
-		return mdl, loadApps(mdl.svc) // refresh running indicators
-
+		mdl.status, mdl.err = message.text, nil
+		return mdl, loadApps(mdl.svc)
 	case errMsg:
-		mdl.err = msg.err
-		return mdl, nil
-
+		mdl.err = message.err
 	case logsMsg:
-		mdl.logsName = msg.name
-		mdl.logs.SetContent(msg.body)
+		mdl.logsName = message.name
+		mdl.logs.SetContent(message.body)
 		mdl.logs.GotoTop()
 		mdl.mode = modeLogs
-		return mdl, nil
-
 	case editReadyMsg:
-		return mdl, openEditor(mdl.svc, msg.path)
-
+		return mdl, openEditor(mdl.svc, message.path)
 	case editedMsg:
-		if mdl.form == nil {
-			return mdl, nil
+		if mdl.form != nil {
+			if message.err != nil {
+				mdl.form.err = message.err
+			} else {
+				mdl.form.reload(message.cfg)
+			}
 		}
-		if msg.err != nil {
-			mdl.form.err = msg.err // bad edit: stay in the form, show why
-			return mdl, nil
-		}
-		mdl.form.reload(msg.cfg)
-		return mdl, nil
-
 	case resolvedMsg:
 		if mdl.form != nil {
-			if msg.err != nil {
-				mdl.form.err = msg.err
-			} else {
-				mdl.form.image.SetValue(msg.ref)
-				mdl.form.err = nil
+			mdl.form.err = message.err
+			if message.err == nil {
+				mdl.form.image.SetValue(message.ref)
 			}
 		}
-		return mdl, nil
-
 	case schemesMsg:
-		mdl.keysList = msg.names
-		mdl.keysCursor = indexOf(msg.names, mdl.keys.Name) // land on the active scheme
-		return mdl, nil
-
+		mdl.keysList, mdl.keysCursor = message.names, indexOf(message.names, mdl.keys.Name)
 	case schemeSetMsg:
-		if msg.err != nil {
-			mdl.err = msg.err
+		if message.err != nil {
+			mdl.err = message.err
 			return mdl, nil
 		}
-		mdl.keys = msg.active
-		mdl.mode = modeList
-		mdl.status, mdl.err = "keybinds: "+msg.active.Name, nil
-		return mdl, nil
-
+		mdl.keys, mdl.mode = message.active, modeList
+		mdl.status, mdl.err = "keybinds: "+message.active.Name, nil
 	case schemeEditMsg:
-		return mdl, openSchemeEditor(msg.path)
-
+		return mdl, openSchemeEditor(message.path)
 	case tea.KeyMsg:
-		return mdl.handleKey(msg)
-	}
-
-	if mdl.mode == modeLogs {
-		var cmd tea.Cmd
-		mdl.logs, cmd = mdl.logs.Update(msg)
-		return mdl, cmd
-	}
-	return mdl, nil
-}
-
-func (mdl Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "ctrl+c" {
-		mdl.quitting = true
-		return mdl, tea.Quit
-	}
-
-	switch mdl.mode {
-	case modeForm:
-		cmd, res := mdl.form.update(msg)
-		switch res {
-		case formCancel:
-			mdl.mode, mdl.form = modeList, nil
-			return mdl, nil
-		case formSave:
-			cfg := mdl.form.toConfig()
-			if err := mdl.svc.Save(cfg); err != nil { // validates first
-				mdl.form.err = err
-				return mdl, nil
-			}
-			mdl.mode, mdl.form = modeList, nil
-			mdl.status, mdl.err = "saved "+cfg.AppNameID, nil
-			return mdl, loadApps(mdl.svc)
-		case formEdit:
-			return mdl, writeDraft(mdl.svc, mdl.form.toConfig())
-		case formResolve:
-			mdl.status = "resolving image..."
-			return mdl, resolveImage(mdl.svc, mdl.form.image.Value())
-		}
-		return mdl, cmd
-
-	case modeLogs:
-		if act, ok := mdl.keys.Scheme.Resolve(keys.CtxLogs, msg.String()); ok && act == keys.Back {
-			mdl.mode = modeList
-			return mdl, nil
-		}
-		var cmd tea.Cmd
-		mdl.logs, cmd = mdl.logs.Update(msg)
-		return mdl, cmd
-
-	case modeConfirmDelete:
-		switch act, _ := mdl.keys.Scheme.Resolve(keys.CtxConfirm, msg.String()); act {
-		case keys.Yes:
-			name := mdl.confirmName
-			mdl.mode = modeList
-			return mdl, remove(mdl.svc, name)
-		case keys.No:
-			mdl.mode = modeList
-		}
-		return mdl, nil
-
-	case modeRename:
-		return mdl.handleRenameKey(msg)
-
-	case modeKeys:
-		return mdl.handleKeysKey(msg)
-
+		return mdl.handleKey(message)
 	default:
-		return mdl.handleListKey(msg)
-	}
-}
-
-func (mdl Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	act, ok := mdl.keys.Scheme.Resolve(keys.CtxList, msg.String())
-	if !ok {
-		return mdl, nil
-	}
-	switch act {
-	case keys.Quit:
-		mdl.quitting = true
-		return mdl, tea.Quit
-	case keys.Up:
-		if mdl.cursor > 0 {
-			mdl.cursor--
-		}
-	case keys.Down:
-		if mdl.cursor < len(mdl.apps)-1 {
-			mdl.cursor++
-		}
-	case keys.Refresh:
-		return mdl, loadApps(mdl.svc)
-	case keys.New:
-		mdl.form = newForm(schema.AppConfig{}, true)
-		mdl.form.scheme = mdl.keys.Scheme
-		mdl.mode, mdl.status = modeForm, ""
-	case keys.Edit:
-		if row, ok := mdl.selected(); ok && row.loadErr == nil {
-			mdl.form = newForm(row.raw, false) // edit what was written, not what it resolves to
-			mdl.form.scheme = mdl.keys.Scheme
-			mdl.mode, mdl.status = modeForm, ""
-		}
-	case keys.Run:
-		if row, ok := mdl.selected(); ok {
-			mdl.status = "launching " + row.name + "..."
-			return mdl, launch(mdl.svc, row.name)
-		}
-	case keys.Shell:
-		if row, ok := mdl.selected(); ok {
-			if !row.cfg.StartConditions.Multiterminal {
-				mdl.status = row.name + ": a shell needs a multiterminal app"
-				return mdl, nil
-			}
-			mdl.status = "opening shell for " + row.name + "..."
-			return mdl, openShell(mdl.svc, row.name)
-		}
-	case keys.Build:
-		if row, ok := mdl.selected(); ok {
-			if len(row.cfg.ImageMeta.Install) == 0 {
-				mdl.status = row.name + ": no install lines - nothing to build"
-				return mdl, nil
-			}
-			mdl.status = "building image for " + row.name + "..."
-			return mdl, buildImage(mdl.svc, row.name)
-		}
-	case keys.Stop:
-		if row, ok := mdl.selected(); ok {
-			return mdl, stop(mdl.svc, row.name)
-		}
-	case keys.Logs:
-		if row, ok := mdl.selected(); ok {
-			return mdl, fetchLogs(mdl.svc, row.name)
-		}
-	case keys.Rename:
-		if row, ok := mdl.selected(); ok && row.loadErr == nil {
-			inp := newInput(row.name, "")
-			cmd := inp.Focus()
-			mdl.rename, mdl.renameFrom = inp, row.name
-			mdl.mode, mdl.status = modeRename, ""
-			return mdl, cmd
-		}
-	case keys.Delete:
-		if row, ok := mdl.selected(); ok {
-			mdl.confirmName = row.name
-			mdl.mode = modeConfirmDelete
-		}
-	case keys.Keys:
-		mdl.mode, mdl.keysCursor, mdl.status = modeKeys, 0, ""
-		return mdl, loadSchemes()
-	}
-	return mdl, nil
-}
-
-// handleKeysKey drives the scheme picker (modeKeys). Navigation reuses the active
-// scheme's list movement (so vim users get j/k here too); enter applies the
-// highlighted scheme, e edits/creates a custom copy, esc/q backs out.
-func (mdl Model) handleKeysKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	keyStr := msg.String()
-	switch keyStr {
-	case "esc", "q":
-		mdl.mode = modeList
-		return mdl, nil
-	case "enter":
-		if len(mdl.keysList) == 0 {
-			return mdl, nil
-		}
-		name := mdl.keysList[mdl.keysCursor]
-		mdl.status = "switching to " + name + "..."
-		return mdl, setScheme(name)
-	case "e":
-		if len(mdl.keysList) == 0 {
-			return mdl, nil
-		}
-		return mdl, editScheme(mdl.keysList[mdl.keysCursor])
-	}
-	switch act, _ := mdl.keys.Scheme.Resolve(keys.CtxList, keyStr); act {
-	case keys.Up:
-		if mdl.keysCursor > 0 {
-			mdl.keysCursor--
-		}
-	case keys.Down:
-		if mdl.keysCursor < len(mdl.keysList)-1 {
-			mdl.keysCursor++
+		if mdl.mode == modeLogs {
+			var command tea.Cmd
+			mdl.logs, command = mdl.logs.Update(message)
+			return mdl, command
 		}
 	}
 	return mdl, nil
-}
-
-// handleRenameKey drives the rename prompt: Enter commits through the service (load, rewrite the name,
-// save, delete the old), esc cancels. A blank or unchanged name is treated as a cancel, so Enter is
-// never a destructive no-op.
-func (mdl Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		mdl.mode = modeList
-		return mdl, nil
-	case "enter":
-		from, to := mdl.renameFrom, strings.TrimSpace(mdl.rename.Value())
-		mdl.mode = modeList
-		if to == "" || to == from {
-			return mdl, nil
-		}
-		mdl.status = "renaming " + from + " → " + to + "..."
-		return mdl, renameApp(mdl.svc, from, to)
-	}
-	var cmd tea.Cmd
-	mdl.rename, cmd = mdl.rename.Update(msg)
-	return mdl, cmd
 }
 
 func (mdl Model) selected() (appRow, bool) {
@@ -374,11 +125,10 @@ func (mdl Model) selected() (appRow, bool) {
 	return mdl.apps[mdl.cursor], true
 }
 
-// indexOf returns the position of want in names, or 0 if absent.
-func indexOf(names []string, want string) int {
-	for idx, name := range names {
-		if name == want {
-			return idx
+func indexOf(names []string, wanted string) int {
+	for index, name := range names {
+		if name == wanted {
+			return index
 		}
 	}
 	return 0

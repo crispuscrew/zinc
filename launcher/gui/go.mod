@@ -1,8 +1,6 @@
 module github.com/crispuscrew/zinc/launcher/gui
 
-go 1.24.2
-
-toolchain go1.24.13
+go 1.26.0
 
 // zlg (zinc-launcher-gui) is the graphical sibling of zlt: the same quick picker over the
 // defined apps, for a point-and-click / keyboard launch. Like the other tools it depends on
@@ -27,7 +25,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/rajveermalviya/go-wayland/wayland v0.0.0-20230130181619-0ad78d1310b2 // indirect
 	golang.org/x/image v0.18.0 // indirect
-	golang.org/x/sys v0.27.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

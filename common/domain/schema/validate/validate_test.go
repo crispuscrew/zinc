@@ -1,312 +1,86 @@
 package validate
 
 import (
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/crispuscrew/zinc/common/domain/schema"
 )
 
-// A newline in an Install step would break out of the derived-image RUN line and let a
-// crafted config inject its own Containerfile directives (a second FROM that swaps the
-// base to an unpinned image), defeating the digest pin. It must be rejected.
-func TestInstallControlCharRejected(t *testing.T) {
-	cfg := baseCfg()
-	cfg.ImageMeta.Install = []string{"true\nFROM docker.io/attacker/x:latest\nRUN :"}
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "control characters") {
-		t.Fatalf("Install with a newline: want a control-characters error, got: %v", err)
+func baseCfg() schema.AppConfig {
+	return schema.AppConfig{
+		SchemaVersion: schema.SchemaVersion, Type: schema.ZincContainer,
+		AppNameID: "app", ImageMeta: schema.ImageMeta{Image: "localhost/app:local"},
 	}
 }
 
-// A clean multi-step install (spaces allowed, one step per entry) passes.
-func TestInstallCleanOK(t *testing.T) {
+func requireError(test *testing.T, cfg schema.AppConfig, field string) {
+	test.Helper()
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), field) {
+		test.Fatalf("want error containing %q, got %v", field, err)
+	}
+}
+
+func TestSharedValidation(test *testing.T) {
+	for _, testCase := range []struct {
+		field  string
+		change func(*schema.AppConfig)
+	}{
+		{"SchemaVersion", func(cfg *schema.AppConfig) { cfg.SchemaVersion = 0 }},
+		{"Type", func(cfg *schema.AppConfig) { cfg.Type = "ZincJail" }},
+		{"AppNameID", func(cfg *schema.AppConfig) { cfg.AppNameID = "../../escape" }},
+		{"Inherits", func(cfg *schema.AppConfig) { cfg.Inherits = "../base" }},
+		{"Inherits", func(cfg *schema.AppConfig) { cfg.Inherits = cfg.AppNameID }},
+		{"DependsOn", func(cfg *schema.AppConfig) { cfg.StartConditions.DependsOn = []string{"../other"} }},
+		{"DependsOn", func(cfg *schema.AppConfig) { cfg.StartConditions.DependsOn = []string{cfg.AppNameID} }},
+		{"control characters", func(cfg *schema.AppConfig) { cfg.ImageMeta.Install = []string{"true\nFROM attacker"} }},
+		{"finite", func(cfg *schema.AppConfig) { cfg.ResourcesMeta.MaxCPUCores = math.Inf(1) }},
+		{"finite", func(cfg *schema.AppConfig) { cfg.ResourcesMeta.MaxCPUCores = math.NaN() }},
+		{"MaxCPUCores", func(cfg *schema.AppConfig) { cfg.ResourcesMeta.MaxCPUCores = -1 }},
+		{"MaxRamMiB", func(cfg *schema.AppConfig) { cfg.ResourcesMeta.MaxRamMiB = -1 }},
+		{"PIDsLimit", func(cfg *schema.AppConfig) { cfg.ResourcesMeta.PIDsLimit = -1 }},
+		{"NonRootUserName", func(cfg *schema.AppConfig) { cfg.InternalUserMeta.UseNonRootUser = true }},
+		{"no effect", func(cfg *schema.AppConfig) { cfg.InternalUserMeta.NonRootUserName = "app" }},
+		{"NonRootUserName", func(cfg *schema.AppConfig) { cfg.InternalUserMeta.NonRootUserName = "bad name" }},
+	} {
+		test.Run(testCase.field, func(test *testing.T) {
+			cfg := baseCfg()
+			testCase.change(&cfg)
+			requireError(test, cfg, testCase.field)
+		})
+	}
 	cfg := baseCfg()
 	cfg.ImageMeta.Install = []string{"apk add --no-cache firefox", "adduser -D app"}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("clean multi-step Install: want nil, got: %v", err)
-	}
-}
-
-// A DependsOn name is joined into a store path, so a "../.." value could read an app
-// definition from outside the apps directory. It must be charset-checked like AppNameID.
-func TestDependsOnTraversalRejected(t *testing.T) {
-	cfg := baseCfg()
-	cfg.StartConditions.DependsOn = []string{"../../../../etc/evil"}
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "DependsOn") {
-		t.Fatalf("DependsOn with a traversal path: want a DependsOn error, got: %v", err)
-	}
-}
-
-func TestDependsOnValidOK(t *testing.T) {
-	cfg := baseCfg()
 	cfg.StartConditions.DependsOn = []string{"vpn", "db-1"}
+	cfg.InternalUserMeta = schema.InternalUserMeta{UseNonRootUser: true, NonRootUserName: "app", KeepUserID: true}
+	cfg.ResourcesMeta.MaxCPUCores = 0.5
 	if err := Validate(cfg); err != nil {
-		t.Fatalf("valid DependsOn names: want nil, got: %v", err)
+		test.Fatal(err)
 	}
 }
 
-// A filtered app (one with NetworkLists) runs in the pod netns that carries the nft
-// egress lock-down; granting NET_ADMIN (or the superset SYS_ADMIN) would let it flush
-// the ruleset and escape the filter. Both bare and CAP_-prefixed forms are rejected.
-func TestNetworkCapabilityOnFilteredAppRejected(t *testing.T) {
-	for _, capability := range []string{"NET_ADMIN", "CAP_SYS_ADMIN"} {
-		cfg := withList(schema.NetworkList{Ingress: true, Ports: []int{5432}})
-		cfg.Capabilities = []string{capability}
-		err := Validate(cfg)
-		if err == nil || !strings.Contains(err.Error(), "escape the network filter") {
-			t.Fatalf("%s on a filtered app: want an egress-escape error, got: %v", capability, err)
-		}
-	}
-}
-
-// An isolated app (no NetworkLists) runs with --network none, so NET_ADMIN reaches
-// nothing; it is not rejected.
-func TestNetworkCapabilityOnIsolatedAppOK(t *testing.T) {
-	cfg := baseCfg()
-	cfg.Capabilities = []string{"NET_ADMIN"}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("NET_ADMIN on an isolated app: want nil, got: %v", err)
-	}
-}
-
-// A benign capability on a filtered app is fine.
-func TestBenignCapabilityOnFilteredAppOK(t *testing.T) {
-	cfg := withList(schema.NetworkList{Ingress: true, Ports: []int{5432}})
-	cfg.Capabilities = []string{"NET_BIND_SERVICE"}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("benign cap on a filtered app: want nil, got: %v", err)
-	}
-}
-
-// Swap is granted on top of the memory limit, because podman only takes the total of the
-// two. On its own there is nothing to add it to, and the runtime would either drop it or
-// hand podman a figure that caps the app far below what it asked for.
-func TestResources_SwapNeedsAMemoryLimit(t *testing.T) {
-	cfg := baseCfg()
-	cfg.ResourcesMeta.MaxSwapMiB = 512
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "MaxSwapMiB") {
-		t.Fatalf("swap without a memory limit: want a MaxSwapMiB error, got: %v", err)
-	}
-
-	cfg.ResourcesMeta.MaxRamMiB = 2048
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("swap alongside a memory limit should pass, got: %v", err)
-	}
-}
-
-// The two halves of the user setting have to agree. Each on its own describes something the
-// launch will not do, which is exactly the failure these fields had for five releases.
-func TestInternalUser_BothHalvesOrNeither(t *testing.T) {
-	asking := baseCfg()
-	asking.InternalUserMeta.UseNonRootUser = true
-	err := Validate(asking)
-	if err == nil || !strings.Contains(err.Error(), "NonRootUserName") {
-		t.Fatalf("UseNonRootUser with no name: want a NonRootUserName error, got: %v", err)
-	}
-
-	named := baseCfg()
-	named.InternalUserMeta.NonRootUserName = "app"
-	err = Validate(named)
-	if err == nil || !strings.Contains(err.Error(), "no effect") {
-		t.Fatalf("a name without UseNonRootUser: want a no-effect error, got: %v", err)
-	}
-
-	both := baseCfg()
-	both.InternalUserMeta.UseNonRootUser = true
-	both.InternalUserMeta.NonRootUserName = "app"
-	if err := Validate(both); err != nil {
-		t.Fatalf("both halves set should pass, got: %v", err)
-	}
-
-	// KeepUserID answers a different question (host/container uid agreement) and stands
-	// alone.
-	keep := baseCfg()
-	keep.InternalUserMeta.KeepUserID = true
-	if err := Validate(keep); err != nil {
-		t.Fatalf("KeepUserID on its own should pass, got: %v", err)
-	}
-}
-
-// Nothing in Zinc proxies or filters notifications, so every field in this block is inert.
-// Accepting Silenced would tell an author their app is muted while it notifies freely; an
-// unimplemented mechanism is refused rather than mis-enforced.
-// A notification policy is enforced by a filter in the app's bus path, so it needs a bus. An
-// app with none cannot notify at all, and a policy over traffic that cannot happen would read
-// as a control while controlling nothing.
-func TestNotifications_NeedABus(t *testing.T) {
-	cfg := baseCfg()
-	cfg.NotificationMeta.Silenced = true
-	err := Validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "needs a session bus") {
-		t.Fatalf("a policy with no DBusMeta: want a bus error, got: %v", err)
-	}
-
-	// A bus that cannot reach the notification service is the same gap by another route.
-	cfg.InternalUserMeta.KeepUserID = true // a filtered bus is a uid agreement with the proxy
-	cfg.DBusMeta.Talk = []string{"org.freedesktop.portal.Desktop"}
-	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "not allowed to reach") {
-		t.Fatalf("a bus without the notification name should be refused, got: %v", err)
-	}
-
-	// With the grant in place the policy is enforceable, so it validates.
-	cfg.DBusMeta.Talk = []string{"org.freedesktop.Notifications"}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("a policy on an app that may notify should pass, got: %v", err)
-	}
-
-	// The zero value is what every existing app has, and must stay legal.
-	if err := Validate(baseCfg()); err != nil {
-		t.Fatalf("an untouched notification block should pass, got: %v", err)
-	}
-}
-
-// Disabled and Silenced answer the same call in opposite ways, so a config cannot ask for both.
-func TestNotifications_DisabledAndSilencedAreOpposites(t *testing.T) {
-	cfg := baseCfg()
-	cfg.InternalUserMeta.KeepUserID = true
-	cfg.DBusMeta.Talk = []string{"org.freedesktop.Notifications"}
-	cfg.NotificationMeta.Disabled = true
-	cfg.NotificationMeta.Silenced = true
-	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "opposites") {
-		t.Fatalf("want a contradiction error, got: %v", err)
-	}
-}
-
-// A prefix that is written but not switched on reads as if it were in force, which is the same
-// trap every other unenforced field in this schema is refused for.
-func TestNotifications_PrefixAndItsSwitchMustAgree(t *testing.T) {
-	cfg := baseCfg()
-	cfg.InternalUserMeta.KeepUserID = true
-	cfg.DBusMeta.Talk = []string{"org.freedesktop.Notifications"}
-
-	cfg.NotificationMeta.UseCustomPrefix = true
-	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "CustomPrefix: required") {
-		t.Fatalf("UseCustomPrefix with no prefix should be refused, got: %v", err)
-	}
-
-	cfg.NotificationMeta.UseCustomPrefix = false
-	cfg.NotificationMeta.CustomPrefix = "[work]"
-	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "set UseCustomPrefix") {
-		t.Fatalf("a prefix with the switch off should be refused, got: %v", err)
-	}
-
-	cfg.NotificationMeta.UseCustomPrefix = true
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("a prefix and its switch together should pass, got: %v", err)
-	}
-
-	// The prefix lands in a summary a notification server renders.
-	cfg.NotificationMeta.CustomPrefix = "[work]\nSystem"
-	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "single line") {
-		t.Fatalf("a prefix carrying a newline should be refused, got: %v", err)
-	}
-}
-
-// The readiness gate: a probe is exec form and every word must be a word, and a timeout
-// with no probe is the inert-field case - nothing waits, so the number would read as a
-// bound that is not in force.
-func TestReadyCheck_ProbeAndTimeoutAgree(t *testing.T) {
-	empty := baseCfg()
-	empty.StartConditions.ReadyCheck = []string{"test", ""}
-	err := Validate(empty)
-	if err == nil || !strings.Contains(err.Error(), "ReadyCheck[1]") {
-		t.Fatalf("an empty word in ReadyCheck: want a ReadyCheck error, got: %v", err)
-	}
-
-	orphan := baseCfg()
-	orphan.StartConditions.ReadyTimeoutSec = 30
-	err = Validate(orphan)
-	if err == nil || !strings.Contains(err.Error(), "no effect without ReadyCheck") {
-		t.Fatalf("a timeout with no probe: want a no-effect error, got: %v", err)
-	}
-
-	negative := baseCfg()
-	negative.StartConditions.ReadyCheck = []string{"true"}
-	negative.StartConditions.ReadyTimeoutSec = -1
-	err = Validate(negative)
-	if err == nil || !strings.Contains(err.Error(), "ReadyTimeoutSec") {
-		t.Fatalf("a negative timeout: want a ReadyTimeoutSec error, got: %v", err)
-	}
-
-	both := baseCfg()
-	both.StartConditions.ReadyCheck = []string{"sh", "-c", "ip link show wg0 | grep -q UP"}
-	both.StartConditions.ReadyTimeoutSec = 90
-	if err := Validate(both); err != nil {
-		t.Fatalf("a probe with a timeout should pass, got: %v", err)
-	}
-}
-
-// A mount source has to name the same directory for everyone who reads the config. Podman
-// resolves a relative source against its own working directory, and a source with no
-// separator becomes a named volume it creates, so neither is what the YAML appears to say.
-func TestVolumeHostSourceMustBeAbsolute(t *testing.T) {
-	for _, source := range []string{"Downloads", "./data", "~/.ssh", "../secrets"} {
-		cfg := baseCfg()
-		cfg.Volumes = []schema.Volume{{HostMounted: true, HostMount: source, InnerMount: "/data"}}
-		err := Validate(cfg)
-		if err == nil || !strings.Contains(err.Error(), "absolute path") {
-			t.Errorf("HostMount %q: want an absolute-path error, got: %v", source, err)
-		}
-	}
-}
-
-// Mounting the runtime directory hands the app the raw session bus and the raw compositor
-// socket while DBusMeta stays empty, so every Zinc report - zcr where, zcr bus, the Wayland
-// label - describes an app that has neither. The grant is invisible where a reviewer looks.
-func TestVolumeCannotMountTheBrokeredSockets(t *testing.T) {
-	for _, source := range []string{
-		"/run/user/1000",
-		"/run/user/1000/bus",
-		"/run/user/1000/wayland-0",
-		"/proc",
-		"/sys/fs/cgroup",
-	} {
-		cfg := baseCfg()
-		cfg.Volumes = []schema.Volume{{HostMounted: true, HostMount: source, InnerMount: "/x", Writable: true}}
-		err := Validate(cfg)
-		if err == nil || !strings.Contains(err.Error(), "brokers") {
-			t.Errorf("HostMount %q: want a refusal naming the brokered sockets, got: %v", source, err)
-		}
-	}
-	// An ordinary host path is still an ordinary explicit grant.
-	cfg := baseCfg()
-	cfg.Volumes = []schema.Volume{{HostMounted: true, HostMount: "/home/user/Downloads", InnerMount: "/data"}}
-	if err := Validate(cfg); err != nil {
-		t.Errorf("an ordinary absolute mount should be allowed, got: %v", err)
-	}
-}
-
-// The key's destination is built from the last element of Path, and Base("/..") is "/", so
-// a ".." tail mounts the source OVER the container home rather than into it.
-func TestKeyPathMustBeAbsoluteAndWithoutDotDot(t *testing.T) {
-	for _, path := range []string{"~/.ssh/id_ed25519", "keys/id_ed25519", "/home/u/.ssh/.."} {
-		cfg := baseCfg()
-		cfg.Keys = []schema.Key{{Type: schema.SSH, Path: path}}
-		if err := Validate(cfg); err == nil {
-			t.Errorf("Keys.Path %q was accepted", path)
-		}
-	}
-}
-
-// digestRE was anchored only at the tail, so a reference merely had to END in something
-// digest-shaped. The image is the one config value that reaches podman as a bare positional,
-// where pflag reads a leading '-' as a flag rather than as an image name.
-func TestImageCannotBeShapedLikeAFlag(t *testing.T) {
+func TestContainerImageSecurity(test *testing.T) {
 	const digest = "@sha256:1111111111111111111111111111111111111111111111111111111111111111"
-	for _, image := range []string{"-v/:/host" + digest, "--privileged" + digest} {
+	for _, image := range []string{"docker.io/library/alpine:3.20", "-v/:/host" + digest, "--privileged" + digest, "localhost/a\nFROM evil"} {
 		cfg := baseCfg()
 		cfg.ImageMeta.Image = image
-		err := Validate(cfg)
-		if err == nil || !strings.Contains(err.Error(), "digest-pinned") {
-			t.Errorf("Image %q was accepted, got: %v", image, err)
-		}
+		requireError(test, cfg, "ImageMeta.Image")
 	}
 	cfg := baseCfg()
-	cfg.ImageMeta.Image = "docker.io/library/alpine" + digest
+	cfg.ImageMeta.Image = "registry.example:5000/library/alpine" + digest
 	if err := Validate(cfg); err != nil {
-		t.Errorf("an ordinary pinned image should validate, got: %v", err)
+		test.Fatal(err)
+	}
+}
+
+func TestErrorsAreJoined(test *testing.T) {
+	cfg := baseCfg()
+	cfg.AppNameID = "../bad"
+	cfg.ResourcesMeta.MaxRamMiB = -1
+	cfg.RunnerFlags = []string{"bad\x00argument"}
+	for _, field := range []string{"AppNameID", "MaxRamMiB", "RunnerFlags"} {
+		requireError(test, cfg, field)
 	}
 }

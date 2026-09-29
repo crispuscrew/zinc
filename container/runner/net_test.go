@@ -8,9 +8,7 @@ import (
 	"github.com/crispuscrew/zinc/container/runner/domain/paths"
 )
 
-// A runtime name has to be read back as the address a person types, and the podman name is
-// lossy about it: app and instance are joined with a dot, and an app name may legally
-// contain one. Only the set of defined apps can settle which is which.
+// Defined apps disambiguate dots in runtime names from instance separators.
 func TestAddressOf(t *testing.T) {
 	defined := []string{"firefox", "media.server", "notes"}
 	cases := []struct {
@@ -49,9 +47,7 @@ func TestAddressOf(t *testing.T) {
 	}
 }
 
-// The netns is named from the runtime form and the address from the human form, and an
-// instanced app must get both right: reporting "firefox@work" beside "firefox-pod" would
-// point a reader at another instance's firewall.
+// The namespace must belong to the reported instance, not another app instance.
 func TestEntryFor(t *testing.T) {
 	instanced := paths.Address{App: "firefox", Instance: "work"}
 	entry := entryFor(instanced, instanced.Runtime(), true)
@@ -73,10 +69,7 @@ func TestEntryFor(t *testing.T) {
 	}
 }
 
-// The enumeration's whole job is to distinguish the two postures. Listing an isolated app as
-// though it had a locked netns, or an enforced one as though it had none, inverts the
-// security meaning of the table - so the words and the legend that defines them are asserted
-// together.
+// Assert both postures and their canonical legend.
 func TestPrintEntries_DistinguishesThePostures(t *testing.T) {
 	out := captureStdout(t, func() {
 		err := printEntries([]netEntry{
@@ -90,11 +83,11 @@ func TestPrintEntries_DistinguishesThePostures(t *testing.T) {
 	})
 	for _, want := range []string{
 		"firefox@work", "firefox.work-pod", // instanced, in the form a person types
-		"firefox-pod",     // un-instanced, beside it
-		"filtered",        //
-		"isolated",        //
-		"no NetworkLists", // the legend, without which the two words are guesses
-		"--network none",  //
+		"firefox-pod",    // un-instanced, beside it
+		"filtered",       //
+		"isolated",       //
+		"no Interfaces",  // no external NIC means an isolated app
+		"--network none", //
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("enumeration missing %q:\n%s", want, out)
@@ -121,8 +114,8 @@ func TestPrintReport_SaysWhatACounterMeans(t *testing.T) {
 				Posture: postureFiltered, Netns: "firefox.work-pod"},
 			Note: countersNote,
 			Counters: []nftrules.RuleCounter{
-				{Chain: "output", Verdict: "accept", Label: "list[0] ip tcp", Packets: 3, Bytes: 180},
-				{Chain: "output", Verdict: "drop", Label: "default policy", Packets: 9, Bytes: 652},
+				{Chain: "owner_output", Verdict: "return", Label: "firefox rule[0] ip tcp", Packets: 3, Bytes: 180},
+				{Chain: "owner_output", Verdict: "drop", Label: "firefox default", Packets: 9, Bytes: 652},
 			},
 		})
 		if err != nil {
@@ -130,7 +123,7 @@ func TestPrintReport_SaysWhatACounterMeans(t *testing.T) {
 		}
 	})
 	for _, want := range []string{"firefox@work", "firefox.work-pod", "since this launch",
-		"list[0] ip tcp", "3", "180", "default policy", "652"} {
+		"firefox rule[0] ip tcp", "3", "180", "firefox default", "652"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("readout missing %q:\n%s", want, out)
 		}
@@ -141,7 +134,7 @@ func TestPrintReport_SaysWhatACounterMeans(t *testing.T) {
 	isolated := captureStdout(t, func() {
 		_ = printReport(netReport{netEntry: netEntry{Address: "notes", App: "notes", Posture: postureIsolated}})
 	})
-	if !strings.Contains(isolated, "no NetworkLists") || strings.Contains(isolated, "PACKETS") {
+	if !strings.Contains(isolated, "no Interfaces") || strings.Contains(isolated, "PACKETS") {
 		t.Errorf("an isolated app should be explained, not tabulated:\n%s", isolated)
 	}
 }

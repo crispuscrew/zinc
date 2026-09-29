@@ -1,10 +1,11 @@
-# Zinc demo app (schema v3). See launcher/demo/README.md.
-SchemaVersion: 3
+# Zinc demo app (schema v4). See launcher/demo/README.md.
+SchemaVersion: 4
 Type: ZincContainer
 AppNameID: python
-Icon: python
-Description: Python 3 interactive REPL
-Group: Dev
+LauncherMeta:
+  Icon: python
+  Description: Python 3 interactive REPL
+  Group: Dev
 ImageMeta:
   Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
   Install:
