@@ -5,7 +5,8 @@
 Run Linux apps in rootless Podman containers or QEMU VMs, with shared YAML
 definitions, authoring tools, and terminal/Wayland launchers.
 
-[Quickstart](docs/quickstart.md) | [Examples](common/examples/README.md) |
+[Quickstart](docs/quickstart.md) | [Schema](common/domain/schema/schema.go) |
+[Examples](common/examples/README.md) |
 [Architecture](docs/architecture.md) | [Changelog](CHANGELOG.md)
 
 ## Tools
@@ -18,19 +19,50 @@ definitions, authoring tools, and terminal/Wayland launchers.
 | `zlt` | Terminal app picker |
 | `zlg` | Wayland app picker |
 
-## Get started
+## Write an app definition
 
-Build the creator and container runner using rootless Podman:
+**[Full schema: fields, types, and comments](common/domain/schema/schema.go)**
 
-```sh
-make -C creator build
-make -C container/runner build
-export PATH="$PWD/creator/bin:$PWD/container/runner/bin:$PATH"
-zc init
-zc tui
+YAML keys match the file's `yaml:"..."` tags. Save definitions under
+`$XDG_CONFIG_HOME/zinc/apps/` (default `~/.config/zinc/apps/`) and validate with
+`zc validate APP --resolved`.
+
+**Offline shell - [`zinc-hello.yaml`](common/examples/apps/zinc-hello.yaml):**
+
+```yaml
+SchemaVersion: 4
+Type: ZincContainer
+AppNameID: zinc-hello
+ImageMeta:
+  Image: docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+StartConditions:
+  Entrypoint: /bin/sh
+  Terminal: true
+DisplayMeta:
+  DisableGpuAccess: true
 ```
 
-Follow the [quickstart](docs/quickstart.md) for image, terminal, and runtime setup.
+**Inherit the shell, add an environment variable and limits - `dev-shell.yaml`:**
+
+```yaml
+SchemaVersion: 4
+AppNameID: dev-shell
+Inherits: zinc-hello
+StartConditions:
+  EntrypointEnv: {MODE: development}
+ResourcesMeta:
+  MaxCPUCores: 2
+  MaxRamMiB: 512
+```
+
+More samples: [attached sessions](common/examples/apps/attached-shell.yaml),
+[network rules](common/examples/apps/network-client.yaml), and
+[VM definitions](common/examples/apps/guest.yaml).
+
+## Get started
+
+The **[quickstart](docs/quickstart.md)** installs Zinc, configures PATH, and shows
+`zinc-hello.yaml`. Review the file, then answer `Run this example? [y/N]`.
 Networking requires [provisioning](docs/network-provisioning.md); PipeWire audio
 requires the [Zinc WirePlumber policy](integration/wireplumber/README.md).
 

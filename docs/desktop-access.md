@@ -29,13 +29,16 @@ See [VM hardware](vm-hardware.md) for dimension/Vulkan validation.
 
 ## Filtered D-Bus
 
-Empty `DBusMeta` grants nothing. `Talk` permits calls; `Own` permits claimed names.
-Trailing `.*` includes future subnames. `KeepUserID` is required for socket access.
+Empty `DBusMeta` grants nothing. `Talk` permits calls; `Own` permits exact claimed names.
+Only `Talk` accepts trailing `.*`, after at least three name components; this includes
+future subnames. `KeepUserID` is required for socket access.
 `xdg-dbus-proxy` runs outside the app pod/process in a separate helper; only it holds
 the raw bus. Apps receive filtered instance sockets; unresolved requested host bus fails.
 No VM guest bus bridge exists. Build with `make -C container/runner netfilter-image`,
 select via `ZINC_NETFILTER_IMAGE`; the helper also applies nft in provisioned namespaces,
 but creates no host topology.
+Keep `localhost/zinc/netfilter:local` available even with an override: network teardown
+currently uses that default helper tag.
 
 ## Attribution
 

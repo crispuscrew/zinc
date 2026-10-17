@@ -27,6 +27,9 @@ Skips unless the operator supplies all of:
 - `ZINC_E2E_SSH_PORT`: the explicitly provisioned loopback TCP-to-guest-22 mapping.
 - `ZINC_NETWORK_MANIFEST_DIR`: protected manifests for fresh, exclusive namespaces.
 
+Also requires host `xorriso`, `nsenter`, `nft`, `ip`, `setpriv`, `ssh`, `ssh-keygen`,
+QEMU tools and accessible KVM; missing prerequisites skip this scenario.
+The TCG override applies only to the offline smoke test.
 Fixtures must match the exact `primary` NIC and Host-to-Self TCP/22 policy.
 The [provisioner](../../docs/network-provisioning.md) owns TAPs, static addressing/neighbors,
 forwarding and publication. Tests create no namespaces or slirp substitute; never reuse a live guest's namespace.

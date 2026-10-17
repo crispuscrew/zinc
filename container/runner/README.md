@@ -18,11 +18,13 @@ zcr bus [--json]
 zcr net [app[@instance]] [--json]
 zcr recheck <app>
 zcr image search <term> | resolve <ref>
+zcr dns-proxy --config FILE --control-socket PATH --listen IP[:PORT]...
 ```
 
 App arguments also accept YAML paths. `run` prints a shell-quoted plan with quoted
 build/network stdin; `--exec` launches. Planned PipeWire mounts are placeholders:
 launch must prepare the restricted socket first.
+DNS worker setup and authenticated readiness: [DNS guide](../../docs/dns.md).
 
 ## Lifecycle and backend options
 
