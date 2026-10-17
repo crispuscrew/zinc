@@ -7,6 +7,24 @@ tracked in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-17
+
+### Added
+
+- `scr/zinc-net-install.sh`: verified Linux AMD64 installation of all five tools,
+  persistent shell PATH setup, and an optional offline shell example shown before consent.
+- Installer transport, destination, profile and consent regression checks in CI.
+
+### Changed
+
+- Shortened onboarding and reference docs; linked the authoritative schema and checked examples.
+- Packaged installer and referenced documentation with Nix runtime-integration data.
+
+### Fixed
+
+- Clarified inheritance mapping behavior, D-Bus wildcard limits, image resolution,
+  VM runtime overrides and end-to-end prerequisites.
+
 ## [0.11.0] - 2026-09-29
 
 ### Upgrade notes

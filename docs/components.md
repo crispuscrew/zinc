@@ -58,3 +58,5 @@ Adapters consume `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_RUNTIME_DIR`, `WAYLAND
 `ZINC_TERMINAL`/`TERMINAL`, `ZINC_THEME_BUNDLE`, `ZINC_NETFILTER_IMAGE`,
 `ZINC_NETWORK_MANIFEST_DIR`. ZDE/host owners supply session profiles, desktop hotkeys,
 theme bundles and compositor policy.
+`ZINC_NETFILTER_IMAGE` overrides preparation; keep the default helper tag for
+[network teardown](desktop-access.md#filtered-d-bus).

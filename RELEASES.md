@@ -1,6 +1,7 @@
 # Zinc - Release Plan
 
-**0.11.0** is the schema v4 release. [Changelog](CHANGELOG.md) records its details;
+**0.11.1** adds the guided installer and streamlined schema v4 documentation.
+[Changelog](CHANGELOG.md) records release details;
 [GitHub Releases](https://github.com/crispuscrew/zinc/releases) records publication and assets.
 
 | Version | Milestone |
@@ -20,6 +21,7 @@
 | 0.10.0 | Schema v3: audio, configs/volumes, notifications, env/rootfs/display controls, VM egress, signed tags/checksums |
 | 0.10.1 | Verified Linux AMD64 binaries, quickstart, Node.js 24 Actions |
 | 0.11.0 | Schema v4, provisioned networking, encrypted DNS, audio broker, external VM options, Go 1.26 |
+| 0.11.1 | Verified installer, guided offline example, concise documentation and packaged references |
 
 Schema-breaking pre-1.0 changes require a minor bump: 0.10.0 introduced v3;
 **0.11.0 is a breaking pre-1.0 minor release**, changing definitions and runtime prerequisites.
@@ -27,7 +29,8 @@ Read its [release notes](docs/releases/0.11.0.md) and [migration guide](docs/mig
 
 ## Cutting a release
 
-Merge feature PRs into `dev`, cut a fresh `release/0.11.0` from `dev`, then PR to `main`.
+For the next release, merge feature PRs into `dev`, cut a fresh `release/X.Y.Z`
+from `dev`, then PR to `main`.
 Protected-branch PRs require review and green CI; create a signed, annotated tag on the final reviewed commit:
 
 ```sh
@@ -38,7 +41,7 @@ Requires `git config user.signingkey` (`gpg.format=ssh` for SSH); no unsigned fa
 Pushing the tag triggers pinned builds, version verification and CI-generated `SHA256SUMS`;
 CI gates publication on `make repro` for every tool. Linux AMD64 releases stay draft until
 all assets are attached and verified. Local candidate checksums are not publication evidence.
-Keep `flake.nix`, the `.github/workflows/ci.yml` version assertion, this table and
-`docs/quickstart.md` synchronized; finalize `CHANGELOG.md` notes under the dated release heading.
+Keep `flake.nix`, the `.github/workflows/ci.yml` version assertion, the installer's
+default version, this table and `docs/quickstart.md` synchronized; finalize `CHANGELOG.md`.
 
 ZDE (`zde-niri` / `zde-hypr`) has a separate repository/release plan; this repo releases Zinc core/tools.

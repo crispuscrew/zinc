@@ -1,6 +1,9 @@
 # Canonical app schema
 
-Schema **4**: [field declarations](../common/domain/schema/schema.go).
+The authoritative writing reference is [schema.go](../common/domain/schema/schema.go):
+field names come from YAML tags; nested structs, enums and comments define the shape.
+The [README samples](../README.md#write-an-app-definition) show basic YAML and inheritance.
+This page explains behavior and backend limits rather than redefining fields.
 Files: `$XDG_CONFIG_HOME/zinc/apps/<AppNameID>.yaml`; XDG default: `~/.config`.
 `ZincContainer` and `ZincVirtualization` share fields, not universal backend support.
 Stores [migrate](migration.md) before strict decoding; new examples must pass
@@ -18,24 +21,15 @@ Stores [migrate](migration.md) before strict decoding; new examples must pass
 | `NetworkMeta`, `AudioMeta` | [Packet policy](network-policy.md), [DNS](dns.md), [directional audio](audio.md) |
 | `CreatorFlags`, `RunnerFlags` | Ordered raw argv; limits below |
 
-App IDs start alphanumeric, use lowercase `[a-z0-9._-]`, maximum 96 characters.
+App IDs start alphanumeric and use lowercase `[a-z0-9._-]`.
+VM runtime-options IDs additionally have a 96-character limit.
 Container resource zero means no explicit limit; VMs need positive RAM/whole CPUs.
 No canonical swap limit, capability list, readiness probe, tunnel or `VirtualizationMeta`.
 
 ## Minimal offline container
 
-```yaml
-SchemaVersion: 4
-Type: ZincContainer
-AppNameID: shell
-ImageMeta:
-  Image: docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
-StartConditions:
-  Entrypoint: /bin/sh
-  Terminal: true
-DisplayMeta:
-  DisableGpuAccess: true
-```
+See [zinc-hello.yaml](../common/examples/apps/zinc-hello.yaml) and the
+[README examples](../README.md#write-an-app-definition).
 
 More checked [examples](../common/examples/README.md): sessions, peers, DNS, audio, VM options.
 
@@ -43,7 +37,8 @@ More checked [examples](../common/examples/README.md): sessions, peers, DNS, aud
 
 `Inherits` resolves a store parent on every read; parent edits affect the next launch.
 Audit with `zc validate <app> --resolved`:
-- Omitted keys inherit; explicit false/zero/empty overrides. Mappings merge; lists replace.
+- Omitted keys inherit; explicit false/zero/empty scalars override; lists replace.
+  Mappings merge, except the whole-map replacements below.
 - `EntrypointEnv`, `AttachedEnv` and each audio direction replace their whole mapping.
   `AudioMeta: {Microphone: {}}` revokes inherited microphone grants.
 - Missing parents, cycles or depth >8 fail. IDs are checked before filesystem access;

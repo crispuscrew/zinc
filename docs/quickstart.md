@@ -1,54 +1,31 @@
-# Quickstart: Zinc v0.11.0
+# Quickstart: Zinc v0.11.1
 
-This guide targets v0.11.0 (schema v4).
-v0.10.1 binaries use the earlier format. Upgrading? Read the
-[upgrade requirements](releases/0.11.0.md#upgrade-requirements) first.
+You need a **Linux x86-64 desktop**, `curl`, working rootless Podman, and an installed terminal.
 
-## Build and select binaries
+## Install and try Zinc
 
-Use rootless Podman and synchronized module vendors. From the repository root:
+Paste this into your terminal, without `sudo`:
 
 ```sh
-make -C creator build
-make -C container/runner build
-make -C launcher/tui build
-export PATH="$PWD/creator/bin:$PWD/container/runner/bin:$PWD/launcher/tui/bin:$PATH"
-zc version
-zcr version
+curl -fsSLO https://raw.githubusercontent.com/crispuscrew/zinc/main/scr/zinc-net-install.sh &&
+sh zinc-net-install.sh
 ```
 
-Optional: `make -C virtualization/runner build`, `make -C launcher/gui build`.
-[Build details](build-and-checks.md) cover pinned Go 1.26.6, vendors and Nix.
+The [installer](../scr/zinc-net-install.sh):
 
-## Start an offline shell
+- Downloads and verifies Zinc, then installs it in `~/.local/bin`.
+- Sets PATH for itself and adds it to your shell's startup configuration.
+- Downloads `zinc-hello.yaml` into the current folder, resolves its image SHA,
+  and displays the finished file with `cat`.
 
-`zc init` preserves existing definitions unless forced. Fetch the approved base
-first: launches use `--pull never`.
+When it asks **`Run this example? [y/N]`**, type `y` to open the offline Alpine shell.
+Press Enter to keep the YAML without running it. Existing YAML files are kept unchanged.
 
-```sh
-podman info
-zc init
-podman pull docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
-export ZINC_TERMINAL=foot       # select a terminal installed on your system
-zc validate example-shell
-zc run example-shell           # plan; no application process starts
-zc run example-shell --exec
-```
+Type `exit` in the new window to close it. Open a new terminal afterward to use
+the automatically configured PATH; the original terminal cannot inherit changes from a child script.
 
-The shell has no NIC/audio and denies GPU access. Inspect with `zcr ps`; close
-normally or run `zc stop example-shell`. `zlt` picks from the same app store.
-
-## Add capabilities explicitly
-
-Adapt [canonical examples](../common/examples/README.md), then
-`zc validate APP --resolved` and inspect the plan. Binaries alone supply no host setup:
-
-| Capability | Prerequisite |
-| --- | --- |
-| `NetworkMeta.Interfaces` | [Packet-preserving manifest](network-provisioning.md); rules create no links, routes, DNS aliases or publications; no automatic pasta |
-| DNS | [Provisioned proxy](dns.md), addresses/control socket and explicit allow rule; runners verify live configuration |
-| PipeWire | Explicit [WirePlumber deployment](../integration/wireplumber/README.md); native PipeWire is not PulseAudio |
-| ALSA | Exact existing devices; see [audio](audio.md) |
-| VM | Reviewed external base pin, QEMU/KVM, suitable firmware/hardware; [no guest agent or graphical Background](virtualization.md) |
-
-More contracts: [architecture index](architecture.md).
+For binaries only, use `sh zinc-net-install.sh --no-example`.
+See [zinc-hello.yaml](../common/examples/apps/zinc-hello.yaml),
+[the schema](../common/domain/schema/schema.go),
+[upgrade notes](releases/0.11.0.md#upgrade-requirements), and
+[network/audio/VM setup](architecture.md).
