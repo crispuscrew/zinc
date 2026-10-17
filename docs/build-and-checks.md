@@ -50,6 +50,8 @@ guest or external DNS traffic. Mount launcher fixtures read-only; set `ZINC_DEMO
 
 CI gates checks/builds/vendors/reproducibility/container e2e/Nix; setup-go installs
 1.26.6 for host tests. Skips prove no enforcement; hosted CI cannot certify local KVM/desktop policy.
+The [binary installer](../scr/zinc-net-install.sh) needs no build: `make -C scr test` checks
+offline installation; `make -C scr lint` checks shell syntax. Installer tests use Python 3's stdlib.
 
 ## Nix and releases
 

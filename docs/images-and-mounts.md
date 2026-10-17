@@ -5,9 +5,10 @@
 - `ImageMeta.Image`: third-party references require `@sha256:<64 hex>`; only
   `localhost/` permits mutable tags. Clean single lines are required for `FROM`/argv.
   Digests identify bytes, not trustworthy publishers/code.
-- Fetch approved bases separately: launch uses `--pull never`. `zc image search`
-  and `zc image resolve` delegate to `zcr`; resolve prints a canonical pin.
-  `ImageMeta.SourceTag` is provenance, not a launch pin.
+- Launch uses `--pull never`. `zc image resolve REGISTRY/IMAGE:TAG` pulls the tag and
+  prints a canonical pin; already-pinned inputs are returned unchanged and need
+  an explicit pull. `zc image search` also delegates to `zcr`.
+  `ImageMeta.SourceTag` records provenance, not a launch pin.
 - `ImageMeta.Install` joins nonempty shell lines with `&&` in **one RUN layer**
   after `FROM <Image>`. Result: `zinc/app-<name>:local`, never implicitly pulled/pushed.
 - `zinc.build` fingerprints base/script/ordered `CreatorFlags`. Missing/stale builds

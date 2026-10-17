@@ -28,6 +28,7 @@ jobs:
       # library, not an e2e suite, so it gets no exception from golden rule 1.
       - name: Check release asset packaging
         run: sh .github/scripts/package-release-assets_test.sh
+      - run: make -C scr test
       - run: .github/scripts/ensure-podman.sh
       - run: make -C common check
       # common vendors its schema and DNS dependencies, so it can drift - and `check` would
@@ -105,8 +106,8 @@ jobs:
           got="$(nix run --print-build-logs .#zc -- version)"
           echo "zc reports: $got"
           case "$got" in
-            "zc v0.11.0") ;;
-            *) echo "expected zc v0.11.0 from the flake, got: $got" >&2; exit 1 ;;
+            "zc v0.11.1") ;;
+            *) echo "expected zc v0.11.1 from the flake, got: $got" >&2; exit 1 ;;
           esac
 
   e2e:

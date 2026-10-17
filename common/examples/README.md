@@ -9,6 +9,8 @@ against DNS/VM-options types. These checks do not prove host or guest readiness.
   context and deployed WirePlumber policy for native PipeWire. Match image UID 1000 to
   your UID for `KeepUserID` and private-socket access.
 - `apps/hollywood.yaml`: offline Debian terminal with a created non-root user.
+- `apps/zinc-hello.yaml`: minimal offline shell. The [quickstart](../../docs/quickstart.md)
+  shows how to write this YAML with a freshly resolved image pin.
 - `apps/attached-shell.yaml`: shared read-only container with bounded writable scratch;
   stop explicitly when done.
 - `apps/network-{client,server}.yaml`: reciprocal TCP; provision both manifests and exact
@@ -17,7 +19,7 @@ against DNS/VM-options types. These checks do not prove host or guest readiness.
   addresses and provision the proxy. No host DNS fallback.
 - `apps/guest.yaml` + `runtime/vm/guest.json`: offline VM; replace both image paths and the
   zero pin with an independently approved digest. Validation cannot check disk existence/pin
-  or guest firmware, serial-console and read-only boot support.
+  or guest firmware and serial-console support.
 - `apps/firefox-broken.yaml`: deliberate failures, never a launch template.
 - `dns/transports.json`: five transports, documentation endpoints; TCP/UDP allow plaintext fallback.
 

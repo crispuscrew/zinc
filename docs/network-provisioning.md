@@ -1,7 +1,8 @@
 # Mandatory packet-preserving provisioning
 
 Declared NICs require owner-provisioned topology; empty `NetworkMeta.Interfaces`
-is offline. Zinc creates no pasta/namespaces/bridges/TAPs/routes/host listeners/firewall.
+is offline. Zinc creates no pasta setup, namespaces, bridges, TAPs, routes,
+host listeners, or host firewall rules.
 No universal setup command or bundled provisioner exists. Follow the authoritative
 [contract](../common/adapters/network/README.md) and [wire type](../common/adapters/network/manifest.go).
 

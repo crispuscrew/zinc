@@ -18,6 +18,9 @@ zc delete shell
 
 New definitions refuse existing YAML/VM-options destinations. `zc init` preserves
 existing examples unless `--force` is supplied.
+For a tagged base, use `image=$(zc image resolve REGISTRY/IMAGE:TAG)` before
+`zc new NAME --image "$image" ...`: resolution pulls it and returns a digest pin.
+The [quickstart](../docs/quickstart.md) shows image pinning and a `zinc-hello.yaml` definition.
 
 - Presentation: `--desc`, `--icon`, `--group` write `LauncherMeta`.
 - Lifecycle: `--terminal`, `--attached`, `--attached-entrypoint`,

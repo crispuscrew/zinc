@@ -10,9 +10,10 @@ Zinc owns supervision/disks/firmware/cleanup; managed-save/snapshots are not imp
 - `Version`, `AppNameID`, `Image` bind options to intent; `BaseDigest` requires an
   authorized `sha256:<64 lowercase hex>` pin; `DiskSizeGiB` cannot resize existing state.
 - `Display`/`Devices` choose [hardware](vm-hardware.md); discs/port mappings use `InstallMedia`/`ForwardPorts`.
-- `zc new --vm` creates both files, refusing existing destinations. `--runtime-options`
-  selects another JSON; [CLI overrides](../virtualization/runner/README.md#runtime-options)
-  last one invocation, replace media/forward lists and never edit files.
+- `zc new --vm` creates both files, refusing existing destinations. Select another JSON with
+  `zvr run APP --runtime-options FILE` or `zvr validate APP --runtime-options FILE`.
+  Invoke `zvr` directly for [per-run overrides](../virtualization/runner/README.md#runtime-options);
+  `zc run` does not forward them. Overrides replace media/forward lists and never edit files.
   YAML-path launches need explicit options or a base pin.
 - `zvr pin /absolute/base.qcow2` calculates, never authorizes. Review bytes separately;
   launch never approves changes by repinning. See the [paired example](../common/examples/README.md).
